@@ -1,0 +1,25 @@
+# vsclang
+
+VSClang is a VS Code for Web extension that compiles, runs and debugs C++ in the browser using WebAssembly builds of Clang, LLD and LLDB.
+
+## 1. Project idea and reason
+
+Let people write and debug real C/C++ in vscode.dev / github.dev with nothing installed. The toolchain comes from the wasm-wasi LLVM fork (`llvm-project`); this repo is the extension that hosts it. Output is WebAssembly only.
+
+## 2. How to use this project
+
+- `npm install`, then `npm run compile-web` (type-check, lint, bundle).
+- `npm run run-in-browser` opens the extension in a local VS Code for Web.
+- Status: template only. The build command and debug adapter currently fail with a pointer to the plan.
+
+## 3. Design overview
+
+See `documents/design.md`.
+
+## 4. Remaining work
+
+See `documents/remaining_work.md`. Briefly: toolchain host and in-browser compile, tasks/run, debug-build instrumentation, lldb reactor integration, full DAP.
+
+## 5. Credits
+
+Designed and overseen by [Ambeco](https://github.com/Ambeco), and coded mostly by Claude (or similar).
