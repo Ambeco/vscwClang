@@ -20,6 +20,6 @@ export interface BuildResult {
 /** Runs clang.wasm/lld.wasm. Template only: the real implementation is the first item in documents/remaining_work.md. */
 export async function build(request: BuildRequest, _log: vscode.OutputChannel): Promise<BuildResult> {
 	throw new Error(
-		`vsclang toolchain is not implemented yet: cannot build ${request.sources.length} source file(s) into ${request.output.toString()}. ` +
+		`vscwClang toolchain is not implemented yet: cannot build ${request.sources.length} source file(s) into ${request.output.toString()}. ` +
 		`See documents/remaining_work.md, "Milestone 1: compile in the browser".`);
 }

@@ -1,7 +1,7 @@
 {
-  "name": "vsclang",
-  "displayName": "vsclang",
-  "description": "VSClang contains Clang and Lldb as webasm binaries, allowing VSC for Web to compile and debug C++ code entirely in the browser.",
+  "name": "vscwclang",
+  "displayName": "vscwClang",
+  "description": "vscwClang contains Clang and Lldb as webasm binaries, allowing VSC for Web to compile and debug C++ code entirely in the browser.",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.134.0"
@@ -10,16 +10,16 @@
     "Other"
   ],
   "activationEvents": [
-    "onDebugResolve:vsclang",
+    "onDebugResolve:vscwclang",
     "onDebugInitialConfigurations",
-    "onCommand:vsclang.build"
+    "onCommand:vscwclang.build"
   ],
   "browser": "./dist/web/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "vsclang.build",
-        "title": "vsclang: Build C++ (clang.wasm)"
+        "command": "vscwclang.build",
+        "title": "vscwClang: Build C++ (clang.wasm)"
       }
     ],
     "breakpoints": [
@@ -32,8 +32,8 @@
     ],
     "debuggers": [
       {
-        "type": "vsclang",
-        "label": "C++ in browser (vsclang)",
+        "type": "vscwclang",
+        "label": "C++ in browser (vscwClang)",
         "languages": [
           "c",
           "cpp"
@@ -51,9 +51,9 @@
         },
         "initialConfigurations": [
           {
-            "type": "vsclang",
+            "type": "vscwclang",
             "request": "launch",
-            "name": "Debug C++ (vsclang)",
+            "name": "Debug C++ (vscwClang)",
             "program": "a.out.wasm"
           }
         ]

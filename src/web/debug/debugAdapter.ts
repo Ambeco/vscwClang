@@ -8,7 +8,7 @@ interface DapMessage { seq: number; type: string; command?: string; arguments?: 
  * Template only: handles the DAP handshake, then fails the launch loudly. Real stepping/breakpoints/
  * variables are milestones 4-6 in documents/remaining_work.md.
  */
-export class VsclangDebugAdapter implements vscode.DebugAdapter {
+export class VscwClangDebugAdapter implements vscode.DebugAdapter {
 	private readonly emitter = new vscode.EventEmitter<vscode.DebugProtocolMessage>();
 	readonly onDidSendMessage = this.emitter.event;
 	private seq = 1;
@@ -29,7 +29,7 @@ export class VsclangDebugAdapter implements vscode.DebugAdapter {
 				return;
 			case 'launch': {
 				const folder = this.session.workspaceFolder?.uri;
-				if (!folder) { throw new Error('vsclang: open a workspace folder before debugging.'); }
+				if (!folder) { throw new Error('vscwClang: open a workspace folder before debugging.'); }
 				const program = vscode.Uri.joinPath(folder, req.arguments?.program ?? 'a.out.wasm');
 				const result = await build({ sources: [], output: program, flags: [], mode: 'debug' }, this.log);
 				throw new Error(`Build finished (exit ${result.exitCode}) but running/debugging is not implemented yet. See documents/remaining_work.md.`);
@@ -47,7 +47,7 @@ export class VsclangDebugAdapter implements vscode.DebugAdapter {
 				this.respond(req, true, {});
 				return;
 			default:
-				throw new Error(`vsclang debug adapter: DAP request '${req.command}' is not implemented yet. Did you mean to implement it in src/web/debug/debugAdapter.ts?`);
+				throw new Error(`vscwClang debug adapter: DAP request '${req.command}' is not implemented yet. Did you mean to implement it in src/web/debug/debugAdapter.ts?`);
 		}
 	}
 

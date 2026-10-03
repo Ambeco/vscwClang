@@ -21,7 +21,7 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 - Tests under `@vscode/test-web`: hello world and a multi-file project.
 
 ## Milestone 2: tasks, build UX, run
-- `TaskProvider` (`type: "vsclang"`) with problem matcher and default build task; `tasks.json` schema (sources glob, flags, mode).
+- `TaskProvider` (`type: "vscwclang"`) with problem matcher and default build task; `tasks.json` schema (sources glob, flags, mode).
 - Settings: toolchain version/URL, default `-std`, extra flags, threads on/off.
 - Run without debugging: `Pseudoterminal` wired to the program's stdin/stdout/stderr (Worker + WASI).
 - Optional: run in a separate browser tab for OS-level sandboxing (open questions in the llvm-project fork's `remaining_work.md`).

@@ -1,6 +1,6 @@
-# vsclang
+# vscwClang
 
-VSClang is a VS Code for Web extension that compiles, runs and debugs C++ in the browser using WebAssembly builds of Clang, LLD and LLDB.
+vscwClang is a VS Code for Web extension that compiles, runs and debugs C++ in the browser using WebAssembly builds of Clang, LLD and LLDB.
 
 ## 1. Project idea and reason
 
