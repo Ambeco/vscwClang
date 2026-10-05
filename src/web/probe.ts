@@ -1,17 +1,15 @@
 import * as vscode from 'vscode';
+import { Wasm } from '@vscode/wasm-wasi';
 
 // Environment probe for Milestone 0 (see documents/remaining_work.md); logs findings, changes nothing.
 
-interface WasmCoreApi {
-	compile(source: vscode.Uri): Promise<WebAssembly.Module>;
-}
 
 export async function runProbe(context: vscode.ExtensionContext, log: vscode.OutputChannel): Promise<void> {
 	log.show(true);
 	log.appendLine('--- vscwClang probe ---');
 	await step(log, 'isolation (extension host)', () => probeIsolation());
 	await step(log, 'isolation (nested worker)', () => probeNestedWorker());
-	await step(log, 'wasm-wasi-core compile of clang.wasm from extension URI', () => probeWasmCore(context));
+	await step(log, 'wasm-wasi-core load + compile clang.wasm from extension URI', () => probeWasmCore(context));
 }
 
 async function step(log: vscode.OutputChannel, name: string, fn: () => Promise<string> | string): Promise<void> {
@@ -51,16 +49,9 @@ function probeNestedWorker(): Promise<string> {
 }
 
 async function probeWasmCore(context: vscode.ExtensionContext): Promise<string> {
-	const ext = vscode.extensions.getExtension('ms-vscode.wasm-wasi-core');
-	if (!ext) {
-		throw new Error('ms-vscode.wasm-wasi-core is not installed; install it (did you mean to add it to extensionDependencies?)');
-	}
-	const api = await ext.activate() as { wasm?: WasmCoreApi } | WasmCoreApi;
-	const wasm = 'wasm' in api && api.wasm ? api.wasm : api as WasmCoreApi;
-	if (typeof wasm.compile !== 'function') {
-		throw new Error(`wasm-wasi-core API has no compile(); exports: ${Object.keys(api).join(', ')}`);
-	}
+	const wasm = await Wasm.load();
 	const uri = vscode.Uri.joinPath(context.extensionUri, 'llvm-artifacts', 'bin', 'clang.wasm');
-	const module = await wasm.compile(uri);
-	return `compiled; ${WebAssembly.Module.imports(module).length} imports, ${WebAssembly.Module.exports(module).length} exports`;
+	const bits = await vscode.workspace.fs.readFile(uri);
+	const module = await WebAssembly.compile(bits as Uint8Array<ArrayBuffer>);
+	return `read ${bits.byteLength} bytes and compiled; ${WebAssembly.Module.imports(module).length} imports, ${WebAssembly.Module.exports(module).length} exports`;
 }

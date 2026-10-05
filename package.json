@@ -15,6 +15,9 @@
     "onCommand:vscwclang.build",
     "onCommand:vscwclang.probe"
   ],
+  "extensionDependencies": [
+    "ms-vscode.wasm-wasi-core"
+  ],
   "browser": "./dist/web/extension.js",
   "contributes": {
     "commands": [
@@ -79,22 +82,25 @@
     "run-in-browser": "vscode-test-web --browserType=chromium --extensionDevelopmentPath=. ."
   },
   "devDependencies": {
-    "@types/vscode": "^1.134.0",
-    "@types/mocha": "^10.0.10",
-    "@types/assert": "^1.5.11",
-    "eslint": "^10.5.0",
-    "typescript-eslint": "^8.61.1",
-    "mocha": "^11.7.6",
-    "typescript": "^6.0.3",
-    "@vscode/test-web": "^0.0.81",
-    "esbuild": "^0.28.1",
-    "glob": "^13.0.6",
-    "npm-run-all": "^4.1.5",
     "@esbuild-plugins/node-globals-polyfill": "^0.2.3",
-    "assert": "^2.1.0"
+    "@types/assert": "^1.5.11",
+    "@types/mocha": "^10.0.10",
+    "@types/vscode": "^1.134.0",
+    "@vscode/test-web": "^0.0.81",
+    "assert": "^2.1.0",
+    "esbuild": "^0.28.1",
+    "eslint": "^10.5.0",
+    "glob": "^13.0.6",
+    "mocha": "^11.7.6",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.61.1"
   },
   "overrides": {
     "diff": "^8.0.4",
     "serialize-javascript": "^7.0.6"
+  },
+  "dependencies": {
+    "@vscode/wasm-wasi": "^1.0.1"
   }
 }
