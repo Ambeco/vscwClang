@@ -12,7 +12,8 @@
   "activationEvents": [
     "onDebugResolve:vscwclang",
     "onDebugInitialConfigurations",
-    "onCommand:vscwclang.build"
+    "onCommand:vscwclang.build",
+    "onCommand:vscwclang.probe"
   ],
   "browser": "./dist/web/extension.js",
   "contributes": {
@@ -20,6 +21,10 @@
       {
         "command": "vscwclang.build",
         "title": "vscwClang: Build C++ (clang.wasm)"
+      },
+      {
+        "command": "vscwclang.probe",
+        "title": "vscwClang: Probe environment (dev)"
       }
     ],
     "breakpoints": [

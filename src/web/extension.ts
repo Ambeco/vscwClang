@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { VscwClangDebugAdapter } from './debug/debugAdapter';
 import { build } from './toolchain/toolchain';
+import { runProbe } from './probe';
 
 export function activate(context: vscode.ExtensionContext) {
 	const log = vscode.window.createOutputChannel('vscwclang');
@@ -14,6 +15,7 @@ export function activate(context: vscode.ExtensionContext) {
 			const result = await build({ sources, output: vscode.Uri.joinPath(folder, 'a.out.wasm'), flags: [], mode: 'release' }, log);
 			log.appendLine(result.diagnostics);
 		}),
+		vscode.commands.registerCommand('vscwclang.probe', () => runProbe(context, log)),
 		vscode.debug.registerDebugConfigurationProvider('vscwclang', {
 			provideDebugConfigurations: () => [{ type: 'vscwclang', request: 'launch', name: 'Debug C++ (vscwClang)', program: 'a.out.wasm' }],
 		}),
