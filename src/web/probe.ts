@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { Wasm } from '@vscode/wasm-wasi';
+import { readChunked } from './toolchain/chunkedFile';
 
 // Environment probe for Milestone 0 (see documents/remaining_work.md); logs findings, changes nothing.
 
@@ -9,6 +10,7 @@ export async function runProbe(context: vscode.ExtensionContext, log: vscode.Out
 	log.appendLine('--- vscwClang probe ---');
 	await step(log, 'isolation (extension host)', () => probeIsolation());
 	await step(log, 'isolation (nested worker)', () => probeNestedWorker());
+	await step(log, 'chunked read + compile of clang.wasm (7 x 16 MiB, sha256-checked)', () => probeChunked(context));
 	await step(log, 'wasm-wasi-core load + compile clang.wasm from extension URI', () => probeWasmCore(context));
 }
 
@@ -54,4 +56,10 @@ async function probeWasmCore(context: vscode.ExtensionContext): Promise<string> 
 	const bits = await vscode.workspace.fs.readFile(uri);
 	const module = await WebAssembly.compile(bits as Uint8Array<ArrayBuffer>);
 	return `read ${bits.byteLength} bytes and compiled; ${WebAssembly.Module.imports(module).length} imports, ${WebAssembly.Module.exports(module).length} exports`;
+}
+
+async function probeChunked(context: vscode.ExtensionContext): Promise<string> {
+	const bits = await readChunked(vscode.Uri.joinPath(context.extensionUri, 'llvm-artifacts', 'chunks'), 'clang.wasm');
+	const module = await WebAssembly.compile(bits);
+	return `reassembled ${bits.byteLength} bytes, hash ok, compiled; ${WebAssembly.Module.exports(module).length} exports`;
 }
