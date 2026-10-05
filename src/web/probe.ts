@@ -20,7 +20,7 @@ async function step(log: vscode.OutputChannel, name: string, fn: () => Promise<s
 		const detail = await fn();
 		log.appendLine(`[ok]   ${name}: ${detail} (${Math.round(performance.now() - start)} ms)`);
 	} catch (e) {
-		log.appendLine(`[FAIL] ${name}: ${e instanceof Error ? e.stack ?? e.message : String(e)}`);
+		log.appendLine(`[FAIL] ${name}: ${e instanceof Error ? e.message : String(e)}`);
 	}
 }
 
