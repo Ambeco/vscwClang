@@ -11,6 +11,9 @@ export async function runProbe(context: vscode.ExtensionContext, log: vscode.Out
 	await step(log, 'isolation (extension host)', () => probeIsolation());
 	await step(log, 'isolation (nested worker)', () => probeNestedWorker());
 	await step(log, 'chunked read + compile of clang.wasm (7 x 16 MiB, sha256-checked)', () => probeChunked(context));
+	for (const url of FETCH_TARGETS) {
+		await step(log, `fetch ${url}`, () => probeFetch(url));
+	}
 	await step(log, 'wasm-wasi-core load + compile clang.wasm from extension URI', () => probeWasmCore(context));
 }
 
@@ -62,4 +65,17 @@ async function probeChunked(context: vscode.ExtensionContext): Promise<string> {
 	const bits = await readChunked(vscode.Uri.joinPath(context.extensionUri, 'llvm-artifacts', 'chunks'), 'clang.wasm');
 	const module = await WebAssembly.compile(bits);
 	return `reassembled ${bits.byteLength} bytes, hash ok, compiled; ${WebAssembly.Module.exports(module).length} exports`;
+}
+
+const FETCH_TARGETS = [
+	'https://raw.githubusercontent.com/Ambeco/llvm-project/main/README.md',
+	'https://cdn.jsdelivr.net/npm/@vscode/wasm-wasi@1.0.1/package.json',
+	'https://unpkg.com/@vscode/wasm-wasi@1.0.1/package.json',
+	'https://cdn.jsdelivr.net/npm/typescript@5.4.5/lib/typescript.js',
+];
+
+async function probeFetch(url: string): Promise<string> {
+	const res = await fetch(url, { mode: 'cors' });
+	const bytes = (await res.arrayBuffer()).byteLength;
+	return `HTTP ${res.status}, ${bytes} bytes`;
 }
