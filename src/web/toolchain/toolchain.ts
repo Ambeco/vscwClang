@@ -116,6 +116,8 @@ function getModule(context: vscode.ExtensionContext, wasmFile: string): Promise<
 	return module;
 }
 
+const TOOL_TIMEOUT_MS = 300_000;
+
 async function runTool(wasm: Wasm, context: vscode.ExtensionContext, sysroot: SysrootFs, wasmFile: string, args: string[]): Promise<{ exitCode: number; stderr: string }> {
 	const module = await getModule(context, wasmFile);
 	const process = await wasm.createProcess(args[0], module, {
@@ -132,6 +134,18 @@ async function runTool(wasm: Wasm, context: vscode.ExtensionContext, sysroot: Sy
 	let stderr = '';
 	process.stderr?.onData(d => { stderr += errDecoder.decode(d, { stream: true }); });
 	process.stdout?.onData(d => { stderr += outDecoder.decode(d, { stream: true }); });
-	const exitCode = await process.run();
+	// wasm-wasi-core's run() never settles if the tool traps (vscode-wasm#303); terminate() resolves it.
+	let timedOut = false;
+	const timer = setTimeout(() => { timedOut = true; void process.terminate(); }, TOOL_TIMEOUT_MS);
+	let exitCode: number;
+	try {
+		exitCode = await process.run();
+	} finally {
+		clearTimeout(timer);
+	}
+	if (timedOut) {
+		return { exitCode: 1, stderr: `${stderr}${args[0]}: error: no result after ${TOOL_TIMEOUT_MS / 1000}s, so it was stopped (it probably crashed inside WebAssembly). Did you mean to retry with fewer sources or simpler flags?
+` };
+	}
 	return { exitCode, stderr };
 }

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { Wasm } from '@vscode/wasm-wasi';
+import { describeUnsupportedImports } from './toolchain/wasiImports';
 
 // PseudoterminalState is only declared (not exported at runtime) by @vscode/wasm-wasi, so use its values directly.
 const STATE_IDLE = 2;
@@ -16,10 +17,12 @@ const STATE_BUSY = 3;
 export async function runProgram(program: vscode.Uri, args: string[]): Promise<number> {
 	const wasm = await Wasm.load();
 	const name = program.path.slice(program.path.lastIndexOf('/') + 1);
+	const module = await WebAssembly.compile(await vscode.workspace.fs.readFile(program) as Uint8Array<ArrayBuffer>);
+	const unsupported = describeUnsupportedImports(WebAssembly.Module.imports(module));
+	if (unsupported !== undefined) { throw new Error(`vscwClang: cannot run ${name}. ${unsupported}`); }
 	const pty = wasm.createPseudoterminal();
 	const terminal = vscode.window.createTerminal({ name: `vscwClang: ${name}`, pty });
 	terminal.show(true);
-	const module = await WebAssembly.compile(await vscode.workspace.fs.readFile(program) as Uint8Array<ArrayBuffer>);
 	const process = await wasm.createProcess(name, module, {
 		args,
 		stdio: pty.stdio,
