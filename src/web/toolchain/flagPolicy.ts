@@ -22,6 +22,8 @@ export function checkUserFlags(flags: readonly string[]): string[] {
 			reject('output is always wasm32-wasip1', `to select threads via the 'threads' setting instead`);
 		} else if (f === '-o' || f === '-c' || f === '-S' || f === '-E') {
 			reject('the build command controls output and compile/link stages', `the build output setting instead`);
+		} else if (isNoGcSections(f, flags[i - 1])) {
+			reject('wasm-wasi-core hangs forever on programs that import fd_fdstat_set_rights, which this flag pulls in (https://github.com/microsoft/vscode-wasm/issues/303)', 'to remove it');
 		} else if (/^-(I|isystem|iquote|L)/.test(f)) {
 			const path = f.replace(/^-(I|isystem|iquote|L)/, '') || next;
 			if (path !== undefined && isHostPath(path)) {
@@ -31,6 +33,11 @@ export function checkUserFlags(flags: readonly string[]): string[] {
 		}
 	}
 	return problems;
+}
+
+function isNoGcSections(flag: string, previous: string | undefined): boolean {
+	if (flag === '--no-gc-sections') { return previous === '-Xlinker'; }
+	return flag.startsWith('-Wl,') && flag.slice(4).split(',').includes('--no-gc-sections');
 }
 
 function isHostPath(path: string): boolean {

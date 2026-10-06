@@ -22,6 +22,16 @@ suite('checkUserFlags', () => {
 		assert.strictEqual(checkUserFlags(['-I', '/usr/include', '-O2']).length, 1);
 	});
 
+	test('--no-gc-sections is rejected in every spelling', () => {
+		for (const flags of [['-Wl,--no-gc-sections'], ['-Wl,--export=a,--no-gc-sections'], ['-Xlinker', '--no-gc-sections']]) {
+			const p = checkUserFlags(flags);
+			assert.strictEqual(p.length, 1, flags.join(' '));
+			assert.match(p[0], /Did you mean/);
+			assert.match(p[0], /issues\/303/);
+		}
+		assert.deepStrictEqual(checkUserFlags(['-Wl,--gc-sections', '-Wl,--export=a']), []);
+	});
+
 	test('reports every problem', () => {
 		assert.strictEqual(checkUserFlags(['-fplugin=a', '-O2', '-fuse-ld=lld']).length, 2);
 	});
