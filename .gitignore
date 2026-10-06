@@ -6,3 +6,4 @@ node_modules
 .env
 llvm-artifacts/*.wasm
 llvm-artifacts/
+probe-build/

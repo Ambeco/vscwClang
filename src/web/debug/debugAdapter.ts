@@ -13,7 +13,7 @@ export class VscwClangDebugAdapter implements vscode.DebugAdapter {
 	readonly onDidSendMessage = this.emitter.event;
 	private seq = 1;
 
-	constructor(private readonly session: vscode.DebugSession, private readonly log: vscode.OutputChannel) {}
+	constructor(private readonly session: vscode.DebugSession, private readonly log: vscode.OutputChannel, private readonly context: vscode.ExtensionContext) {}
 
 	handleMessage(message: vscode.DebugProtocolMessage): void {
 		const m = message as DapMessage;
@@ -31,7 +31,7 @@ export class VscwClangDebugAdapter implements vscode.DebugAdapter {
 				const folder = this.session.workspaceFolder?.uri;
 				if (!folder) { throw new Error('vscwClang: open a workspace folder before debugging.'); }
 				const program = vscode.Uri.joinPath(folder, req.arguments?.program ?? 'a.out.wasm');
-				const result = await build({ sources: [], output: program, flags: [], mode: 'debug' }, this.log);
+				const result = await build({ sources: [], output: program, flags: [], mode: 'debug' }, this.log, this.context);
 				throw new Error(`Build finished (exit ${result.exitCode}) but running/debugging is not implemented yet. See documents/remaining_work.md.`);
 			}
 			case 'configurationDone':

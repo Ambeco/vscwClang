@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
-import { Wasm, type MemoryFileSystem } from '@vscode/wasm-wasi';
+import { Wasm } from '@vscode/wasm-wasi';
 import { unzip } from 'fflate';
 import { readChunked } from './toolchain/chunkedFile';
+import { build } from './toolchain/toolchain';
 
 // Environment probe for Milestone 0 (see documents/remaining_work.md); logs findings, changes nothing.
 
@@ -105,109 +106,37 @@ async function probeZipRun(context: vscode.ExtensionContext): Promise<string> {
 	return `unzipped ${bits.byteLength} bytes; exit ${exitCode}; output: ${JSON.stringify(output.slice(0, 200))}`;
 }
 
-interface CompileFlags {
-	compile: Record<string, string[]>;
-	link: Record<string, string[]>;
-}
-
-let lastStderr = '';
-
-async function runTool(wasm: Wasm, log: vscode.OutputChannel, context: vscode.ExtensionContext, sysroot: SysrootFs, wasmFile: string, args: string[]): Promise<number> {
-	const bits = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(context.extensionUri, 'llvm-artifacts', 'bin', wasmFile));
-	const module = await WebAssembly.compile(bits as Uint8Array<ArrayBuffer>);
-	const process = await wasm.createProcess(args[0], module, {
-		args: args.slice(1),
-		stdio: { out: { kind: 'pipeOut' }, err: { kind: 'pipeOut' } },
-		mountPoints: [
-			{ kind: 'workspaceFolder' },
-			{ kind: 'memoryFileSystem', fileSystem: sysroot.sysroot, mountPoint: '/sysroot' },
-			{ kind: 'memoryFileSystem', fileSystem: sysroot.resource, mountPoint: '/resource' },
-		],
-	});
-	const out = new TextDecoder();
-	const err = new TextDecoder();
-	let stdout = '';
-	let stderr = '';
-	process.stdout?.onData(d => { stdout += out.decode(d, { stream: true }); });
-	process.stderr?.onData(d => { stderr += err.decode(d, { stream: true }); });
-	const rc = await process.run();
-	lastStderr = stderr;
-	log.appendLine(`[${args[0]} exit ${rc}] stdout: ${stdout}${stderr ? `
-stderr: ${stderr}` : ''}`);
-	return rc;
-}
-
 async function probeBuildHello(context: vscode.ExtensionContext, log: vscode.OutputChannel): Promise<string> {
 	const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
 	if (!folder) {
-		throw new Error('open a workspace folder first (the probe writes hello.cpp/.o/.wasm into it)');
+		throw new Error('open a workspace folder first (the probe writes sources/outputs into probe-build/)');
 	}
-	const slice = 'wasm32-wasip1';
-	const flagsFile = await phase('read compile-flags.json', () => vscode.workspace.fs.readFile(vscode.Uri.joinPath(context.extensionUri, 'llvm-artifacts', 'compile-flags.json')));
-	const flags = JSON.parse(new TextDecoder().decode(flagsFile)) as CompileFlags;
-	const sub = (f: string) => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource');
-	const source = ['#include <iostream>', 'int main() { std::cout << "hello from vscwClang" << std::endl; return 0; }', ''].join(String.fromCharCode(10));
-	await phase(`write hello.cpp to ${folder.toString()}`, () => vscode.workspace.fs.writeFile(vscode.Uri.joinPath(folder, 'hello.cpp'), new TextEncoder().encode(source)));
+	const nl = String.fromCharCode(10);
+	const write = (name: string, lines: string[]) => vscode.workspace.fs.writeFile(vscode.Uri.joinPath(folder, 'probe-build', name), new TextEncoder().encode(lines.join(nl) + nl));
+	await write('util.h', ['#pragma once', 'int twice(int);']);
+	await write('util.cpp', ['#include "util.h"', 'int twice(int x) { return x * 2; }']);
+	await write('main.cpp', ['#include <iostream>', '#include "util.h"', 'int main() { std::cout << "hello " << twice(21) << std::endl; return 0; }']);
+	const sources = ['main.cpp', 'util.cpp'].map(n => vscode.Uri.joinPath(folder, 'probe-build', n));
+	const output = vscode.Uri.joinPath(folder, 'probe-build', 'out.wasm');
+
+	const t0 = performance.now();
+	const ok = await build({ sources, output, flags: ['-std=c++20', '-Wall'], mode: 'release' }, log, context);
+	if (ok.exitCode !== 0) { throw new Error(`good build failed (exit ${ok.exitCode}): ${ok.diagnostics}`); }
+	const t1 = performance.now();
+
+	await write('bad.cpp', ['static int f() { int unused; return 0; }', 'int main() {', '  return missing;', '}']);
+	const bad = await build({ sources: [vscode.Uri.joinPath(folder, 'probe-build', 'bad.cpp')], output: vscode.Uri.joinPath(folder, 'probe-build', 'bad.wasm'), flags: ['-Wall'], mode: 'debug' }, log, context);
+	const t2 = performance.now();
+	const errors = bad.parsed.filter(d => d.severity === 'error').map(d => `${d.file}:${d.line}:${d.column} ${d.message}`);
+	const warnings = bad.parsed.filter(d => d.severity === 'warning').map(d => d.flag);
+	if (bad.exitCode === 0 || errors.length !== 1 || !warnings.includes('-Wunused-variable')) { throw new Error(`bad build: expected 1 parsed error, got exit ${bad.exitCode}, ${JSON.stringify(bad.parsed)}`); }
 
 	const wasm = await Wasm.load();
-	const tz = performance.now();
-	const sysroot = await phase('build sysroot memory file systems from sysroot.zip', () => loadSysroot(wasm, context));
-	log.appendLine(`sysroot memory FS ready in ${Math.round(performance.now() - tz)} ms`);
-	const t0 = performance.now();
-	const cc = await phase('run clang', () => runTool(wasm, log, context, sysroot, 'clang.wasm', ['clang++', ...flags.compile[slice].map(sub), '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics', '-c', '/workspace/hello.cpp', '-o', '/workspace/hello.o']));
-	if (cc !== 0) {
-		const lines = lastStderr.split(String.fromCharCode(10));
-		const from = lines.findIndex(l => l.includes('search starts here'));
-		const to = lines.findIndex(l => l.includes('End of search list'));
-		throw new Error(`clang exited ${cc}; errors: ${lines.slice(to + 1).filter(l => /error/.test(l)).slice(0, 5).join(' | ')} (search list from ${from} to ${to})`);
-	}
-	const t1 = performance.now();
-	const link = flags.link[slice].map(sub);
-	const ld = await phase('run wasm-ld', () => runTool(wasm, log, context, sysroot, 'lld.wasm', ['wasm-ld', link[0], '/workspace/hello.o', ...link.slice(1), '-o', '/workspace/hello.wasm']));
-	if (ld !== 0) { throw new Error(`wasm-ld exited ${ld} (see output above)`); }
-	const t2 = performance.now();
-	const out = await phase('read hello.wasm', () => vscode.workspace.fs.readFile(vscode.Uri.joinPath(folder, 'hello.wasm')));
-	const hello = await WebAssembly.compile(out as Uint8Array<ArrayBuffer>);
-	const process = await wasm.createProcess('hello', hello, { stdio: { out: { kind: 'pipeOut' }, err: { kind: 'pipeOut' } } });
+	const module = await WebAssembly.compile(await vscode.workspace.fs.readFile(output) as Uint8Array<ArrayBuffer>);
+	const process = await wasm.createProcess('out', module, { stdio: { out: { kind: 'pipeOut' }, err: { kind: 'pipeOut' } } });
 	let printed = '';
 	const decoder = new TextDecoder();
 	process.stdout?.onData(d => { printed += decoder.decode(d); });
 	const rc = await process.run();
-	return `clang ${Math.round(t1 - t0)} ms, wasm-ld ${Math.round(t2 - t1)} ms, hello.wasm ${out.byteLength} bytes, ran exit ${rc}: ${JSON.stringify(printed)}`;
-}
-
-async function phase<T>(name: string, fn: () => PromiseLike<T>): Promise<T> {
-	try {
-		return await fn();
-	} catch (e) {
-		throw new Error(`${name}: ${e instanceof Error ? e.message : String(e)}`);
-	}
-}
-
-interface SysrootFs {
-	sysroot: MemoryFileSystem;
-	resource: MemoryFileSystem;
-}
-
-async function loadSysroot(wasm: Wasm, context: vscode.ExtensionContext): Promise<SysrootFs> {
-	const zipBits = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(context.extensionUri, 'llvm-artifacts', 'zips', 'sysroot.zip'));
-	const files = await new Promise<Record<string, Uint8Array>>((resolve, reject) =>
-		unzip(zipBits, (err, data) => err ? reject(err) : resolve(data)));
-	const result: SysrootFs = { sysroot: await wasm.createMemoryFileSystem(), resource: await wasm.createMemoryFileSystem() };
-	const made = { sysroot: new Set<string>(), resource: new Set<string>() };
-	for (const [path, content] of Object.entries(files)) {
-		const root = path.startsWith('sysroot/') ? 'sysroot' : 'resource';
-		const rel = path.slice(root.length);
-		const parts = rel.split('/').slice(1, -1);
-		let dir = '';
-		for (const part of parts) {
-			dir = dir ? `${dir}/${part}` : part;
-			if (!made[root].has(dir)) {
-				result[root].createDirectory(dir);
-				made[root].add(dir);
-			}
-		}
-		result[root].createFile(rel.slice(1), content);
-	}
-	return result;
+	return `2-file build ${Math.round(t1 - t0)} ms, ran exit ${rc}: ${JSON.stringify(printed)}; bad build ${Math.round(t2 - t1)} ms, errors ${JSON.stringify(errors)}, warnings ${JSON.stringify(warnings)}`;
 }
