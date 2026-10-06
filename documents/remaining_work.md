@@ -19,14 +19,14 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 - Persistent build cache (V1, not necessarily Milestone 1): keep object files across page reloads and days, so a returning user only recompiles changed sources. Needs durable storage (extension `globalStorageUri`, or IndexedDB if that is not durable on vscode.dev; verify), a cache key per object (source content hash, flags, mode, toolchain version, plus the headers it included, e.g. via `-MD` dependency output), and eviction. Today objects are deleted after each build and `build()` always recompiles everything.
 - Threaded slice (`wasm32-wasip1-threads`) is not selectable yet; `build()` always uses `wasm32-wasip1`.
 - Cancel: terminate the Worker, then call `RunInterruptHandlers()`/`CleanupOnSignal()` from JS to remove temp files.
-- User flags (`request.flags`) only reach `clang -c`, never `wasm-ld`, so `-lm`, `-L...` and `-Wl,...` do nothing though `flagPolicy` validates `-L`; split compile vs. link flags.
+- A program linked with `-Wl,--no-gc-sections` hangs at run time under `wasm-wasi-core` (cause unknown); `-Wl,` flags are otherwise passed through unchecked.
 - Linker messages name the temporary object (`/workspace/.vscwclang/obj/0-x.cpp.o: undefined symbol: f()`); map it back to the source file. wasm-ld `>>>` detail lines only appeared in the hand-written parser tests, not in real output (no debug info in release mode).
-- Automated `@vscode/test-web` tests for hello world and a multi-file project (needs a workspace folder in the test run; today only `probeBuildHello` in the dev probe covers this, run by hand). Pure logic has node tests: `npm run test-node`. The two `build()` rejection tests in `extension.test.ts` have not been run (`npm test` / test-web not executed yet).
 
 ## Milestone 2: tasks, build UX, run
-- `TaskProvider` (`type: "vscwclang"`) with problem matcher and default build task; `tasks.json` schema (sources glob, flags, mode).
+- Verify the `vscwclang` TaskProvider and `$vscwclang` problem matcher in a UI: under test-web's virtual workspace `Tasks: Run Task` shows no picker at all (task never ran), so only the matcher regex is tested (node). Try real vscode.dev or a desktop web host; `onTaskType:vscwclang` activation is also unconfirmed. Add a way to select the task as default build.
+- Run: EOF (Ctrl+D) is not supported by `wasm-wasi-core`'s line-mode terminal, so programs reading until EOF block until Ctrl+C. Passing program arguments, a run-in-`debug`-mode choice, and re-run reuse of the terminal are not done. The run command always rebuilds first.
+- Automated test for the run path (terminal stdio is only manually verified: stdin line echo, exit code print).
 - Settings: toolchain version/URL, default `-std`, extra flags, threads on/off.
-- Run without debugging: `Pseudoterminal` wired to the program's stdin/stdout/stderr (Worker + WASI).
 - Optional: run in a separate browser tab for OS-level sandboxing (open questions in the llvm-project fork's `remaining_work.md`).
 
 ## Milestone 3: language support (optional, high value)
@@ -58,7 +58,6 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 - Compile speed and memory: 2 GiB max-memory per `clang.wasm` instance, times N concurrent files, in one browser tab.
 - Nested Worker limits (threads/spawn) inside the web extension host are unverified.
 - Debugging is `-O0`-only by design; DWARF frame-base for optimized code is unverified.
-- The `@vscode/test-web` run (downloads Chromium) has not been executed yet.
 
 ## Distribution work (new)
 - Pick the host (raw GitHub vs. jsDelivr/npm vs. Pages): check per-file size caps with a real >20 MB file, and brotli/gzip behavior; test on real vscode.dev, not just test-web `--coi`.

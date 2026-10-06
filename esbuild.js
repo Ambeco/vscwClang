@@ -45,7 +45,7 @@ const testBundlePlugin = {
 		});
 		build.onLoad({ filter: /[\/\\]extensionTests\.ts$/ }, async args => {
 			const testsRoot = path.join(__dirname, 'src/web/test/suite');
-			const files = await glob.glob('*.test.{ts,tsx}', { cwd: testsRoot, posix: true });
+			const files = await glob.glob('*.test.{ts,tsx}', { cwd: testsRoot, posix: true, ignore: '*.node.test.*' });
 			return {
 				contents:
 					`export { run } from './mochaTestRunner.ts';` +
