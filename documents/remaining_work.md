@@ -60,6 +60,7 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 - Debugging is `-O0`-only by design; DWARF frame-base for optimized code is unverified.
 
 ## Distribution work (new)
+- Create the `vscwClang-toolchain` repo (see design.md "Distribution"): a script that turns a `llvm-project` release into chunks/zips + manifest + `compile-flags.json`, committed as an orphan commit and tagged per toolchain version; pin the tag and manifest hashes in the extension.
 - Pick the host (raw GitHub vs. jsDelivr/npm vs. Pages): check per-file size caps with a real >20 MB file, and brotli/gzip behavior; test on real vscode.dev, not just test-web `--coi`.
 - Build the downloader: fetch zips, unzip with `fflate`, SHA-256 check against hashes embedded at build time, cache in extension storage, progress UI, retry/offline errors with "did you mean" messages.
 - Verified 2026-10-05 under test-web `--coi`: `clang.zip` (25 MB, from `scripts/zip-wasm.mjs`) unzipped, compiled and ran `clang --version` (exit 0, 2.4 s).
