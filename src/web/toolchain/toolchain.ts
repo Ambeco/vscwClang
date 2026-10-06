@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { Wasm } from '@vscode/wasm-wasi';
-import { parseDiagnostics, type ParsedDiagnostic } from './diagnostics';
+import { parseDiagnostics, withFailureFallback, type ParsedDiagnostic } from './diagnostics';
 import { checkUserFlags } from './flagPolicy';
 import { GUEST_WORKSPACE, toGuestPath } from './guestPaths';
 import { artifactsUri, loadCompileFlags, loadSysroot, type SysrootFs } from './sysroot';
@@ -92,7 +92,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 	} finally {
 		await vscode.workspace.fs.delete(vscode.Uri.joinPath(folder, '.vscwclang'), { recursive: true, useTrash: false });
 	}
-	return { exitCode, diagnostics, parsed: parseDiagnostics(diagnostics) };
+	return { exitCode, diagnostics, parsed: withFailureFallback(parseDiagnostics(diagnostics), exitCode, diagnostics) };
 }
 
 // Caches survive across builds: unzipping the sysroot (~2 s) and compiling clang.wasm (~1 s) dominate small builds.

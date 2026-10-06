@@ -18,8 +18,9 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 - `build()` still reads binaries and sysroot from `llvm-artifacts/` in the extension; switch to the downloaded/cached toolchain (Distribution work) and cache the unzipped sysroot in extension storage.
 - Threaded slice (`wasm32-wasip1-threads`) is not selectable yet; `build()` always uses `wasm32-wasip1`.
 - Cancel: terminate the Worker, then call `RunInterruptHandlers()`/`CleanupOnSignal()` from JS to remove temp files.
-- Check `publishDiagnostics` (`diagnosticsCollection.ts`) in the real Problems panel via the `vscwclang.build` command; only the parser and `build()` result were verified so far. Notes become `relatedInformation`; linker errors land on the output file.
-- Automated `@vscode/test-web` tests for hello world and a multi-file project (needs a workspace folder in the test run; today only `probeBuildHello` in the dev probe covers this, run by hand). Pure logic has node tests: `npm run test-node`.
+- User flags (`request.flags`) only reach `clang -c`, never `wasm-ld`, so `-lm`, `-L...` and `-Wl,...` do nothing though `flagPolicy` validates `-L`; split compile vs. link flags.
+- Linker messages name the temporary object (`/workspace/.vscwclang/obj/0-x.cpp.o: undefined symbol: f()`); map it back to the source file. wasm-ld `>>>` detail lines only appeared in the hand-written parser tests, not in real output (no debug info in release mode).
+- Automated `@vscode/test-web` tests for hello world and a multi-file project (needs a workspace folder in the test run; today only `probeBuildHello` in the dev probe covers this, run by hand). Pure logic has node tests: `npm run test-node`. The two `build()` rejection tests in `extension.test.ts` have not been run (`npm test` / test-web not executed yet).
 
 ## Milestone 2: tasks, build UX, run
 - `TaskProvider` (`type: "vscwclang"`) with problem matcher and default build task; `tasks.json` schema (sources glob, flags, mode).

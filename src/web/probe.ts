@@ -131,6 +131,14 @@ async function probeBuildHello(context: vscode.ExtensionContext, log: vscode.Out
 	const warnings = bad.parsed.filter(d => d.severity === 'warning').map(d => d.flag);
 	if (bad.exitCode === 0 || errors.length !== 1 || !warnings.includes('-Wunused-variable')) { throw new Error(`bad build: expected 1 parsed error, got exit ${bad.exitCode}, ${JSON.stringify(bad.parsed)}`); }
 
+	await write('nolink.cpp', ['int missing_fn();', 'int main() { return missing_fn(); }']);
+	const noLink = await build({ sources: [vscode.Uri.joinPath(folder, 'probe-build', 'nolink.cpp')], output: vscode.Uri.joinPath(folder, 'probe-build', 'nolink.wasm'), flags: [], mode: 'release' }, log, context);
+	const linkErrors = noLink.parsed.filter(d => d.severity === 'error');
+	log.appendLine(`[probe] link-failure raw output: ${JSON.stringify(noLink.diagnostics)}`);
+	if (noLink.exitCode === 0 || linkErrors.length !== 1 || !/undefined symbol/.test(linkErrors[0].message) || linkErrors[0].file !== undefined) {
+		throw new Error(`link failure: expected 1 file-less 'undefined symbol' error, got exit ${noLink.exitCode}, ${JSON.stringify(noLink.parsed)}`);
+	}
+
 	const wasm = await Wasm.load();
 	const module = await WebAssembly.compile(await vscode.workspace.fs.readFile(output) as Uint8Array<ArrayBuffer>);
 	const process = await wasm.createProcess('out', module, { stdio: { out: { kind: 'pipeOut' }, err: { kind: 'pipeOut' } } });
@@ -138,5 +146,5 @@ async function probeBuildHello(context: vscode.ExtensionContext, log: vscode.Out
 	const decoder = new TextDecoder();
 	process.stdout?.onData(d => { printed += decoder.decode(d); });
 	const rc = await process.run();
-	return `2-file build ${Math.round(t1 - t0)} ms, ran exit ${rc}: ${JSON.stringify(printed)}; bad build ${Math.round(t2 - t1)} ms, errors ${JSON.stringify(errors)}, warnings ${JSON.stringify(warnings)}`;
+	return `2-file build ${Math.round(t1 - t0)} ms, ran exit ${rc}: ${JSON.stringify(printed)}; bad build ${Math.round(t2 - t1)} ms, errors ${JSON.stringify(errors)}, warnings ${JSON.stringify(warnings)}; link failure ${JSON.stringify(linkErrors[0].message)} with ${linkErrors[0].notes.length} notes`;
 }

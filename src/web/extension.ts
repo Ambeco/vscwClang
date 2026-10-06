@@ -14,7 +14,9 @@ export function activate(context: vscode.ExtensionContext) {
 			const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
 			if (!folder) { throw new Error('vscwClang: open a workspace folder first.'); }
 			const output = vscode.Uri.joinPath(folder, 'a.out.wasm');
-			const sources = await vscode.workspace.findFiles('**/*.{c,cc,cpp,cxx}', '**/node_modules/**');
+			// The exclude glob is not honored on every virtual file system (seen under test-web), so filter again.
+			const sources = (await vscode.workspace.findFiles('**/*.{c,cc,cpp,cxx}', '**/node_modules/**'))
+				.filter(uri => !/\/(node_modules|\.git|\.vscwclang)\//.test(uri.path));
 			const result = await build({ sources, output, flags: [], mode: 'release' }, log, context);
 			log.appendLine(result.diagnostics);
 			publishDiagnostics(diagnostics, folder, result.parsed, output);

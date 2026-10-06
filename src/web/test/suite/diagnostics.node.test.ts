@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { parseDiagnostics } from '../../toolchain/diagnostics';
+import { parseDiagnostics, withFailureFallback } from '../../toolchain/diagnostics';
 
 suite('parseDiagnostics', () => {
 	test('error with column and flag', () => {
@@ -41,6 +41,29 @@ suite('parseDiagnostics', () => {
 	test('line without column', () => {
 		const [d] = parseDiagnostics('/workspace/a.cpp:7: error: boom');
 		assert.deepStrictEqual([d.line, d.column], [7, undefined]);
+	});
+
+	test('bare driver errors without a location are parsed', () => {
+		const out = parseDiagnostics([
+			'clang++: error: unknown argument: \'-foo\'',
+			'error: unable to open output file \'/x.o\': \'Operation not permitted\'',
+			'clang: warning: argument unused during compilation: \'-bar\' [-Wunused-command-line-argument]',
+		].join('\n'));
+		assert.deepStrictEqual(out.map(d => [d.file, d.severity, d.message, d.flag]), [
+			[undefined, 'error', 'unknown argument: \'-foo\'', undefined],
+			[undefined, 'error', 'unable to open output file \'/x.o\': \'Operation not permitted\'', undefined],
+			[undefined, 'warning', 'argument unused during compilation: \'-bar\'', '-Wunused-command-line-argument'],
+		]);
+	});
+
+	test('failure fallback synthesizes an error only when needed', () => {
+		assert.deepStrictEqual(withFailureFallback([], 0, 'whatever'), []);
+		const existing = parseDiagnostics('/w/a.cpp:1:1: error: x');
+		assert.strictEqual(withFailureFallback(existing, 1, 'x'), existing);
+		const [d] = withFailureFallback([], 1, 'odd output\n\nmore');
+		assert.strictEqual(d.severity, 'error');
+		assert.match(d.message, /exit 1.*odd output \| more/);
+		assert.match(withFailureFallback([], 2, '')[0].message, /no output/);
 	});
 
 	test('garbage yields nothing', () => {
