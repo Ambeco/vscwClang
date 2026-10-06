@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { Wasm } from '@vscode/wasm-wasi';
 import { parseDiagnostics, withFailureFallback, type ParsedDiagnostic } from './diagnostics';
-import { checkUserFlags } from './flagPolicy';
+import { checkUserFlags, splitFlags } from './flagPolicy';
 import { GUEST_WORKSPACE, toGuestPath } from './guestPaths';
 import { artifactsUri, loadCompileFlags, loadSysroot, type SysrootFs } from './sysroot';
 
@@ -10,7 +10,7 @@ export interface BuildRequest {
 	sources: vscode.Uri[];
 	/** Where the linked .wasm goes; must be inside the first workspace folder. */
 	output: vscode.Uri;
-	/** Extra user flags; restricted ones are rejected (see flagPolicy.ts). */
+	/** Extra user flags; restricted ones are rejected (see flagPolicy.ts). `-l`, `-L` and `-Wl,` flags go to wasm-ld, the rest to clang. */
 	flags: string[];
 	/** "debug" adds -O0 -g (hook instrumentation and --export=__stack_pointer come with Milestone 4). */
 	mode: 'debug' | 'release';
@@ -64,6 +64,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 	const sub = (f: string) => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource');
 	const run = (wasmFile: string, args: string[]) => runTool(wasm, context, sysroot, wasmFile, args);
 
+	const userFlags = splitFlags(request.flags, GUEST_WORKSPACE);
 	const modeFlags = request.mode === 'debug' ? ['-O0', '-g'] : [];
 	let diagnostics = '';
 	let exitCode = 0;
@@ -77,7 +78,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 			const driver = base.endsWith('.c') ? 'clang' : 'clang++';
 			log.appendLine(`[vscwclang] compiling ${source.guest}`);
 			const cc = await run('clang.wasm', [driver, ...flags.compile[SLICE].map(sub), '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics',
-				...modeFlags, ...request.flags, '-c', source.guest, '-o', object]);
+				...modeFlags, ...userFlags.compile, '-c', source.guest, '-o', object]);
 			diagnostics += cc.stderr;
 			objects.push(object);
 			if (cc.exitCode !== 0 && exitCode === 0) { exitCode = cc.exitCode; }
@@ -85,7 +86,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 		if (exitCode === 0) {
 			log.appendLine(`[vscwclang] linking ${output}`);
 			const link = flags.link[SLICE].map(sub);
-			const ld = await run('lld.wasm', ['wasm-ld', link[0], ...objects, ...link.slice(1), '-o', output]);
+			const ld = await run('lld.wasm', ['wasm-ld', link[0], ...objects, ...userFlags.link, ...link.slice(1), '-o', output]);
 			diagnostics += ld.stderr;
 			exitCode = ld.exitCode;
 		}

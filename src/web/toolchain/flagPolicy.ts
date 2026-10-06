@@ -37,3 +37,32 @@ function isHostPath(path: string): boolean {
 	if (path.startsWith('/workspace/') || path === '/workspace' || path.startsWith('/sysroot/') || path === '/sysroot') { return false; }
 	return path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path) || path.split(/[\\/]/).includes('..');
 }
+
+/**
+ * Splits user flags into those for `clang -c` and those for `wasm-ld`.
+ *
+ * `-l`, `-L` (attached or separated), and `-Wl,a,b` (becomes `a`, `b`) are link-only; relative `-L` dirs
+ * are resolved under `guestWorkspace` since wasm-ld's cwd is not the workspace. Everything else is a compile flag.
+ */
+export function splitFlags(flags: readonly string[], guestWorkspace: string): { compile: string[]; link: string[] } {
+	const compile: string[] = [];
+	const link: string[] = [];
+	const absolute = (dir: string) => /^(\/|[A-Za-z]:[\/])/.test(dir) ? dir : `${guestWorkspace}/${dir.replace(/^\.\//, '')}`;
+	for (let i = 0; i < flags.length; i++) {
+		const f = flags[i];
+		if (f === '-l' || f === '-L') {
+			const value = flags[++i];
+			if (value === undefined) { throw new Error(`vscwClang: flag '${f}' needs an argument. Did you mean '${f}<name>'?`); }
+			link.push(f === '-L' ? `-L${absolute(value)}` : `-l${value}`);
+		} else if (f.startsWith('-L')) {
+			link.push(`-L${absolute(f.slice(2))}`);
+		} else if (f.startsWith('-l')) {
+			link.push(f);
+		} else if (f.startsWith('-Wl,')) {
+			link.push(...f.slice(4).split(',').filter(a => a !== ''));
+		} else {
+			compile.push(f);
+		}
+	}
+	return { compile, link };
+}

@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { VscwClangDebugAdapter } from './debug/debugAdapter';
-import { build } from './toolchain/toolchain';
+import { buildWorkspace } from './buildWorkspace';
+import { runProgram } from './runProgram';
+import { registerTaskProvider } from './tasks';
 import { publishDiagnostics } from './toolchain/diagnosticsCollection';
 import { runProbe } from './probe';
 
@@ -11,22 +13,16 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscwclang.build', async () => {
-			const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
-			if (!folder) { throw new Error('vscwClang: open a workspace folder first.'); }
-			const output = vscode.Uri.joinPath(folder, 'a.out.wasm');
-			// The exclude glob is not honored on every virtual file system (seen under test-web), so filter again.
-			const sources = (await vscode.workspace.findFiles('**/*.{c,cc,cpp,cxx}', '**/node_modules/**'))
-				.filter(uri => !/\/(node_modules|\.git|\.vscwclang)\//.test(uri.path));
-			const result = await build({ sources, output, flags: [], mode: 'release' }, log, context);
-			log.appendLine(result.diagnostics);
+			const { folder, output, result } = await buildWorkspace(context, log);
 			publishDiagnostics(diagnostics, folder, result.parsed, output);
-			if (result.exitCode !== 0) {
-				log.show(true);
-				vscode.window.showErrorMessage(`vscwClang: build failed (exit ${result.exitCode}); see Problems and the vscwclang output.`);
-			} else {
-				vscode.window.showInformationMessage(`vscwClang: built ${vscode.workspace.asRelativePath(output)}.`);
-			}
+			reportBuild(log, output, result.exitCode);
 		}),
+		vscode.commands.registerCommand('vscwclang.run', async () => {
+			const { folder, output, result } = await buildWorkspace(context, log);
+			publishDiagnostics(diagnostics, folder, result.parsed, output);
+			if (reportBuild(log, output, result.exitCode)) { await runProgram(output, []); }
+		}),
+		registerTaskProvider(context, log),
 		vscode.commands.registerCommand('vscwclang.probe', () => runProbe(context, log)),
 		vscode.debug.registerDebugConfigurationProvider('vscwclang', {
 			provideDebugConfigurations: () => [{ type: 'vscwclang', request: 'launch', name: 'Debug C++ (vscwClang)', program: 'a.out.wasm' }],
@@ -35,6 +31,16 @@ export function activate(context: vscode.ExtensionContext) {
 			createDebugAdapterDescriptor: session => new vscode.DebugAdapterInlineImplementation(new VscwClangDebugAdapter(session, log, context)),
 		}),
 	);
+}
+
+function reportBuild(log: vscode.OutputChannel, output: vscode.Uri, exitCode: number): boolean {
+	if (exitCode !== 0) {
+		log.show(true);
+		void vscode.window.showErrorMessage(`vscwClang: build failed (exit ${exitCode}); see Problems and the vscwclang output.`);
+		return false;
+	}
+	void vscode.window.showInformationMessage(`vscwClang: built ${vscode.workspace.asRelativePath(output)}.`);
+	return true;
 }
 
 export function deactivate() {}

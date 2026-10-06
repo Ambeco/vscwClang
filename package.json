@@ -13,7 +13,9 @@
     "onDebugResolve:vscwclang",
     "onDebugInitialConfigurations",
     "onCommand:vscwclang.build",
-    "onCommand:vscwclang.probe"
+    "onCommand:vscwclang.probe",
+    "onCommand:vscwclang.run",
+    "onTaskType:vscwclang"
   ],
   "extensionDependencies": [
     "ms-vscode.wasm-wasi-core"
@@ -24,6 +26,10 @@
       {
         "command": "vscwclang.build",
         "title": "vscwClang: Build C++ (clang.wasm)"
+      },
+      {
+        "command": "vscwclang.run",
+        "title": "vscwClang: Build and Run C++ (clang.wasm)"
       },
       {
         "command": "vscwclang.probe",
@@ -66,10 +72,64 @@
           }
         ]
       }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "vscwclang",
+        "properties": {
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Source globs relative to the workspace folder. Default: all .c/.cc/.cpp/.cxx files."
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Extra clang flags; -l, -L and -Wl, flags go to wasm-ld."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "debug",
+              "release"
+            ],
+            "default": "release"
+          },
+          "output": {
+            "type": "string",
+            "default": "a.out.wasm",
+            "description": "Output .wasm, relative to the workspace folder."
+          }
+        }
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "vscwclang",
+        "owner": "vscwclang",
+        "source": "clang",
+        "fileLocation": [
+          "relative",
+          "${workspaceFolder}"
+        ],
+        "pattern": {
+          "regexp": "^/workspace/(.*?):(\\d+):(\\d+): (warning|error): (.*?)(?: \\[(-W[^\\]]+)\\])?$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5,
+          "code": 6
+        }
+      }
     ]
   },
   "scripts": {
-    "test": "vscode-test-web --browserType=chromium --extensionDevelopmentPath=. --extensionTestsPath=dist/web/test/suite/extensionTests.js",
+    "test": "vscode-test-web --browserType=chromium --coi --extensionId=ms-vscode.wasm-wasi-core --extensionDevelopmentPath=. --extensionTestsPath=dist/web/test/suite/extensionTests.js src/web/test/fixtures/workspace",
     "pretest": "npm run compile-web",
     "vscode:prepublish": "npm run package-web",
     "compile-web": "npm run check-types && npm run lint && node esbuild.js",

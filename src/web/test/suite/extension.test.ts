@@ -20,6 +20,8 @@ suite('vscwClang template', () => {
 	});
 
 	test('build command is contributed', async () => {
-		assert.ok((await vscode.commands.getCommands(true)).includes('vscwclang.build'));
+		await vscode.extensions.all.find(e => e.id.endsWith('.vscwclang'))?.activate();
+		const commands = await vscode.commands.getCommands(true);
+		assert.ok(commands.includes('vscwclang.build') && commands.includes('vscwclang.run'));
 	});
 });
