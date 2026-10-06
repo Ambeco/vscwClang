@@ -1,6 +1,6 @@
-import * as vscode from 'vscode';
 import { Wasm, type MemoryFileSystem } from '@vscode/wasm-wasi';
 import { unzip } from 'fflate';
+import type { ToolchainStore } from './toolchainStore';
 
 export interface SysrootFs {
 	sysroot: MemoryFileSystem;
@@ -12,11 +12,9 @@ export interface CompileFlags {
 	link: Record<string, string[]>;
 }
 
-export const artifactsUri = (context: vscode.ExtensionContext) => vscode.Uri.joinPath(context.extensionUri, 'llvm-artifacts');
-
 /** Unzips `sysroot.zip` (entries under `sysroot/` and `resource/`) into two memory file systems. */
-export async function loadSysroot(wasm: Wasm, context: vscode.ExtensionContext): Promise<SysrootFs> {
-	const zipBits = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(artifactsUri(context), 'zips', 'sysroot.zip'));
+export async function loadSysroot(wasm: Wasm, toolchain: ToolchainStore): Promise<SysrootFs> {
+	const zipBits = await toolchain.getFile('sysroot.zip');
 	const files = await new Promise<Record<string, Uint8Array>>((resolve, reject) =>
 		unzip(zipBits, (err, data) => err ? reject(err) : resolve(data)));
 	const result: SysrootFs = { sysroot: await wasm.createMemoryFileSystem(), resource: await wasm.createMemoryFileSystem() };
@@ -38,7 +36,7 @@ export async function loadSysroot(wasm: Wasm, context: vscode.ExtensionContext):
 	return result;
 }
 
-export async function loadCompileFlags(context: vscode.ExtensionContext): Promise<CompileFlags> {
-	const bits = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(artifactsUri(context), 'compile-flags.json'));
+export async function loadCompileFlags(toolchain: ToolchainStore): Promise<CompileFlags> {
+	const bits = await toolchain.getFile('compile-flags.json');
 	return JSON.parse(new TextDecoder().decode(bits)) as CompileFlags;
 }

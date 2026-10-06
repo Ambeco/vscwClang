@@ -2,6 +2,7 @@ import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { Wasm } from '@vscode/wasm-wasi';
 import { build } from '../../toolchain/toolchain';
+import { ToolchainStore } from '../../toolchain/toolchainStore';
 
 // Needs a workspace folder, --coi and ms-vscode.wasm-wasi-core (see the `test` script in package.json).
 suite('vscwClang build (in browser)', function () {
@@ -11,6 +12,7 @@ suite('vscwClang build (in browser)', function () {
 		'int main() { std::printf("%d", ANSWER + (int)std::sqrt(4.0)); return 0; }', ''].join(String.fromCharCode(10));
 	let context: vscode.ExtensionContext;
 	let dir: vscode.Uri;
+	let toolchainUrl: string;
 	const log = vscode.window.createOutputChannel('vscwclang-test');
 
 	const write = (name: string, text: string) => vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, name), encoder.encode(text));
@@ -32,7 +34,31 @@ suite('vscwClang build (in browser)', function () {
 		dir = vscode.Uri.joinPath(folder, 'build-test');
 		const extension = vscode.extensions.getExtension('undefined_publisher.vscwclang') ?? vscode.extensions.all.find(e => e.id.endsWith('.vscwclang'));
 		assert.ok(extension, 'vscwclang extension is not loaded');
-		context = { extensionUri: extension.extensionUri } as vscode.ExtensionContext;
+		// The toolchain is served over HTTP from the extension dir (`npm run toolchain-dist`) and downloaded into a fresh storage dir.
+		toolchainUrl = `${extension.extensionUri.toString().replace(/\/$/, '')}/llvm-artifacts/dist`;
+		await vscode.workspace.getConfiguration('vscwclang').update('toolchainUrl', toolchainUrl, vscode.ConfigurationTarget.Global);
+		context = { extensionUri: extension.extensionUri, globalStorageUri: vscode.Uri.joinPath(dir, 'storage') } as vscode.ExtensionContext;
+	});
+
+	test('toolchain downloads into extension storage, then is served from cache', async () => {
+		const store = new ToolchainStore(context, log);
+		await store.ensure();
+		const manifest = JSON.parse(new TextDecoder().decode(await vscode.workspace.fs.readFile(vscode.Uri.parse(`${toolchainUrl}/manifest.json`)))) as { files: Record<string, { size: number }> };
+		const cached = await vscode.workspace.fs.readDirectory(vscode.Uri.joinPath(context.globalStorageUri, 'toolchain'));
+		const versionDir = cached.find(([, type]) => type === vscode.FileType.Directory)?.[0];
+		assert.ok(versionDir, `no version directory in storage: ${JSON.stringify(cached)}`);
+		for (const name of ['clang.wasm', 'lld.wasm', 'sysroot.zip', 'compile-flags.json']) {
+			const stat = await vscode.workspace.fs.stat(vscode.Uri.joinPath(context.globalStorageUri, 'toolchain', versionDir, name));
+			assert.strictEqual(stat.size, manifest.files[name].size, name);
+		}
+		await vscode.workspace.getConfiguration('vscwclang').update('toolchainUrl', 'http://127.0.0.1:1/unreachable', vscode.ConfigurationTarget.Global);
+		try {
+			// An override URL is never pinned, so its manifest is always fetched: an unreachable host must fail loudly, not silently reuse the cache.
+			await assert.rejects(new ToolchainStore(context, log).ensure(), /could not reach/);
+		} finally {
+			await vscode.workspace.getConfiguration('vscwclang').update('toolchainUrl', toolchainUrl, vscode.ConfigurationTarget.Global);
+		}
+		assert.strictEqual((await new ToolchainStore(context, log).getFile('compile-flags.json')).byteLength, manifest.files['compile-flags.json'].size);
 	});
 
 	test('multi-file project builds, links and runs', async () => {
@@ -104,6 +130,7 @@ suite('vscwClang build (in browser)', function () {
 	});
 
 	suiteTeardown(async () => {
+		await vscode.workspace.getConfiguration('vscwclang').update('toolchainUrl', undefined, vscode.ConfigurationTarget.Global);
 		await vscode.workspace.fs.delete(dir, { recursive: true, useTrash: false });
 	});
 });

@@ -14,6 +14,8 @@
     "onDebugInitialConfigurations",
     "onCommand:vscwclang.build",
     "onCommand:vscwclang.probe",
+    "onCommand:vscwclang.downloadToolchain",
+    "onCommand:vscwclang.clearToolchainCache",
     "onCommand:vscwclang.run",
     "onTaskType:vscwclang"
   ],
@@ -25,6 +27,12 @@
     "configuration": {
       "title": "vscwClang",
       "properties": {
+        "vscwclang.toolchainUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "markdownDescription": "Development override: directory URL serving a toolchain made by `scripts/make-toolchain-dist.mjs` (`manifest.json` plus chunks). When set, the manifest is trusted as served instead of being checked against the hash pinned in the extension. Leave empty to use the pinned toolchain. The host must send CORS and `Cross-Origin-Resource-Policy: cross-origin` headers."
+        },
         "vscwclang.toolTimeoutSeconds": {
           "type": "number",
           "default": 300,
@@ -41,6 +49,14 @@
       {
         "command": "vscwclang.run",
         "title": "vscwClang: Build and Run C++ (clang.wasm)"
+      },
+      {
+        "command": "vscwclang.downloadToolchain",
+        "title": "vscwClang: Download toolchain"
+      },
+      {
+        "command": "vscwclang.clearToolchainCache",
+        "title": "vscwClang: Clear downloaded toolchain"
       },
       {
         "command": "vscwclang.probe",
@@ -141,7 +157,8 @@
   },
   "scripts": {
     "test": "vscode-test-web --browserType=chromium --coi --extensionId=ms-vscode.wasm-wasi-core --extensionDevelopmentPath=. --extensionTestsPath=dist/web/test/suite/extensionTests.js src/web/test/fixtures/workspace",
-    "pretest": "npm run compile-web",
+    "toolchain-dist": "node scripts/make-toolchain-dist.mjs llvm-artifacts llvm-artifacts/dist",
+    "pretest": "node scripts/make-toolchain-dist.mjs llvm-artifacts llvm-artifacts/dist --if-missing && npm run compile-web",
     "vscode:prepublish": "npm run package-web",
     "compile-web": "npm run check-types && npm run lint && node esbuild.js",
     "watch-web": "npm-run-all -p watch-web:*",

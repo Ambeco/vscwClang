@@ -3,7 +3,8 @@ import { Wasm } from '@vscode/wasm-wasi';
 import { parseDiagnostics, withFailureFallback, type ParsedDiagnostic } from './diagnostics';
 import { checkUserFlags, splitFlags } from './flagPolicy';
 import { GUEST_WORKSPACE, toGuestPath } from './guestPaths';
-import { artifactsUri, loadCompileFlags, loadSysroot, type SysrootFs } from './sysroot';
+import { loadCompileFlags, loadSysroot, type SysrootFs } from './sysroot';
+import { ToolchainStore, type StoreContext } from './toolchainStore';
 
 export interface BuildRequest {
 	/** Source files to compile; all must be inside the first workspace folder. */
@@ -37,7 +38,7 @@ const SLICE = 'wasm32-wasip1';
  *
  * Throws (rather than returning a nonzero result) for problems with the request itself.
  */
-export async function build(request: BuildRequest, log: vscode.OutputChannel, context: vscode.ExtensionContext): Promise<BuildResult> {
+export async function build(request: BuildRequest, log: vscode.OutputChannel, context: StoreContext): Promise<BuildResult> {
 	if (request.sources.length === 0) {
 		throw new Error('vscwClang: no source files to build. Did you mean to add a .c/.cc/.cpp/.cxx file to the workspace?');
 	}
@@ -59,10 +60,12 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 	const sources = request.sources.map(uri => ({ uri, guest: guest(uri, 'source file') }));
 	const output = guest(request.output, 'output file');
 
+	const toolchain = getToolchainStore(context, log);
+	await toolchain.ensure();
 	const wasm = await Wasm.load();
-	const [flags, sysroot] = await Promise.all([loadCompileFlags(context), getSysroot(wasm, context)]);
+	const [flags, sysroot] = await Promise.all([loadCompileFlags(toolchain), getSysroot(wasm, toolchain)]);
 	const sub = (f: string) => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource');
-	const run = (wasmFile: string, args: string[]) => runTool(wasm, context, sysroot, wasmFile, args);
+	const run = (wasmFile: string, args: string[]) => runTool(wasm, toolchain, sysroot, wasmFile, args);
 
 	const userFlags = splitFlags(request.flags, GUEST_WORKSPACE);
 	const modeFlags = request.mode === 'debug' ? ['-O0', '-g'] : [];
@@ -100,16 +103,24 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 let sysrootPromise: Promise<SysrootFs> | undefined;
 const modules = new Map<string, Promise<WebAssembly.Module>>();
 
-function getSysroot(wasm: Wasm, context: vscode.ExtensionContext): Promise<SysrootFs> {
-	sysrootPromise ??= loadSysroot(wasm, context).catch(e => { sysrootPromise = undefined; throw e; });
+let store: ToolchainStore | undefined;
+
+/** The shared toolchain cache; `vscwclang.downloadToolchain` and every build go through it. */
+export function getToolchainStore(context: StoreContext, log: vscode.OutputChannel): ToolchainStore {
+	store ??= new ToolchainStore(context, log);
+	return store;
+}
+
+function getSysroot(wasm: Wasm, toolchain: ToolchainStore): Promise<SysrootFs> {
+	sysrootPromise ??= loadSysroot(wasm, toolchain).catch(e => { sysrootPromise = undefined; throw e; });
 	return sysrootPromise;
 }
 
-function getModule(context: vscode.ExtensionContext, wasmFile: string): Promise<WebAssembly.Module> {
+function getModule(toolchain: ToolchainStore, wasmFile: string): Promise<WebAssembly.Module> {
 	let module = modules.get(wasmFile);
 	if (!module) {
-		module = Promise.resolve(vscode.workspace.fs.readFile(vscode.Uri.joinPath(artifactsUri(context), 'bin', wasmFile)))
-			.then(bits => WebAssembly.compile(bits as Uint8Array<ArrayBuffer>))
+		module = toolchain.getFile(wasmFile)
+			.then(bits => WebAssembly.compile(bits))
 			.catch(e => { modules.delete(wasmFile); throw e; });
 		modules.set(wasmFile, module);
 	}
@@ -124,8 +135,8 @@ function toolTimeoutMs(): number {
 	return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : DEFAULT_TOOL_TIMEOUT_SECONDS * 1000;
 }
 
-async function runTool(wasm: Wasm, context: vscode.ExtensionContext, sysroot: SysrootFs, wasmFile: string, args: string[]): Promise<{ exitCode: number; stderr: string }> {
-	const module = await getModule(context, wasmFile);
+async function runTool(wasm: Wasm, toolchain: ToolchainStore, sysroot: SysrootFs, wasmFile: string, args: string[]): Promise<{ exitCode: number; stderr: string }> {
+	const module = await getModule(toolchain, wasmFile);
 	const process = await wasm.createProcess(args[0], module, {
 		args: args.slice(1),
 		stdio: { out: { kind: 'pipeOut' }, err: { kind: 'pipeOut' } },

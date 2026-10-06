@@ -15,7 +15,6 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 
 ## Milestone 1: compile in the browser
 - V2 only: own Worker-hosted `clang.wasm` driver (spawn hook for `cc1`/`wasm-ld`, `$COLUMNS`) and concurrent per-file compiles; V1 `toolchain.build()` compiles sequentially on `wasm-wasi-core`.
-- `build()` still reads binaries and sysroot from `llvm-artifacts/` in the extension; switch to the downloaded/cached toolchain (Distribution work) and cache the unzipped sysroot in extension storage.
 - Persistent build cache (V1, not necessarily Milestone 1): keep object files across page reloads and days, so a returning user only recompiles changed sources. Needs durable storage (extension `globalStorageUri`, or IndexedDB if that is not durable on vscode.dev; verify), a cache key per object (source content hash, flags, mode, toolchain version, plus the headers it included, e.g. via `-MD` dependency output), and eviction. Today objects are deleted after each build and `build()` always recompiles everything.
 - Threaded slice (`wasm32-wasip1-threads`) is not selectable yet; `build()` always uses `wasm32-wasip1`.
 - Cancel: terminate the Worker, then call `RunInterruptHandlers()`/`CleanupOnSignal()` from JS to remove temp files.
@@ -52,7 +51,7 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 - Debug console I/O, `launch` args/env/cwd, `terminate`/`disconnect` cleanup.
 
 ## Milestone 7: release
-- Marketplace packaging (web-only, no bundled binaries), toolchain download integrity check, CI running the web tests, README screenshots, CHANGELOG.
+- Marketplace packaging (web-only, no bundled binaries), CI running the web tests, README screenshots, CHANGELOG.
 
 ## Known risks / open questions
 - Compile speed and memory: 2 GiB max-memory per `clang.wasm` instance, times N concurrent files, in one browser tab.
@@ -60,8 +59,8 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 - Debugging is `-O0`-only by design; DWARF frame-base for optimized code is unverified.
 
 ## Distribution work (new)
-- Create the `vscwClang-toolchain` repo (see design.md "Distribution"): a script that turns a `llvm-project` release into chunks/zips + manifest + `compile-flags.json`, committed as an orphan commit and tagged per toolchain version; pin the tag and manifest hashes in the extension.
+- Create the `vscwClang-toolchain` repo (see design.md "Distribution"): run `scripts/make-toolchain-dist.mjs <artifacts> <out> --tag vN --pin`, commit `<out>` as an orphan commit tagged per toolchain version, and set `TOOLCHAIN_PIN.baseUrl` (`toolchainPin.ts`) to its jsDelivr/raw URL. Until then the pin is empty and only `vscwclang.toolchainUrl` works.
 - Pick the host (raw GitHub vs. jsDelivr/npm vs. Pages): check per-file size caps with a real >20 MB file, and brotli/gzip behavior; test on real vscode.dev, not just test-web `--coi`.
-- Build the downloader: fetch zips, unzip with `fflate`, SHA-256 check against hashes embedded at build time, cache in extension storage, progress UI, retry/offline errors with "did you mean" messages.
+- Downloader, on real vscode.dev (only automated tests so far): check by eye the progress notification and its Cancel, the offline/CORS error text, and that `globalStorageUri` persists across reloads there (IndexedDB quota for ~200 MB of cached wasm is unverified).
 - Verified 2026-10-05 under test-web `--coi`: `clang.zip` (25 MB, from `scripts/zip-wasm.mjs`) unzipped, compiled and ran `clang --version` (exit 0, 2.4 s).
-- Verified 2026-10-05: sysroot as zip (58 MB, 7.6k files) -> `wasm-wasi-core` memory FS in ~2.2 s; `clang -c` + `wasm-ld` + run of an `iostream` hello world in the probe (`src/web/probe.ts` `probeBuildHello`). `toolchain.build()` now does this (Milestone 1); the remaining piece is the extension-storage cache for the unzipped sysroot.
+- Verified 2026-10-05: sysroot as zip (58 MB, 7.6k files) -> `wasm-wasi-core` memory FS in ~2.2 s; `clang -c` + `wasm-ld` + run of an `iostream` hello world in the probe (`src/web/probe.ts` `probeBuildHello`). `toolchain.build()` now does this (Milestone 1) from the downloaded toolchain.

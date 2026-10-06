@@ -5,6 +5,7 @@ import { runProgram } from './runProgram';
 import { registerTaskProvider } from './tasks';
 import { publishDiagnostics } from './toolchain/diagnosticsCollection';
 import { runProbe } from './probe';
+import { getToolchainStore } from './toolchain/toolchain';
 
 export function activate(context: vscode.ExtensionContext) {
 	const log = vscode.window.createOutputChannel('vscwclang');
@@ -21,6 +22,14 @@ export function activate(context: vscode.ExtensionContext) {
 			const { folder, output, result } = await buildWorkspace(context, log);
 			publishDiagnostics(diagnostics, folder, result.parsed, output);
 			if (reportBuild(log, output, result.exitCode)) { await runProgram(output, []); }
+		}),
+		vscode.commands.registerCommand('vscwclang.downloadToolchain', async () => {
+			await getToolchainStore(context, log).ensure();
+			void vscode.window.showInformationMessage('vscwClang: toolchain is downloaded and cached.');
+		}),
+		vscode.commands.registerCommand('vscwclang.clearToolchainCache', async () => {
+			await getToolchainStore(context, log).clear();
+			void vscode.window.showInformationMessage('vscwClang: downloaded toolchain removed; it will be downloaded again on next use.');
 		}),
 		registerTaskProvider(context, log),
 		vscode.commands.registerCommand('vscwclang.probe', () => runProbe(context, log)),
