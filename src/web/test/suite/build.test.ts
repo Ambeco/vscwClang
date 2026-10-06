@@ -68,6 +68,27 @@ suite('vscwClang build (in browser)', function () {
 		assert.strictEqual(errors[0].line, 2);
 	});
 
+	test('task provider offers build tasks and the problem matcher produces diagnostics', async function () {
+		this.timeout(60_000);
+		await vscode.extensions.all.find(e => e.id.endsWith('.vscwclang'))?.activate();
+		const tasks = await vscode.tasks.fetchTasks({ type: 'vscwclang' });
+		assert.deepStrictEqual(tasks.map(t => t.name).sort(), ['build', 'build (debug)']);
+		await write('tasked.cpp', 'int main() {' + String.fromCharCode(10) + '  return missing;' + String.fromCharCode(10) + '}' + String.fromCharCode(10));
+		const release = tasks.find(t => t.name === 'build')!;
+		const ended = new Promise<void>(resolve => { const d = vscode.tasks.onDidEndTask(e => { if (e.execution.task === release || e.execution.task.name === 'build') { d.dispose(); resolve(); } }); });
+		await vscode.tasks.executeTask(release);
+		await ended;
+		// Matcher markers can carry a different URI scheme than the workspace folder (seen under test-web), so match by path.
+		const errorsFor = () => vscode.languages.getDiagnostics().filter(([u]) => u.path.endsWith('/tasked.cpp')).flatMap(([, d]) => d).filter(d => d.severity === vscode.DiagnosticSeverity.Error);
+		let found = errorsFor();
+		for (let i = 0; i < 30 && found.length === 0; i++) {
+			await new Promise(r => setTimeout(r, 200));
+			found = errorsFor();
+		}
+		assert.strictEqual(found.length, 1, JSON.stringify(vscode.languages.getDiagnostics().map(([u, d]) => [u.toString(), d.length])));
+		assert.strictEqual(found[0].range.start.line, 1);
+	});
+
 	suiteTeardown(async () => {
 		await vscode.workspace.fs.delete(dir, { recursive: true, useTrash: false });
 	});

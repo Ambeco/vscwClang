@@ -23,7 +23,7 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 - Linker messages name the temporary object (`/workspace/.vscwclang/obj/0-x.cpp.o: undefined symbol: f()`); map it back to the source file. wasm-ld `>>>` detail lines only appeared in the hand-written parser tests, not in real output (no debug info in release mode).
 
 ## Milestone 2: tasks, build UX, run
-- Verify the `vscwclang` TaskProvider and `$vscwclang` problem matcher in a UI: under test-web's virtual workspace `Tasks: Run Task` shows no picker at all (task never ran), so only the matcher regex is tested (node). Try real vscode.dev or a desktop web host; `onTaskType:vscwclang` activation is also unconfirmed. Add a way to select the task as default build.
+- Tasks: provider and `$vscwclang` matcher are covered by a test-web test (`vscode.tasks.executeTask`), but not yet seen in the Tasks UI/shortcuts or on real vscode.dev. The matcher owner and the build command's diagnostic collection are both `vscwclang`, so one may overwrite the other's Problems; rename the matcher owner if that bites. Task sources are all workspace files (no `tasks.json` schema for per-target sources yet); no default-build selection.
 - Run: EOF (Ctrl+D) is not supported by `wasm-wasi-core`'s line-mode terminal, so programs reading until EOF block until Ctrl+C. Passing program arguments, a run-in-`debug`-mode choice, and re-run reuse of the terminal are not done. The run command always rebuilds first.
 - Automated test for the run path (terminal stdio is only manually verified: stdin line echo, exit code print).
 - Settings: toolchain version/URL, default `-std`, extra flags, threads on/off.
