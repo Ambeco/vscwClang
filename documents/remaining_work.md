@@ -16,6 +16,7 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 ## Milestone 1: compile in the browser
 - V2 only: own Worker-hosted `clang.wasm` driver (spawn hook for `cc1`/`wasm-ld`, `$COLUMNS`) and concurrent per-file compiles; V1 `toolchain.build()` compiles sequentially on `wasm-wasi-core`.
 - `build()` still reads binaries and sysroot from `llvm-artifacts/` in the extension; switch to the downloaded/cached toolchain (Distribution work) and cache the unzipped sysroot in extension storage.
+- Persistent build cache (V1, not necessarily Milestone 1): keep object files across page reloads and days, so a returning user only recompiles changed sources. Needs durable storage (extension `globalStorageUri`, or IndexedDB if that is not durable on vscode.dev; verify), a cache key per object (source content hash, flags, mode, toolchain version, plus the headers it included, e.g. via `-MD` dependency output), and eviction. Today objects are deleted after each build and `build()` always recompiles everything.
 - Threaded slice (`wasm32-wasip1-threads`) is not selectable yet; `build()` always uses `wasm32-wasip1`.
 - Cancel: terminate the Worker, then call `RunInterruptHandlers()`/`CleanupOnSignal()` from JS to remove temp files.
 - User flags (`request.flags`) only reach `clang -c`, never `wasm-ld`, so `-lm`, `-L...` and `-Wl,...` do nothing though `flagPolicy` validates `-L`; split compile vs. link flags.
@@ -29,7 +30,8 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 - Optional: run in a separate browser tab for OS-level sandboxing (open questions in the llvm-project fork's `remaining_work.md`).
 
 ## Milestone 3: language support (optional, high value)
-- Basic C++ editing UX (snippets, file associations); possibly a clangd.wasm later as a separate effort.
+- Basic C++ editing UX (snippets, file associations).
+- V3 idea: clangd (completion, go-to-definition, hover, diagnostics as you type) running as wasm behind a language client. Viability is unknown: first check whether the llvm-project fork's artifacts can build `clangd.wasm` (single-thread, no process spawning, reading the sysroot memory FS and workspace files), how large it is, and how it would be hosted (the V1 `wasm-wasi-core` host or the V2 Worker host).
 
 ## Milestone 4: debug build + hook runtime
 - "Debug" mode flags: `-O0 -g -fsanitize-coverage=trace-pc-guard -Wl,--export=__stack_pointer`; decide hook granularity (trace-pc-guard vs. per-line pass) and measure overhead.
