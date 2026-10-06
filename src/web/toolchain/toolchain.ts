@@ -116,7 +116,13 @@ function getModule(context: vscode.ExtensionContext, wasmFile: string): Promise<
 	return module;
 }
 
-const TOOL_TIMEOUT_MS = 300_000;
+const DEFAULT_TOOL_TIMEOUT_SECONDS = 300;
+
+/** 0 disables the timeout; invalid values fall back to the default. */
+function toolTimeoutMs(): number {
+	const seconds = vscode.workspace.getConfiguration('vscwclang').get<number>('toolTimeoutSeconds', DEFAULT_TOOL_TIMEOUT_SECONDS);
+	return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : DEFAULT_TOOL_TIMEOUT_SECONDS * 1000;
+}
 
 async function runTool(wasm: Wasm, context: vscode.ExtensionContext, sysroot: SysrootFs, wasmFile: string, args: string[]): Promise<{ exitCode: number; stderr: string }> {
 	const module = await getModule(context, wasmFile);
@@ -136,7 +142,8 @@ async function runTool(wasm: Wasm, context: vscode.ExtensionContext, sysroot: Sy
 	process.stdout?.onData(d => { stderr += outDecoder.decode(d, { stream: true }); });
 	// wasm-wasi-core's run() never settles if the tool traps (vscode-wasm#303); terminate() resolves it.
 	let timedOut = false;
-	const timer = setTimeout(() => { timedOut = true; void process.terminate(); }, TOOL_TIMEOUT_MS);
+	const timeoutMs = toolTimeoutMs();
+	const timer = timeoutMs === 0 ? undefined : setTimeout(() => { timedOut = true; void process.terminate(); }, timeoutMs);
 	let exitCode: number;
 	try {
 		exitCode = await process.run();
@@ -144,7 +151,7 @@ async function runTool(wasm: Wasm, context: vscode.ExtensionContext, sysroot: Sy
 		clearTimeout(timer);
 	}
 	if (timedOut) {
-		return { exitCode: 1, stderr: `${stderr}${args[0]}: error: no result after ${TOOL_TIMEOUT_MS / 1000}s, so it was stopped (it probably crashed inside WebAssembly). Did you mean to retry with fewer sources or simpler flags?
+		return { exitCode: 1, stderr: `${stderr}${args[0]}: error: no result after ${timeoutMs / 1000}s, so it was stopped (it probably crashed inside WebAssembly, or the source is very large). Did you mean to raise 'vscwclang.toolTimeoutSeconds'?
 ` };
 	}
 	return { exitCode, stderr };

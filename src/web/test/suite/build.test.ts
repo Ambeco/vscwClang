@@ -58,6 +58,20 @@ suite('vscwClang build (in browser)', function () {
 		assert.match(bogus.diagnostics, /wasm-ld: error: unknown argument.*no-such-linker-option/);
 	});
 
+	test('a tool that exceeds vscwclang.toolTimeoutSeconds is stopped with an error', async function () {
+		this.timeout(60_000);
+		await write('slow.cpp', 'int main() { return 0; }');
+		const config = vscode.workspace.getConfiguration('vscwclang');
+		await config.update('toolTimeoutSeconds', 0.05, vscode.ConfigurationTarget.Global);
+		try {
+			const result = await build({ sources: [uri('slow.cpp')], output: uri('slow.wasm'), flags: [], mode: 'release' }, log, context);
+			assert.notStrictEqual(result.exitCode, 0);
+			assert.match(result.diagnostics, /no result after 0\.05s.*toolTimeoutSeconds/);
+		} finally {
+			await config.update('toolTimeoutSeconds', undefined, vscode.ConfigurationTarget.Global);
+		}
+	});
+
 	test('a compile error is parsed with file, line and column', async () => {
 		await write('bad.cpp', 'int main() {\n  return missing;\n}\n');
 		const result = await build({ sources: [uri('bad.cpp')], output: uri('bad.wasm'), flags: [], mode: 'debug' }, log, context);

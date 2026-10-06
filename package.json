@@ -22,6 +22,17 @@
   ],
   "browser": "./dist/web/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "vscwClang",
+      "properties": {
+        "vscwclang.toolTimeoutSeconds": {
+          "type": "number",
+          "default": 300,
+          "minimum": 0,
+          "markdownDescription": "Seconds to wait for each clang or wasm-ld invocation before stopping it and reporting an error. Compilers print nothing while working, so a crashed run cannot be told apart from a slow one; raise this for very large sources. `0` disables the timeout."
+        }
+      }
+    },
     "commands": [
       {
         "command": "vscwclang.build",
