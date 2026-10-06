@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { Wasm } from '@vscode/wasm-wasi';
+import { unzip } from 'fflate';
 import { readChunked } from './toolchain/chunkedFile';
 
 // Environment probe for Milestone 0 (see documents/remaining_work.md); logs findings, changes nothing.
@@ -11,6 +12,7 @@ export async function runProbe(context: vscode.ExtensionContext, log: vscode.Out
 	await step(log, 'isolation (extension host)', () => probeIsolation());
 	await step(log, 'isolation (nested worker)', () => probeNestedWorker());
 	await step(log, 'chunked read + compile of clang.wasm (7 x 16 MiB, sha256-checked)', () => probeChunked(context));
+	await step(log, 'unzip clang.zip, compile, run `clang --version`', () => probeZipRun(context));
 	for (const url of FETCH_TARGETS) {
 		await step(log, `fetch ${url}`, () => probeFetch(url));
 	}
@@ -78,4 +80,23 @@ async function probeFetch(url: string): Promise<string> {
 	const res = await fetch(url, { mode: 'cors' });
 	const bytes = (await res.arrayBuffer()).byteLength;
 	return `HTTP ${res.status}, ${bytes} bytes`;
+}
+
+async function probeZipRun(context: vscode.ExtensionContext): Promise<string> {
+	const zipBits = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(context.extensionUri, 'llvm-artifacts', 'zips', 'clang.zip'));
+	const files = await new Promise<Record<string, Uint8Array>>((resolve, reject) =>
+		unzip(zipBits, (err, data) => err ? reject(err) : resolve(data)));
+	const bits = files['clang.wasm'];
+	if (!bits) {
+		throw new Error(`clang.zip has no clang.wasm entry; entries: ${Object.keys(files).join(', ')}`);
+	}
+	const module = await WebAssembly.compile(bits as Uint8Array<ArrayBuffer>);
+	const wasm = await Wasm.load();
+	const process = await wasm.createProcess('clang', module, { args: ['--version'], stdio: { out: { kind: 'pipeOut' }, err: { kind: 'pipeOut' } } });
+	let output = '';
+	const decoder = new TextDecoder();
+	process.stdout?.onData(d => { output += decoder.decode(d); });
+	process.stderr?.onData(d => { output += decoder.decode(d); });
+	const exitCode = await process.run();
+	return `unzipped ${bits.byteLength} bytes; exit ${exitCode}; output: ${JSON.stringify(output.slice(0, 200))}`;
 }
