@@ -95,9 +95,28 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 			exitCode = ld.exitCode;
 		}
 	} finally {
-		await vscode.workspace.fs.delete(vscode.Uri.joinPath(folder, '.vscwclang'), { recursive: true, useTrash: false });
+		await removeScratchDir(vscode.Uri.joinPath(folder, '.vscwclang'), log);
 	}
 	return { exitCode, diagnostics, parsed: withFailureFallback(parseDiagnostics(diagnostics), exitCode, diagnostics) };
+}
+
+/**
+ * Deletes the scratch folder, retrying because the browser (or a sync client such as Dropbox) can briefly hold a file open.
+ * Never throws: a failed cleanup must not hide the build result.
+ */
+async function removeScratchDir(dir: vscode.Uri, log: vscode.OutputChannel): Promise<void> {
+	for (let attempt = 1; attempt <= 4; attempt++) {
+		try {
+			await vscode.workspace.fs.delete(dir, { recursive: true, useTrash: false });
+			return;
+		} catch (e) {
+			if (attempt === 4) {
+				log.appendLine(`[vscwclang] warning: could not delete ${dir.path} (${(e as Error).message}). A file in it is probably still open (a sync client such as Dropbox?); it is safe to delete it yourself, and the next build reuses it.`);
+				return;
+			}
+			await new Promise(r => setTimeout(r, 500 * attempt));
+		}
+	}
 }
 
 // Caches survive across builds: unzipping the sysroot (~2 s) and compiling clang.wasm (~1 s) dominate small builds.
