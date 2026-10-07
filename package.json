@@ -40,6 +40,26 @@
           "scope": "application",
           "markdownDescription": "Development override: directory URL serving a toolchain made by `scripts/make-toolchain-dist.mjs` (`manifest.json` plus chunks). When set, the manifest is trusted as served instead of being checked against the hash pinned in the extension. Leave empty to use the pinned toolchain. The host must send CORS and `Cross-Origin-Resource-Policy: cross-origin` headers."
         },
+        "vscwclang.sourceGlobs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/*.{c,cc,cpp,cxx}"
+          ],
+          "markdownDescription": "Globs, relative to the workspace folder, of the source files that `vscwClang: Build` compiles together into one program. Narrow this (e.g. `[\"src/**/*.cpp\"]`) when the folder holds several programs, such as tests that each define `main`."
+        },
+        "vscwclang.sourceExclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "node_modules", ".git", ".vscwclang", ".vs", "enc_temp_folder", "Debug", "Release", "x64", "x86", "build", "out", "dist", "CMakeFiles", ".cache"
+          ],
+          "markdownDescription": "Directory names (at any depth, case-insensitive) whose files are never compiled: IDE scratch folders and build output. Replaces the default list when set."
+        },
         "vscwclang.toolTimeoutSeconds": {
           "type": "number",
           "default": 300,

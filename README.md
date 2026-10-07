@@ -8,7 +8,7 @@ vscwClang runs WebAssembly builds of Clang and LLD inside the extension, so on v
 
 ## What it does
 
-- **Build** (`vscwClang: Build C++`): compiles every `.c`, `.cc`, `.cpp` and `.cxx` file in your workspace and links them into `a.out.wasm`. Errors and warnings appear in the Problems panel at the right file, line and column.
+- **Build** (`vscwClang: Build C++`): compiles every `.c`, `.cc`, `.cpp` and `.cxx` file in your workspace and links them into `a.out.wasm`. IDE scratch and build-output folders (`Debug`, `x64`, `build`, `enc_temp_folder`, `.vs`, ...) are skipped. If your folder holds several programs, narrow the `vscwclang.sourceGlobs` setting, because all matching files are linked into one program (two `main` functions will fail to link). Errors and warnings appear in the Problems panel at the right file, line and column.
 - **Build and Run** (`vscwClang: Build and Run C++`): builds, then runs the program in a VS Code terminal. The terminal supports line-by-line input, so programs can read from `std::cin` or `stdin`.
 - **Tasks**: a `vscwclang` task type with a matching problem matcher, so builds can run from `tasks.json` with `sources`, `flags`, `mode` (`debug` or `release`) and `output` settings.
 
