@@ -10,7 +10,7 @@ Let people write and debug real C/C++ in vscode.dev / github.dev with nothing in
 
 - `npm install`, then `npm run compile-web` (type-check, lint, bundle).
 - `npm run run-in-browser` opens the extension in a local VS Code for Web.
-- Status: `vscwclang.build` compiles and links a multi-file C/C++ workspace to `a.out.wasm` in the browser and publishes parsed diagnostics to Problems; `vscwclang.run` builds and runs it in a terminal with interactive stdin; a `vscwclang` task type and `$vscwclang` problem matcher exist (the toolchain is downloaded on first use and cached; no toolchain is published yet, so for now run `npm run toolchain-dist`, serve `llvm-artifacts/dist` from a CORS-open host and set `vscwclang.toolchainUrl` to it). `npm run test-node` runs the pure-logic tests; `npm test` runs the in-browser tests (Chromium, needs `llvm-artifacts/`). Debug is not implemented yet.
+- Status: `vscwclang.build` compiles and links a multi-file C/C++ workspace to `a.out.wasm` in the browser and publishes parsed diagnostics to Problems; `vscwclang.run` builds and runs it in a terminal with interactive stdin; a `vscwclang` task type and `$vscwclang` problem matcher exist (the toolchain is downloaded on first use from jsDelivr (`Ambeco/llvm-artifacts`, pinned by hash) and cached; `vscwclang.toolchainUrl` overrides the host for development). `npm run test-node` runs the pure-logic tests; `npm test` runs the in-browser tests (Chromium, needs `llvm-artifacts/`). Debug is not implemented yet.
 
 ## 3. Design overview
 
