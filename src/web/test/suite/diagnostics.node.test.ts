@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { parseDiagnostics, withFailureFallback } from '../../toolchain/diagnostics';
+import { parseDiagnostics, withFailureFallback, workspaceAnchor } from '../../toolchain/diagnostics';
 
 suite('parseDiagnostics', () => {
 	test('error with column and flag', () => {
@@ -68,5 +68,28 @@ suite('parseDiagnostics', () => {
 
 	test('garbage yields nothing', () => {
 		assert.deepStrictEqual(parseDiagnostics('hello\n\nworld'), []);
+	});
+});
+
+suite('workspaceAnchor', () => {
+	const inWs = (f: string) => f.startsWith('/workspace/');
+	const note = (file: string, line: number) => ({ file, line, severity: 'note' as const, message: 'in instantiation of x requested here', notes: [] });
+
+	test('a diagnostic in the workspace is its own anchor', () => {
+		const d = { file: '/workspace/a.cpp', line: 3, severity: 'error' as const, message: 'm', notes: [note('/workspace/b.cpp', 9)] };
+		assert.strictEqual(workspaceAnchor(d, inWs), d);
+	});
+
+	test('an error inside a library header anchors at the last workspace note', () => {
+		const d = { file: '/sysroot/include/c++/v1/memory', line: 34, severity: 'error' as const, message: 'm',
+			notes: [note('/sysroot/include/c++/v1/vector', 10), note('/workspace/inner.hpp', 20), note('/workspace/main.cpp', 7)] };
+		assert.strictEqual(workspaceAnchor(d, inWs)?.file, '/workspace/main.cpp');
+		assert.strictEqual(workspaceAnchor(d, inWs)?.line, 7);
+	});
+
+	test('nothing in the workspace means no anchor', () => {
+		const d = { file: '/sysroot/x.h', line: 1, severity: 'error' as const, message: 'm', notes: [note('/sysroot/y.h', 2)] };
+		assert.strictEqual(workspaceAnchor(d, inWs), undefined);
+		assert.strictEqual(workspaceAnchor({ severity: 'error', message: 'linker', notes: [] }, inWs), undefined);
 	});
 });

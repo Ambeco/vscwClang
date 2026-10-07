@@ -58,6 +58,22 @@ export function parseDiagnostics(text: string): ParsedDiagnostic[] {
 	return result;
 }
 
+/**
+ * Where to show `d` in the editor: its own location if that is in the workspace, else the last note that is.
+ *
+ * An error inside a library header (a failed `static_assert` in libc++, say) is followed by `note: in instantiation
+ * of ... requested here` lines that walk outwards to the user's code; the last one in the workspace is where
+ * the user's code triggered it.
+ */
+export function workspaceAnchor(d: ParsedDiagnostic, inWorkspace: (file: string) => boolean): ParsedDiagnostic | undefined {
+	if (d.file !== undefined && inWorkspace(d.file)) { return d; }
+	for (let i = d.notes.length - 1; i >= 0; i--) {
+		const note = d.notes[i];
+		if (note.file !== undefined && inWorkspace(note.file)) { return note; }
+	}
+	return undefined;
+}
+
 function splitFlag(message: string): { message: string; flag?: string } {
 	const m = FLAG_SUFFIX.exec(message);
 	return m ? { message: message.slice(0, m.index), flag: m[1] } : { message };

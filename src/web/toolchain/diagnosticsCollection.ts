@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { fromGuestPath } from './guestPaths';
-import type { ParsedDiagnostic } from './diagnostics';
+import { workspaceAnchor, type ParsedDiagnostic } from './diagnostics';
 
 const SEVERITY: Record<ParsedDiagnostic['severity'], vscode.DiagnosticSeverity> = {
 	error: vscode.DiagnosticSeverity.Error,
@@ -22,10 +22,11 @@ export function publishDiagnostics(collection: vscode.DiagnosticCollection, fold
 		return path === undefined ? undefined : folder.with({ path });
 	};
 	for (const p of parsed) {
-		const uri = resolve(p.file) ?? fallback;
-		const where = p.file !== undefined && uri === fallback ? `${p.file}:${p.line ?? 1}: ` : '';
-		const line = resolve(p.file) ? Math.max((p.line ?? 1) - 1, 0) : 0;
-		const column = resolve(p.file) ? Math.max((p.column ?? 1) - 1, 0) : 0;
+		const anchor = workspaceAnchor(p, f => resolve(f) !== undefined);
+		const uri = resolve(anchor?.file) ?? fallback;
+		const where = p.file !== undefined && anchor !== p ? `${p.file}:${p.line ?? 1}: ` : '';
+		const line = anchor ? Math.max((anchor.line ?? 1) - 1, 0) : 0;
+		const column = anchor ? Math.max((anchor.column ?? 1) - 1, 0) : 0;
 		const diag = new vscode.Diagnostic(new vscode.Range(line, column, line, column), where + p.message, SEVERITY[p.severity]);
 		diag.source = 'clang';
 		if (p.flag) { diag.code = p.flag; }
