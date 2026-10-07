@@ -60,21 +60,22 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 	const sources = request.sources.map(uri => ({ uri, guest: guest(uri, 'source file') }));
 	const output = guest(request.output, 'output file');
 
-	const toolchain = getToolchainStore(context, log);
-	await toolchain.ensure();
-	const wasm = await Wasm.load();
-	const [flags, sysroot] = await Promise.all([loadCompileFlags(toolchain), getSysroot(wasm, toolchain)]);
-	const sub = (f: string) => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource');
-	const run = (wasmFile: string, args: string[]) => runTool(wasm, toolchain, sysroot, wasmFile, args);
-
-	const userFlags = splitFlags(request.flags, GUEST_WORKSPACE);
-	const modeFlags = request.mode === 'debug' ? ['-O0', '-g'] : [];
 	let diagnostics = '';
 	let exitCode = 0;
 	const objects: string[] = [];
 	const objDir = vscode.Uri.joinPath(folder, '.vscwclang', 'obj');
+	// First write to the workspace, before any first-use download: a local folder on vscode.dev may need a browser
+	// permission prompt, which requires the user gesture that started the command and expires within seconds.
 	await vscode.workspace.fs.createDirectory(objDir);
 	try {
+		const toolchain = getToolchainStore(context, log);
+		await toolchain.ensure();
+		const wasm = await Wasm.load();
+		const [flags, sysroot] = await Promise.all([loadCompileFlags(toolchain), getSysroot(wasm, toolchain)]);
+		const sub = (f: string) => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource');
+		const run = (wasmFile: string, args: string[]) => runTool(wasm, toolchain, sysroot, wasmFile, args);
+		const userFlags = splitFlags(request.flags, GUEST_WORKSPACE);
+		const modeFlags = request.mode === 'debug' ? ['-O0', '-g'] : [];
 		for (const [i, source] of sources.entries()) {
 			const base = source.guest.slice(source.guest.lastIndexOf('/') + 1);
 			const object = `${GUEST_WORKSPACE}/.vscwclang/obj/${i}-${base}.o`;
