@@ -29,7 +29,7 @@ export async function buildWorkspace(context: vscode.ExtensionContext, log: vsco
 	// findFiles' exclude glob is not honored on every virtual file system (seen under test-web), so filter ourselves.
 	const sources = [...found.values()].filter(uri => !isExcludedSource(uri.path.slice(folder.path.length), excluded));
 	log.appendLine(`[vscwclang] ${sources.length} source file(s) found (skipping directories named: ${excluded.join(', ')})`);
-	const result = await build({ sources, output, flags: options.flags ?? [], mode: options.mode ?? 'release' }, log, context);
+	const result = await build({ sources, output, flags: options.flags ?? settings.get<string[]>('flags', []), mode: options.mode ?? 'release' }, log, context);
 	log.appendLine(result.diagnostics);
 	return { folder, output, result };
 }

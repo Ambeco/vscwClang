@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { Wasm } from '@vscode/wasm-wasi';
+import { Wasm, type MemoryFileSystem } from '@vscode/wasm-wasi';
 import { parseDiagnostics, withFailureFallback, type ParsedDiagnostic } from './diagnostics';
 import { checkUserFlags, splitFlags } from './flagPolicy';
 import { GUEST_WORKSPACE, toGuestPath } from './guestPaths';
@@ -32,9 +32,10 @@ const SLICE = 'wasm32-wasip1';
  *
  * Runs on `wasm-wasi-core`, one single-threaded process at a time (V1, see documents/design.md). Every
  * source is compiled even after an earlier one fails, so all diagnostics are reported; linking is skipped
- * when any compile fails. Objects go in a temporary `.vscwclang/obj` workspace folder (memory-FS mounts are
- * read-only to the guest, so `/tmp` is not an option), deleted when the build ends. Diagnostics carry
- * guest paths (`/workspace/...`); use `guestPaths.fromGuestPath` to map them back.
+ * when any compile fails. clang writes each object to stdout (`-o -`), the host stores it in an in-memory file
+ * system, and wasm-ld reads it from there (mounted read-only at `/obj`), so nothing but the final output is
+ * written to the workspace. Diagnostics carry guest paths (`/workspace/...`); use `guestPaths.fromGuestPath`
+ * to map them back; linker messages name objects as `/obj/<n>-<file>.o`.
  *
  * Throws (rather than returning a nonzero result) for problems with the request itself.
  */
@@ -62,65 +63,46 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 
 	let diagnostics = '';
 	let exitCode = 0;
-	const objects: string[] = [];
-	const objDir = vscode.Uri.joinPath(folder, '.vscwclang', 'obj');
 	// First write to the workspace, before any first-use download: a local folder on vscode.dev may need a browser
 	// permission prompt, which requires the user gesture that started the command and expires within seconds.
-	await vscode.workspace.fs.createDirectory(objDir);
-	try {
-		const toolchain = getToolchainStore(context, log);
-		await toolchain.ensure();
-		const wasm = await Wasm.load();
-		const [flags, sysroot] = await Promise.all([loadCompileFlags(toolchain), getSysroot(wasm, toolchain)]);
-		const sub = (f: string) => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource');
-		const run = (wasmFile: string, args: string[]) => runTool(wasm, toolchain, sysroot, wasmFile, args);
-		const userFlags = splitFlags(request.flags, GUEST_WORKSPACE);
-		const modeFlags = request.mode === 'debug' ? ['-O0', '-g'] : [];
-		for (const [i, source] of sources.entries()) {
-			const base = source.guest.slice(source.guest.lastIndexOf('/') + 1);
-			const object = `${GUEST_WORKSPACE}/.vscwclang/obj/${i}-${base}.o`;
-			const driver = base.endsWith('.c') ? 'clang' : 'clang++';
-			log.appendLine(`[vscwclang] compiling ${source.guest}`);
-			const started = Date.now();
-			const cc = await run('clang.wasm', [driver, ...flags.compile[SLICE].map(sub), '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics',
-				...modeFlags, ...userFlags.compile, '-c', source.guest, '-o', object]);
-			log.appendLine(`[vscwclang] compiled ${source.guest} in ${Date.now() - started} ms (exit ${cc.exitCode})`);
-			diagnostics += cc.stderr;
-			objects.push(object);
-			if (cc.exitCode !== 0 && exitCode === 0) { exitCode = cc.exitCode; }
+	await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(request.output, '..'));
+	const toolchain = getToolchainStore(context, log);
+	await toolchain.ensure();
+	const wasm = await Wasm.load();
+	const [flags, sysroot] = await Promise.all([loadCompileFlags(toolchain), getSysroot(wasm, toolchain)]);
+	const sub = (f: string) => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource');
+	const objects = await wasm.createMemoryFileSystem();
+	const run = (wasmFile: string, args: string[], extra?: ToolExtras) => runTool(wasm, toolchain, sysroot, wasmFile, args, extra);
+	const userFlags = splitFlags(request.flags, GUEST_WORKSPACE);
+	const modeFlags = request.mode === 'debug' ? ['-O0', '-g'] : [];
+	const objectPaths: string[] = [];
+	for (const [i, source] of sources.entries()) {
+		const base = source.guest.slice(source.guest.lastIndexOf('/') + 1);
+		const objectName = `${i}-${base}.o`;
+		const driver = base.endsWith('.c') ? 'clang' : 'clang++';
+		log.appendLine(`[vscwclang] compiling ${source.guest}`);
+		const started = Date.now();
+		const cc = await run('clang.wasm', [driver, ...flags.compile[SLICE].map(sub), '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics',
+			...modeFlags, ...userFlags.compile, '-c', source.guest, '-o', '-'], { captureStdout: true });
+		log.appendLine(`[vscwclang] compiled ${source.guest} in ${Date.now() - started} ms (exit ${cc.exitCode})`);
+		diagnostics += cc.stderr;
+		if (cc.exitCode === 0) {
+			objects.createFile(objectName, cc.stdout);
+			objectPaths.push(`/obj/${objectName}`);
+		} else if (exitCode === 0) {
+			exitCode = cc.exitCode;
 		}
-		if (exitCode === 0) {
-			log.appendLine(`[vscwclang] linking ${output}`);
-			const link = flags.link[SLICE].map(sub);
-			const linkStarted = Date.now();
-			const ld = await run('lld.wasm', ['wasm-ld', link[0], ...objects, ...userFlags.link, ...link.slice(1), '-o', output]);
-			log.appendLine(`[vscwclang] linked in ${Date.now() - linkStarted} ms (exit ${ld.exitCode})`);
-			diagnostics += ld.stderr;
-			exitCode = ld.exitCode;
-		}
-	} finally {
-		await removeScratchDir(vscode.Uri.joinPath(folder, '.vscwclang'), log);
+	}
+	if (exitCode === 0) {
+		log.appendLine(`[vscwclang] linking ${output}`);
+		const link = flags.link[SLICE].map(sub);
+		const linkStarted = Date.now();
+		const ld = await run('lld.wasm', ['wasm-ld', link[0], ...objectPaths, ...userFlags.link, ...link.slice(1), '-o', output], { objects });
+		log.appendLine(`[vscwclang] linked in ${Date.now() - linkStarted} ms (exit ${ld.exitCode})`);
+		diagnostics += ld.stderr;
+		exitCode = ld.exitCode;
 	}
 	return { exitCode, diagnostics, parsed: withFailureFallback(parseDiagnostics(diagnostics), exitCode, diagnostics) };
-}
-
-/**
- * Deletes the scratch folder, retrying because the browser (or a sync client such as Dropbox) can briefly hold a file open.
- * Never throws: a failed cleanup must not hide the build result.
- */
-async function removeScratchDir(dir: vscode.Uri, log: vscode.OutputChannel): Promise<void> {
-	for (let attempt = 1; attempt <= 4; attempt++) {
-		try {
-			await vscode.workspace.fs.delete(dir, { recursive: true, useTrash: false });
-			return;
-		} catch (e) {
-			if (attempt === 4) {
-				log.appendLine(`[vscwclang] warning: could not delete ${dir.path} (${(e as Error).message}). A file in it is probably still open (a sync client such as Dropbox?); it is safe to delete it yourself, and the next build reuses it.`);
-				return;
-			}
-			await new Promise(r => setTimeout(r, 500 * attempt));
-		}
-	}
 }
 
 // Caches survive across builds: unzipping the sysroot (~2 s) and compiling clang.wasm (~1 s) dominate small builds.
@@ -159,7 +141,14 @@ function toolTimeoutMs(): number {
 	return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : DEFAULT_TOOL_TIMEOUT_SECONDS * 1000;
 }
 
-async function runTool(wasm: Wasm, toolchain: ToolchainStore, sysroot: SysrootFs, wasmFile: string, args: string[]): Promise<{ exitCode: number; stderr: string }> {
+interface ToolExtras {
+	/** Keep stdout as bytes (clang `-o -`) instead of merging its text into the diagnostics. */
+	captureStdout?: boolean;
+	/** In-memory objects, mounted read-only at `/obj`. */
+	objects?: MemoryFileSystem;
+}
+
+async function runTool(wasm: Wasm, toolchain: ToolchainStore, sysroot: SysrootFs, wasmFile: string, args: string[], extra: ToolExtras = {}): Promise<{ exitCode: number; stderr: string; stdout: Uint8Array<ArrayBuffer> }> {
 	const module = await getModule(toolchain, wasmFile);
 	const process = await wasm.createProcess(args[0], module, {
 		args: args.slice(1),
@@ -168,13 +157,15 @@ async function runTool(wasm: Wasm, toolchain: ToolchainStore, sysroot: SysrootFs
 			{ kind: 'workspaceFolder' },
 			{ kind: 'memoryFileSystem', fileSystem: sysroot.sysroot, mountPoint: '/sysroot' },
 			{ kind: 'memoryFileSystem', fileSystem: sysroot.resource, mountPoint: '/resource' },
+			...(extra.objects ? [{ kind: 'memoryFileSystem' as const, fileSystem: extra.objects, mountPoint: '/obj' }] : []),
 		],
 	});
 	const errDecoder = new TextDecoder();
 	const outDecoder = new TextDecoder();
 	let stderr = '';
 	process.stderr?.onData(d => { stderr += errDecoder.decode(d, { stream: true }); });
-	process.stdout?.onData(d => { stderr += outDecoder.decode(d, { stream: true }); });
+	const stdoutChunks: Uint8Array[] = [];
+	process.stdout?.onData(d => { if (extra.captureStdout) { stdoutChunks.push(new Uint8Array(d)); } else { stderr += outDecoder.decode(d, { stream: true }); } });
 	// wasm-wasi-core's run() never settles if the tool traps (vscode-wasm#303); terminate() resolves it.
 	let timedOut = false;
 	const timeoutMs = toolTimeoutMs();
@@ -187,7 +178,9 @@ async function runTool(wasm: Wasm, toolchain: ToolchainStore, sysroot: SysrootFs
 	}
 	if (timedOut) {
 		return { exitCode: 1, stderr: `${stderr}${args[0]}: error: no result after ${timeoutMs / 1000}s, so it was stopped (it probably crashed inside WebAssembly, or the source is very large). Did you mean to raise 'vscwclang.toolTimeoutSeconds'?
-` };
+`, stdout: new Uint8Array(0) };
 	}
-	return { exitCode, stderr };
+	const stdout = new Uint8Array(stdoutChunks.reduce((n, c) => n + c.byteLength, 0));
+	stdoutChunks.reduce((off, c) => { stdout.set(c, off); return off + c.byteLength; }, 0);
+	return { exitCode, stderr, stdout };
 }

@@ -40,6 +40,16 @@
           "scope": "application",
           "markdownDescription": "Development override: directory URL serving a toolchain made by `scripts/make-toolchain-dist.mjs` (`manifest.json` plus chunks). When set, the manifest is trusted as served instead of being checked against the hash pinned in the extension. Leave empty to use the pinned toolchain. The host must send CORS and `Cross-Origin-Resource-Policy: cross-origin` headers."
         },
+        "vscwclang.flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "-I/workspace"
+          ],
+          "markdownDescription": "Extra flags for `vscwClang: Build` and `Build and Run`. `/workspace` is your workspace folder, so the default `-I/workspace` lets sources include headers relative to the project root (`#include \"utils/foo.hpp\"`). `-l`, `-L` and `-Wl,` flags go to the linker; restricted flags (`--target`, `-o`, ...) are rejected. A task's own `flags` replace these."
+        },
         "vscwclang.sourceGlobs": {
           "type": "array",
           "items": {

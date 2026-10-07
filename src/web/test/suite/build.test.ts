@@ -71,6 +71,31 @@ suite('vscwClang build (in browser)', function () {
 		assert.deepStrictEqual(await runWasm(output), { exitCode: 0, stdout: 'hello 42\n' });
 	});
 
+	test('objects stay in memory: no scratch folder is written to the workspace', async () => {
+		await write('quiet.cpp', 'int main() { return 0; }' + String.fromCharCode(10));
+		const result = await build({ sources: [uri('quiet.cpp')], output: uri('quiet.wasm'), flags: [], mode: 'release' }, log, context);
+		assert.strictEqual(result.exitCode, 0, result.diagnostics);
+		const entries = (await vscode.workspace.fs.readDirectory(dir)).map(([name]) => name);
+		assert.ok(entries.includes('quiet.wasm'), entries.join(', '));
+		assert.ok(!entries.includes('.vscwclang'), `unexpected scratch folder in ${entries.join(', ')}`);
+		const top = (await vscode.workspace.fs.readDirectory(vscode.Uri.joinPath(dir, '..'))).map(([name]) => name);
+		assert.ok(!top.includes('.vscwclang'), top.join(', '));
+	});
+
+	test('-I<project root> lets sources include headers relative to the project', async () => {
+		const nl = String.fromCharCode(10);
+		await vscode.workspace.fs.createDirectory(uri('lib/sub'));
+		await vscode.workspace.fs.createDirectory(uri('app'));
+		await write('lib/sub/value.hpp', '#pragma once' + nl + 'inline int value() { return 7; }' + nl);
+		await write('app/rooted.cpp', '#include "lib/sub/value.hpp"' + nl + 'int main() { return value() - 7; }' + nl);
+		const failing = await build({ sources: [uri('app/rooted.cpp')], output: uri('rooted.wasm'), flags: [], mode: 'release' }, log, context);
+		assert.notStrictEqual(failing.exitCode, 0);
+		assert.match(failing.diagnostics, /lib\/sub\/value\.hpp' file not found/);
+		const ok = await build({ sources: [uri('app/rooted.cpp')], output: uri('rooted.wasm'), flags: ['-I/workspace/build-test'], mode: 'release' }, log, context);
+		assert.strictEqual(ok.exitCode, 0, ok.diagnostics);
+		assert.strictEqual((await runWasm(uri('rooted.wasm'))).exitCode, 0);
+	});
+
 	test('link flags reach wasm-ld, compile flags reach clang', async function () {
 		this.timeout(30_000);
 		await write('flags.cpp', FLAGS_SOURCE);
