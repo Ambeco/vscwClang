@@ -26,7 +26,20 @@ V1 uses `wasm-wasi-core` (a separate VS Code extension; it requires `SharedArray
 ## Flags, run and tasks
 `request.flags` is one list; `splitFlags` (flagPolicy.ts) routes `-l`, `-L` (relative dirs resolved under `/workspace`) and `-Wl,a,b` (split into separate args) to wasm-ld, everything else to `clang -c`. `vscwclang.run` (`runProgram.ts`) builds, then runs the .wasm under `wasm-wasi-core` with `createPseudoterminal()` as stdin/stdout/stderr: stdin is the terminal's line mode (echo, line editing, one line per Enter, no EOF key); Ctrl+C or closing the terminal terminates the process. `tasks.ts` provides `vscwclang` build tasks as `CustomExecution` that print clang's text; the `$vscwclang` matcher turns `/workspace/<file>:l:c: error|warning:` lines into Problems (notes and linker lines are not matched).
 
+## Project model and integration
+Goal: a desktop VS Code project that builds with clang should build, run and debug the same here. `toolchain.build(request)` (sources, flags, output, mode) stays the only boundary to the compiler; a "project model" step in front of it turns what the workspace already contains into that request. This extension owns the clang-compatible inputs desktop VS Code uses: `tasks.json` (`cppbuild`/shell tasks that call `g++`/`clang++`, mapped through `flagPolicy`) and `launch.json` (`program`, `args`). Solution and project files (`.sln`, `.vcxproj`) are out of scope because they almost always target non-clang compilers and flags.
+
+Other build systems (Make, CMake, Bazel, Meson) belong in separate extensions, which cannot run `make`/`cmake` as native processes on the web anyway. They integrate through `compile_commands.json`, the neutral compilation-database format (`directory`, `command` or `arguments`, `file` per translation unit) already read by clangd and cpptools: this extension reads it as one more source of build plans, so any tool that emits it works with no code dependency. A versioned exported API (like the Git extension's `getAPI(1)`) and a command accepting a plain-data build request are the tighter options if needed later; the `vscwclang` task type is already a declarative form of the same request.
+
 ## Alternatives considered
+### Parse Visual Studio solution and project files
+- Pros: opens existing Windows projects directly.
+- Cons: they target MSVC (`/std:`, `/W4`, Windows APIs, 64-bit assumptions), so almost none would compile with clang for wasm32 anyway; a large parser for little gain.
+
+### Make a dedicated build-system extension call this one through a hard dependency
+- Pros: simplest for the other extension; typed calls.
+- Cons: couples release cycles; every build tool must know this extension. A shared file format (`compile_commands.json`) needs no coupling and also serves clangd.
+
 ### Ship the toolchain in Marketplace tooling extensions
 - Pros: Marketplace signing and versioning; files served by the workbench with no CORS concerns.
 - Cons: Marketplace per-vsix and per-file size caps are undocumented (reported 20-25 MB; clang alone is 24 MB gzipped), so it could need ~7 extensions kept in version lockstep; needs a publisher account per extension set; programmatic install on vscode.dev is unverified.

@@ -32,6 +32,11 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 - Settings: toolchain version/URL, default `-std`, extra flags, threads on/off.
 - Optional: run in a separate browser tab for OS-level sandboxing (open questions in the llvm-project fork's `remaining_work.md`).
 
+## Project model (see design.md "Project model and integration")
+- Map `tasks.json` `cppbuild`/shell tasks calling `g++`/`clang++`/`clang` onto `build()` requests (sources, `-I`/`-D`/`-std`/`-O`, `-o`, link flags through `splitFlags`/`flagPolicy`, with did-you-mean for what cannot be mapped), and use `launch.json` `program`/`args` for Run and Debug. Decide how it coexists with the `vscwclang` task type and the `vscwclang.flags`/`sourceGlobs` settings.
+- Read `compile_commands.json` (and `compile_flags.txt`) as a build-plan source: per-file flags, include paths and defines, with the same flag policy; decide how to pick one program out of many translation units (a target selector).
+- Optional: a versioned exported API / command taking a plain-data build request, for build-system extensions that want to call in directly. Out of scope for this repo: a Make/CMake reader extension (needs a wasm `make`; a smaller GNU-make-subset flavor is one way to get one).
+
 ## Milestone 3: language support (optional, high value)
 - Basic C++ editing UX (snippets, file associations).
 - V3 idea: clangd (completion, go-to-definition, hover, diagnostics as you type) running as wasm behind a language client. Viability is unknown: first check whether the llvm-project fork's artifacts can build `clangd.wasm` (single-thread, no process spawning, reading the sysroot memory FS and workspace files), how large it is, and how it would be hosted (the V1 `wasm-wasi-core` host or the V2 Worker host).
