@@ -32,7 +32,7 @@ This is an early release.
 - **32-bit target.** WebAssembly here is `wasm32`: pointers, `size_t` and `uintptr_t` are 32 bits. Code that assumes 64-bit pointers (size assertions, pointer-tagging) needs changes.
 - **No Windows APIs.** `windows.h`, `winsock2.h` and MSVC-only functions such as `_stricmp` and `strcpy_s` are not available.
 - **Terminal input has no end-of-file key.** A program that reads until EOF waits until you press Ctrl+C.
-- **A crashing program can hang its terminal** instead of reporting the crash. Ctrl+C stops it.
+- **Crashes.** A failed `assert`, `abort()` or `std::terminate` ends the program with `exited with code 134 (aborted)`. Other crashes (out-of-bounds memory access, division by zero, stack overflow) leave the terminal waiting with no message until you press Ctrl+C, because the WebAssembly runtime doesn't report them.
 - **No debugger yet.** Breakpoints and stepping are planned but not implemented.
 - **No code completion or IntelliSense.** This extension builds and runs code; it doesn't provide language features.
 

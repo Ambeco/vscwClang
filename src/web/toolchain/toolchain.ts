@@ -76,6 +76,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 	const userFlags = splitFlags(request.flags, GUEST_WORKSPACE);
 	const modeFlags = request.mode === 'debug' ? ['-O0', '-g'] : [];
 	const objectPaths: string[] = [];
+	const abortShim = await addAbortShim(objects, (args, extra) => run('clang.wasm', args, extra), flags.compile[SLICE].map(sub), log);
 	for (const [i, source] of sources.entries()) {
 		const base = source.guest.slice(source.guest.lastIndexOf('/') + 1);
 		const objectName = `${i}-${base}.o`;
@@ -97,12 +98,49 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 		log.appendLine(`[vscwclang] linking ${output}`);
 		const link = flags.link[SLICE].map(sub);
 		const linkStarted = Date.now();
-		const ld = await run('lld.wasm', ['wasm-ld', link[0], ...objectPaths, ...userFlags.link, ...link.slice(1), '-o', output], { objects });
+		const ld = await run('lld.wasm', ['wasm-ld', link[0], ...objectPaths, ...(abortShim ? [abortShim] : []), ...userFlags.link, ...link.slice(1), '-o', output], { objects });
 		log.appendLine(`[vscwclang] linked in ${Date.now() - linkStarted} ms (exit ${ld.exitCode})`);
 		diagnostics += ld.stderr;
 		exitCode = ld.exitCode;
 	}
 	return { exitCode, diagnostics, parsed: withFailureFallback(parseDiagnostics(diagnostics), exitCode, diagnostics) };
+}
+
+const NL = String.fromCharCode(10);
+
+/**
+ * Source of a weak `abort()` that exits with code 134 instead of trapping.
+ *
+ * wasm-wasi-core never settles `run()` when a program traps (vscode-wasm#303), and wasi-libc's `abort()`, so
+ * `assert`, `std::terminate` and `abort` itself, is a trap. Weak, so a program's own `abort` still wins, and
+ * linked ahead of libc so libc's copy is never pulled in. Direct traps (out-of-bounds, `__builtin_trap`) are not covered.
+ */
+export const ABORT_SHIM_SOURCE = [
+	'#include <stdio.h>',
+	'#include <wasi/api.h>',
+	'__attribute__((weak, noreturn)) void abort(void) {',
+	'\tfputs("abort() called", stderr);',
+	'\tfputc(10, stderr);',
+	'\t__wasi_proc_exit(134);',
+	'}',
+	'',
+].join(NL);
+
+let abortShimObject: Uint8Array<ArrayBuffer> | undefined;
+
+/** Puts the compiled abort shim in `objects` and returns its guest path; undefined (build goes on) if it cannot be compiled. */
+async function addAbortShim(objects: MemoryFileSystem, clang: (args: string[], extra: ToolExtras) => Promise<{ exitCode: number; stderr: string; stdout: Uint8Array<ArrayBuffer> }>, compileFlags: string[], log: vscode.OutputChannel): Promise<string | undefined> {
+	if (!abortShimObject) {
+		objects.createFile('vscwclang-abort.c', new TextEncoder().encode(ABORT_SHIM_SOURCE));
+		const cc = await clang(['clang', ...compileFlags, '-fno-color-diagnostics', '-fno-caret-diagnostics', '-c', '/obj/vscwclang-abort.c', '-o', '-'], { captureStdout: true, objects });
+		if (cc.exitCode !== 0) {
+			log.appendLine(`[vscwclang] warning: could not build the abort() helper (exit ${cc.exitCode}); a failed assert will leave the program hanging until Ctrl+C. ${cc.stderr.trim()}`);
+			return undefined;
+		}
+		abortShimObject = cc.stdout;
+	}
+	objects.createFile('vscwclang-abort.o', abortShimObject);
+	return '/obj/vscwclang-abort.o';
 }
 
 // Caches survive across builds: unzipping the sysroot (~2 s) and compiling clang.wasm (~1 s) dominate small builds.

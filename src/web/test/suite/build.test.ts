@@ -96,6 +96,25 @@ suite('vscwClang build (in browser)', function () {
 		assert.strictEqual((await runWasm(uri('rooted.wasm'))).exitCode, 0);
 	});
 
+	test('a failed assert exits with 134 instead of trapping (which would hang run())', async () => {
+		const nl = String.fromCharCode(10);
+		await write('aborting.cpp', ['#include <cassert>', '#include <cstdio>', 'int main(int argc, char**) { std::puts("before"); assert(argc == 99); std::puts("after"); return 0; }', ''].join(nl));
+		const built = await build({ sources: [uri('aborting.cpp')], output: uri('aborting.wasm'), flags: [], mode: 'release' }, log, context);
+		assert.strictEqual(built.exitCode, 0, built.diagnostics);
+		const ran = await runWasm(uri('aborting.wasm'));
+		assert.strictEqual(ran.exitCode, 134);
+		assert.match(ran.stdout, /before/);
+		assert.doesNotMatch(ran.stdout, /after/);
+	});
+
+	test('a program that defines its own abort() keeps it', async () => {
+		const nl = String.fromCharCode(10);
+		await write('ownabort.cpp', ['#include <cstdlib>', '#include <wasi/api.h>', 'extern "C" void abort() { __wasi_proc_exit(7); }', 'int main() { std::abort(); }', ''].join(nl));
+		const built = await build({ sources: [uri('ownabort.cpp')], output: uri('ownabort.wasm'), flags: [], mode: 'release' }, log, context);
+		assert.strictEqual(built.exitCode, 0, built.diagnostics);
+		assert.strictEqual((await runWasm(uri('ownabort.wasm'))).exitCode, 7);
+	});
+
 	test('link flags reach wasm-ld, compile flags reach clang', async function () {
 		this.timeout(30_000);
 		await write('flags.cpp', FLAGS_SOURCE);
