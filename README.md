@@ -36,6 +36,10 @@ This is an early release.
 - **No debugger yet.** Breakpoints and stepping are planned but not implemented.
 - **No code completion or IntelliSense.** This extension builds and runs code; it doesn't provide language features.
 
+## What your program can see
+
+Programs run in a sandbox: they can read and write files in your workspace folder, use stdin and stdout, read the clock and random numbers. There is no network, no other programs (`system()` and `popen` don't work, `fork` doesn't exist), no `/tmp` and no environment variables such as `HOME` yet. `mmap` of a file can read it, but writes through a shared mapping are not saved.
+
 ## Licenses
 
 vscwClang is under the Apache License v2.0 with LLVM Exceptions, the same license as Clang. See `LICENSE` and `THIRD_PARTY_NOTICES.md`. The downloaded toolchain is built from the LLVM Project and the wasi-libc and libc++ libraries.

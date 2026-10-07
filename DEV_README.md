@@ -6,7 +6,7 @@ vscwClang is a VS Code for Web extension that compiles, runs and debugs C++ in t
 
 ## 1. Project idea and reason
 
-Let people write and debug real C/C++ in vscode.dev / github.dev with nothing installed. The toolchain comes from the wasm-wasi LLVM fork (`llvm-project`); this repo is the extension that hosts it. Output is WebAssembly only.
+Let people write and debug real C/C++ in vscode.dev / github.dev with nothing installed, on machines where installing a compiler is impossible or unwanted (Chromebooks, locked-down school or work machines, tablets, a quick change to a repo without a cloud VM). Scope is deliberately narrow: see `documents/design.md` "Scope" before adding features. The toolchain comes from the wasm-wasi LLVM fork (`llvm-project`); this repo is the extension that hosts it. Output is WebAssembly only.
 
 ## 2. How to use this project
 

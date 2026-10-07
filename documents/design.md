@@ -26,12 +26,27 @@ V1 uses `wasm-wasi-core` (a separate VS Code extension; it requires `SharedArray
 ## Flags, run and tasks
 `request.flags` is one list; `splitFlags` (flagPolicy.ts) routes `-l`, `-L` (relative dirs resolved under `/workspace`) and `-Wl,a,b` (split into separate args) to wasm-ld, everything else to `clang -c`. `vscwclang.run` (`runProgram.ts`) builds, then runs the .wasm under `wasm-wasi-core` with `createPseudoterminal()` as stdin/stdout/stderr: stdin is the terminal's line mode (echo, line editing, one line per Enter, no EOF key); Ctrl+C or closing the terminal terminates the process. `tasks.ts` provides `vscwclang` build tasks as `CustomExecution` that print clang's text; the `$vscwclang` matcher turns `/workspace/<file>:l:c: error|warning:` lines into Problems (notes and linker lines are not matched).
 
+## Scope
+North star: compile, run and debug self-contained C/C++ programs (and a library's tests) in a browser tab with nothing installed, on machines where installing a compiler is impossible or unwanted (Chromebooks, locked-down school or work machines, tablets, `github.dev`/`vscode.dev` on a repo with no cloud VM). Non-goals: a POSIX userland (shell, coreutils), networking, GUI and native-library linking, MSVC project formats, replacing desktop toolchains. Before adding a feature, check it serves the north star; most "it would be cool if programs could ..." ideas below it belong in a later, separate project.
+
+## Run environment
+User programs run under `wasm-wasi-core` (WASI preview 1). A program sees only what is mounted: the workspace at `/workspace`; there is no `/tmp`, `/etc`, `/home` or `/dev`. The environment is empty unless given (so `getenv("HOME")` is null), and there is no cwd beyond the mounts. Sockets are stubbed (`sock_*` return not-implemented; preview 1 has no `connect`), and there are no processes or signals. Mount kinds available: workspace folder, any VS Code file system (writable), extension files, and an in-memory file system (read-only to the guest). Planned defaults: `HOME=/home/user`, `TMPDIR=/tmp`, `USER`, `LANG`, extendable by `vscwclang.run.env`, and writable `/tmp` and `/home/user` mounts backed by extension storage.
+
+Library-level behavior (wasi-libc, verified by building and running under Node WASI): `fork` and `popen` are undeclared, so using them is a compile error; `system()` is declared but undefined, so it is a link error (`undefined symbol: system`); `msync` is a link error; `mmap` needs `-D_WASI_EMULATED_MMAN` and `-lwasi-emulated-mman` and only emulates reading (file contents are copied into memory): a write through a `MAP_SHARED` mapping is silently NOT written back to the file. `fopen("/tmp/...")` fails. A failed `assert`, `abort()` or `std::terminate` exits 134 through a weak `abort()` helper linked into every program, since a trap would hang `run()`.
+
+## Build artifacts
+Objects live in memory only. The linked `.wasm` and logs go where the user can reach them. For local, writable folders: inside the folder (under `.vscwclang/<mode>/`, so debug and release builds from two tabs or two synced devices do not collide); this also lets a synced folder share them across devices. For read-only or virtual folders (`vscode-vfs://` repos, where a written file would also show up as a pending change in Source Control) they go in extension storage instead, which lets read-only repositories build and run. A setting overrides either default. Caches shared between devices must be content-addressed (hash of source, flags and toolchain) so concurrent writers cannot clash.
+
 ## Project model and integration
 Goal: a desktop VS Code project that builds with clang should build, run and debug the same here. `toolchain.build(request)` (sources, flags, output, mode) stays the only boundary to the compiler; a "project model" step in front of it turns what the workspace already contains into that request. This extension owns the clang-compatible inputs desktop VS Code uses: `tasks.json` (`cppbuild`/shell tasks that call `g++`/`clang++`, mapped through `flagPolicy`) and `launch.json` (`program`, `args`). Solution and project files (`.sln`, `.vcxproj`) are out of scope because they almost always target non-clang compilers and flags.
 
 Other build systems (Make, CMake, Bazel, Meson) belong in separate extensions, which cannot run `make`/`cmake` as native processes on the web anyway. They integrate through `compile_commands.json`, the neutral compilation-database format (`directory`, `command` or `arguments`, `file` per translation unit) already read by clangd and cpptools: this extension reads it as one more source of build plans, so any tool that emits it works with no code dependency. A versioned exported API (like the Git extension's `getAPI(1)`) and a command accepting a plain-data build request are the tighter options if needed later; the `vscwclang` task type is already a declarative form of the same request.
 
 ## Alternatives considered
+### Write build artifacts only to extension storage
+- Pros: never touches the user's folder; works for read-only repositories.
+- Cons: the user cannot reach the binary or logs, and nothing is shared across devices; used only for read-only or virtual folders.
+
 ### Parse Visual Studio solution and project files
 - Pros: opens existing Windows projects directly.
 - Cons: they target MSVC (`/std:`, `/W4`, Windows APIs, 64-bit assumptions), so almost none would compile with clang for wasm32 anyway; a large parser for little gain.
