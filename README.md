@@ -1,25 +1,42 @@
 # vscwClang
 
-vscwClang is a VS Code for Web extension that compiles, runs and debugs C++ in the browser using WebAssembly builds of Clang, LLD and LLDB.
+C and C++ in Visual Studio Code for Web: compile and run with Clang, entirely in your browser, with nothing installed.
 
-## 1. Project idea and reason
+vscwClang runs WebAssembly builds of Clang and LLD inside the extension, so on vscode.dev or github.dev you can build and run C/C++ code with no local compiler, no remote machine and no server. Everything happens in your browser tab; your code never leaves it.
 
-Let people write and debug real C/C++ in vscode.dev / github.dev with nothing installed. The toolchain comes from the wasm-wasi LLVM fork (`llvm-project`); this repo is the extension that hosts it. Output is WebAssembly only.
+> **Unofficial.** vscwClang is an independent project. It is not affiliated with or endorsed by the LLVM Project, the LLVM Foundation, or Microsoft.
 
-## 2. How to use this project
+## What it does
 
-- `npm install`, then `npm run compile-web` (type-check, lint, bundle).
-- `npm run run-in-browser` opens the extension in a local VS Code for Web.
-- Status: `vscwclang.build` compiles and links a multi-file C/C++ workspace to `a.out.wasm` in the browser and publishes parsed diagnostics to Problems; `vscwclang.run` builds and runs it in a terminal with interactive stdin; a `vscwclang` task type and `$vscwclang` problem matcher exist (the toolchain is downloaded on first use from jsDelivr (`Ambeco/llvm-artifacts`, pinned by hash) and cached; `vscwclang.toolchainUrl` overrides the host for development). `npm run test-node` runs the pure-logic tests; `npm test` runs the in-browser tests (Chromium, needs `llvm-artifacts/`). Debug is not implemented yet.
+- **Build** (`vscwClang: Build C++`): compiles every `.c`, `.cc`, `.cpp` and `.cxx` file in your workspace and links them into `a.out.wasm`. Errors and warnings appear in the Problems panel at the right file, line and column.
+- **Build and Run** (`vscwClang: Build and Run C++`): builds, then runs the program in a VS Code terminal. The terminal supports line-by-line input, so programs can read from `std::cin` or `stdin`.
+- **Tasks**: a `vscwclang` task type with a matching problem matcher, so builds can run from `tasks.json` with `sources`, `flags`, `mode` (`debug` or `release`) and `output` settings.
 
-## 3. Design overview
+Open the Command Palette (`F1`) and type `vscwClang` to find the commands. You need a folder open in the workspace.
 
-See `documents/design.md`.
+## First use
 
-## 4. Remaining work
+The first build downloads the compiler and the C++ standard library (about 98 MB, from a CDN) and caches them in the extension's storage. After that it works offline. The first build in a session also takes several seconds while the compiler loads.
 
-See `documents/remaining_work.md`. Briefly: toolchain host and in-browser compile, tasks/run, debug-build instrumentation, lldb reactor integration, full DAP.
+The extension requires the [WebAssembly Execution Engine](https://marketplace.visualstudio.com/items?itemName=ms-vscode.wasm-wasi-core) extension, which VS Code installs automatically.
 
-## 5. Credits
+## Limitations
 
-Designed and overseen by [Ambeco](https://github.com/Ambeco), and coded mostly by Claude (or similar).
+This is an early release.
+
+- **WebAssembly only.** Programs are built for `wasm32-wasip1` (WASI) and run in the browser. They can use the C and C++ standard libraries, but not operating-system APIs such as sockets, processes or graphics, and not native libraries.
+- **Restricted compiler flags.** Flags that would break the sandbox are rejected with a suggestion, for example `--target`, `-march`, `-o`, `-c`, `-fplugin`, `-fuse-ld`, `--sysroot`, `-B`, and include or library paths outside your workspace. `-I`, `-D`, `-std`, `-O`, `-W...`, `-l`, `-L` and `-Wl,...` work. `--no-gc-sections` is rejected too, because it makes programs hang in the current runtime.
+- **No threads yet.** Programs are single-threaded, and the compiler runs one file at a time.
+- **No C++ exceptions.** Code is compiled with `-fno-exceptions`.
+- **Terminal input has no end-of-file key.** A program that reads until EOF waits until you press Ctrl+C.
+- **A crashing program can hang its terminal** instead of reporting the crash. Ctrl+C stops it.
+- **No debugger yet.** Breakpoints and stepping are planned but not implemented.
+- **No code completion or IntelliSense.** This extension builds and runs code; it doesn't provide language features.
+
+## Licenses
+
+vscwClang is under the Apache License v2.0 with LLVM Exceptions, the same license as Clang. See `LICENSE` and `THIRD_PARTY_NOTICES.md`. The downloaded toolchain is built from the LLVM Project and the wasi-libc and libc++ libraries.
+
+## For contributors
+
+Build instructions, design notes and the remaining work are in [DEV_README.md](https://github.com/Ambeco/vscwClang/blob/main/DEV_README.md).
