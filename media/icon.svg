@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <rect width="128" height="128" rx="22" fill="#1e2530"/>
+  <path d="M64 14 L117 108 H11 Z" fill="#2f6fb3" stroke="#6aa6e0" stroke-width="5" stroke-linejoin="round"/>
+  <text x="64" y="68" text-anchor="middle" font-family="Consolas, 'Courier New', monospace" font-weight="700" font-size="23" fill="#ffffff">C++</text>
+  <circle cx="64" cy="88" r="15" fill="#f6c343"/>
+  <ellipse cx="77" cy="92" rx="10" ry="5" fill="#f08a24"/>
+  <circle cx="69" cy="84" r="2.3" fill="#1e2530"/>
+</svg>

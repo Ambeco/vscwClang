@@ -4,6 +4,7 @@
   "description": "vscwClang contains Clang and Lldb as webasm binaries, allowing VSC for Web to compile and debug C++ code entirely in the browser.",
   "version": "0.0.1",
   "publisher": "tavisbohne",
+  "icon": "media/icon.png",
   "license": "Apache-2.0 WITH LLVM-exception",
   "repository": {
     "type": "git",
