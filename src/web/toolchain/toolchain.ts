@@ -81,8 +81,10 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 			const object = `${GUEST_WORKSPACE}/.vscwclang/obj/${i}-${base}.o`;
 			const driver = base.endsWith('.c') ? 'clang' : 'clang++';
 			log.appendLine(`[vscwclang] compiling ${source.guest}`);
+			const started = Date.now();
 			const cc = await run('clang.wasm', [driver, ...flags.compile[SLICE].map(sub), '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics',
 				...modeFlags, ...userFlags.compile, '-c', source.guest, '-o', object]);
+			log.appendLine(`[vscwclang] compiled ${source.guest} in ${Date.now() - started} ms (exit ${cc.exitCode})`);
 			diagnostics += cc.stderr;
 			objects.push(object);
 			if (cc.exitCode !== 0 && exitCode === 0) { exitCode = cc.exitCode; }
@@ -90,7 +92,9 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 		if (exitCode === 0) {
 			log.appendLine(`[vscwclang] linking ${output}`);
 			const link = flags.link[SLICE].map(sub);
+			const linkStarted = Date.now();
 			const ld = await run('lld.wasm', ['wasm-ld', link[0], ...objects, ...userFlags.link, ...link.slice(1), '-o', output]);
+			log.appendLine(`[vscwclang] linked in ${Date.now() - linkStarted} ms (exit ${ld.exitCode})`);
 			diagnostics += ld.stderr;
 			exitCode = ld.exitCode;
 		}
