@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { VscwClangDebugAdapter } from './debug/debugAdapter';
-import { buildWorkspace } from './buildWorkspace';
+import { buildWorkspace, type BuildOptions } from './buildWorkspace';
+import { chooseRun, defaultBuildOptions, trackActiveCppFile } from './projectConfig';
 import { runProgram } from './runProgram';
 import { joinArgs, splitArgs } from './toolchain/runEnvironment';
 import { registerTaskProvider } from './tasks';
@@ -11,17 +12,22 @@ import { getToolchainStore } from './toolchain/toolchain';
 export function activate(context: vscode.ExtensionContext) {
 	const log = vscode.window.createOutputChannel('vscwclang');
 	const diagnostics = vscode.languages.createDiagnosticCollection('vscwclang');
-	context.subscriptions.push(log, diagnostics);
+	context.subscriptions.push(log, diagnostics, trackActiveCppFile());
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscwclang.build', async () => {
-			const { folder, output, result } = await buildWorkspace(context, log);
+			const { folder, output, result } = await buildWorkspace(context, log, buildOptionsFor(log));
 			publishDiagnostics(diagnostics, folder, result.parsed, output);
 			reportBuild(log, output, result.exitCode);
 		}),
-		vscode.commands.registerCommand('vscwclang.run', () => buildAndRun(context, log, diagnostics, vscode.workspace.getConfiguration('vscwclang').get<string[]>('run.args', []))),
+		vscode.commands.registerCommand('vscwclang.run', async () => {
+			const run = await runPlan(context, log);
+			if (!run.cancelled) { await buildAndRun(context, log, diagnostics, run.args, run.build); }
+		}),
 		vscode.commands.registerCommand('vscwclang.runWithArgs', async () => {
-			const settingsArgs = joinArgs(vscode.workspace.getConfiguration('vscwclang').get<string[]>('run.args', []));
+			const run = await runPlan(context, log);
+			if (run.cancelled) { return; }
+			const settingsArgs = joinArgs(run.args);
 			const line = await vscode.window.showInputBox({
 				title: 'vscwClang: Run arguments',
 				prompt: 'Command-line arguments for the program (quotes group words; files are under /workspace, e.g. input.txt or /workspace/data/in.txt)',
@@ -30,7 +36,7 @@ export function activate(context: vscode.ExtensionContext) {
 			});
 			if (line === undefined) { return; }
 			await context.workspaceState.update(LAST_ARGS_KEY, line);
-			await buildAndRun(context, log, diagnostics, splitArgs(line));
+			await buildAndRun(context, log, diagnostics, splitArgs(line), run.build);
 		}),
 		vscode.commands.registerCommand('vscwclang.downloadToolchain', async () => {
 			await getToolchainStore(context, log).ensure();
@@ -53,8 +59,22 @@ export function activate(context: vscode.ExtensionContext) {
 
 const LAST_ARGS_KEY = 'vscwclang.lastRunArgs';
 
-async function buildAndRun(context: vscode.ExtensionContext, log: vscode.OutputChannel, diagnostics: vscode.DiagnosticCollection, args: string[]): Promise<void> {
-	const { folder, output, result } = await buildWorkspace(context, log);
+function buildOptionsFor(log: vscode.OutputChannel): BuildOptions | undefined {
+	const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
+	return folder && defaultBuildOptions(folder, log);
+}
+
+/** Arguments and build for Run: from `launch.json` and its build task if present, else the `vscwclang` settings. */
+async function runPlan(context: vscode.ExtensionContext, log: vscode.OutputChannel): Promise<{ cancelled: boolean; args: string[]; build?: BuildOptions }> {
+	const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
+	const settingsArgs = vscode.workspace.getConfiguration('vscwclang').get<string[]>('run.args', []);
+	if (!folder) { return { cancelled: false, args: settingsArgs }; }
+	const chosen = await chooseRun(context, folder, log);
+	return { cancelled: chosen.cancelled, args: chosen.launch?.args ?? settingsArgs, build: chosen.build };
+}
+
+async function buildAndRun(context: vscode.ExtensionContext, log: vscode.OutputChannel, diagnostics: vscode.DiagnosticCollection, args: string[], build?: BuildOptions): Promise<void> {
+	const { folder, output, result } = await buildWorkspace(context, log, build);
 	publishDiagnostics(diagnostics, folder, result.parsed, output);
 	if (reportBuild(log, output, result.exitCode)) { await runProgram(context, output, args); }
 }

@@ -4,6 +4,7 @@ import { Wasm } from '@vscode/wasm-wasi';
 import { build } from '../../toolchain/toolchain';
 import { chooseArtifactDir } from '../../buildWorkspace';
 import { runProgram } from '../../runProgram';
+import { createTaskProvider } from '../../tasks';
 import { ToolchainStore } from '../../toolchain/toolchainStore';
 
 // Needs a workspace folder, --coi and ms-vscode.wasm-wasi-core (see the `test` script in package.json).
@@ -252,6 +253,27 @@ suite('vscwClang build (in browser)', function () {
 		await ended;
 		// Matcher markers can carry a different URI scheme than the workspace folder (seen under test-web), so match by path.
 		const errorsFor = () => vscode.languages.getDiagnostics().filter(([u]) => u.path.endsWith('/tasked.cpp')).flatMap(([, d]) => d).filter(d => d.severity === vscode.DiagnosticSeverity.Error);
+		let found = errorsFor();
+		for (let i = 0; i < 30 && found.length === 0; i++) {
+			await new Promise(r => setTimeout(r, 200));
+			found = errorsFor();
+		}
+		assert.strictEqual(found.length, 1, JSON.stringify(vscode.languages.getDiagnostics().map(([u, d]) => [u.toString(), d.length])));
+		assert.strictEqual(found[0].range.start.line, 1);
+	});
+
+	test('a cppbuild task (as the C/C++ extension writes it) is mapped onto a build', async function () {
+		this.timeout(60_000);
+		await vscode.extensions.all.find(e => e.id.endsWith('.vscwclang'))?.activate();
+		await write('cppt.cpp', 'int main() {' + String.fromCharCode(10) + '  return gone;' + String.fromCharCode(10) + '}' + String.fromCharCode(10));
+		// The workbench has no API to run a configured task by name, so resolve it with the provider as the workbench would.
+		const definition = { type: 'cppbuild', label: 'C/C++: g++ build', command: '/usr/bin/g++', args: ['-fdiagnostics-color=always', '-g', 'cppt.cpp', '-o', 'cppt.exe'], options: { cwd: '${workspaceFolder}/build-test' } };
+		const resolved = await createTaskProvider(context, log).resolveTask(new vscode.Task(definition, vscode.TaskScope.Workspace, 'C/C++: g++ build', 'cppbuild'), new vscode.CancellationTokenSource().token);
+		assert.ok(resolved, 'provider did not resolve the cppbuild task');
+		const ended = new Promise<void>(resolve => { const d = vscode.tasks.onDidEndTask(e => { if (e.execution.task.name === 'C/C++: g++ build') { d.dispose(); resolve(); } }); });
+		await vscode.tasks.executeTask(resolved);
+		await ended;
+		const errorsFor = () => vscode.languages.getDiagnostics().filter(([u]) => u.path.endsWith('/build-test/cppt.cpp')).flatMap(([, d]) => d).filter(d => d.severity === vscode.DiagnosticSeverity.Error);
 		let found = errorsFor();
 		for (let i = 0; i < 30 && found.length === 0; i++) {
 			await new Promise(r => setTimeout(r, 200));

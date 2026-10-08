@@ -25,7 +25,8 @@
     "onCommand:vscwclang.clearToolchainCache",
     "onCommand:vscwclang.run",
     "onCommand:vscwclang.runWithArgs",
-    "onTaskType:vscwclang"
+    "onTaskType:vscwclang",
+    "onTaskType:cppbuild"
   ],
   "extensionDependencies": [
     "ms-vscode.wasm-wasi-core"
@@ -77,7 +78,7 @@
             "type": "string"
           },
           "default": [],
-          "markdownDescription": "Arguments for `vscwClang: Build and Run`. `vscwClang: Build and Run with Arguments...` asks each time instead (pre-filled with the last answer)."
+          "markdownDescription": "Arguments for `vscwClang: Build and Run`. A `launch.json` configuration (`cppdbg`, `cppvsdbg`, `lldb`, `codelldb`) that has `args` takes precedence. `vscwClang: Build and Run with Arguments...` asks each time instead (pre-filled with the last answer)."
         },
         "vscwclang.run.env": {
           "type": "object",
@@ -159,6 +160,30 @@
       }
     ],
     "taskDefinitions": [
+      {
+        "type": "cppbuild",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string",
+            "description": "g++, gcc, clang++ or clang (a full path is fine). The arguments are mapped onto a browser build; see the vscwClang README."
+          },
+          "args": {
+            "type": "array"
+          },
+          "options": {
+            "type": "object"
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      },
       {
         "type": "vscwclang",
         "properties": {
