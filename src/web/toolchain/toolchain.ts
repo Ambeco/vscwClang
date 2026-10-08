@@ -9,7 +9,7 @@ import { ToolchainStore, type StoreContext } from './toolchainStore';
 export interface BuildRequest {
 	/** Source files to compile; all must be inside the first workspace folder. */
 	sources: vscode.Uri[];
-	/** Where the linked .wasm goes; must be inside the first workspace folder. */
+	/** Where the linked .wasm goes: inside the first workspace folder, or anywhere else, in which case its directory is mounted at `/out`. */
 	output: vscode.Uri;
 	/** Extra user flags; restricted ones are rejected (see flagPolicy.ts). `-l`, `-L` and `-Wl,` flags go to wasm-ld, the rest to clang. */
 	flags: string[];
@@ -26,6 +26,7 @@ export interface BuildResult {
 }
 
 const SLICE = 'wasm32-wasip1';
+const GUEST_OUT = '/out';
 
 /**
  * Compiles each source with clang.wasm, then links with lld.wasm.
@@ -59,13 +60,15 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 		return g;
 	};
 	const sources = request.sources.map(uri => ({ uri, guest: guest(uri, 'source file') }));
-	const output = guest(request.output, 'output file');
+	const outputInWorkspace = toGuestPath(folder.path, request.output.path) !== undefined && request.output.scheme === folder.scheme;
+	const outputDir = vscode.Uri.joinPath(request.output, '..');
+	const output = outputInWorkspace ? guest(request.output, 'output file') : `${GUEST_OUT}/${request.output.path.slice(request.output.path.lastIndexOf('/') + 1)}`;
 
 	let diagnostics = '';
 	let exitCode = 0;
 	// First write to the workspace, before any first-use download: a local folder on vscode.dev may need a browser
 	// permission prompt, which requires the user gesture that started the command and expires within seconds.
-	await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(request.output, '..'));
+	await vscode.workspace.fs.createDirectory(outputDir);
 	const toolchain = getToolchainStore(context, log);
 	await toolchain.ensure();
 	const wasm = await Wasm.load();
@@ -98,7 +101,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 		log.appendLine(`[vscwclang] linking ${output}`);
 		const link = flags.link[SLICE].map(sub);
 		const linkStarted = Date.now();
-		const ld = await run('lld.wasm', ['wasm-ld', link[0], ...objectPaths, ...(abortShim ? [abortShim] : []), ...userFlags.link, ...link.slice(1), '-o', output], { objects });
+		const ld = await run('lld.wasm', ['wasm-ld', link[0], ...objectPaths, ...(abortShim ? [abortShim] : []), ...userFlags.link, ...link.slice(1), '-o', output], { objects, outputDir: outputInWorkspace ? undefined : outputDir });
 		log.appendLine(`[vscwclang] linked in ${Date.now() - linkStarted} ms (exit ${ld.exitCode})`);
 		diagnostics += ld.stderr;
 		exitCode = ld.exitCode;
@@ -113,11 +116,14 @@ const NL = String.fromCharCode(10);
  *
  * wasm-wasi-core never settles `run()` when a program traps (vscode-wasm#303), and wasi-libc's `abort()`, so
  * `assert`, `std::terminate` and `abort` itself, is a trap. Weak, so a program's own `abort` still wins, and
- * linked ahead of libc so libc's copy is never pulled in. Direct traps (out-of-bounds, `__builtin_trap`) are not covered.
+ * linked ahead of libc so libc's copy is never pulled in. The same object holds a startup `chdir("/workspace")`,
+ * since WASI has no working directory and relative paths otherwise fail. Direct traps (out-of-bounds, `__builtin_trap`) are not covered.
  */
 export const ABORT_SHIM_SOURCE = [
 	'#include <stdio.h>',
 	'#include <wasi/api.h>',
+	'#include <unistd.h>',
+	'__attribute__((constructor)) static void vscwclang_chdir_workspace(void) { chdir("/workspace"); }',
 	'__attribute__((weak, noreturn)) void abort(void) {',
 	'\tfputs("abort() called", stderr);',
 	'\tfputc(10, stderr);',
@@ -184,6 +190,8 @@ interface ToolExtras {
 	captureStdout?: boolean;
 	/** In-memory objects, mounted read-only at `/obj`. */
 	objects?: MemoryFileSystem;
+	/** A directory outside the workspace, mounted writable at `/out` (the link output). */
+	outputDir?: vscode.Uri;
 }
 
 async function runTool(wasm: Wasm, toolchain: ToolchainStore, sysroot: SysrootFs, wasmFile: string, args: string[], extra: ToolExtras = {}): Promise<{ exitCode: number; stderr: string; stdout: Uint8Array<ArrayBuffer> }> {
@@ -196,6 +204,7 @@ async function runTool(wasm: Wasm, toolchain: ToolchainStore, sysroot: SysrootFs
 			{ kind: 'memoryFileSystem', fileSystem: sysroot.sysroot, mountPoint: '/sysroot' },
 			{ kind: 'memoryFileSystem', fileSystem: sysroot.resource, mountPoint: '/resource' },
 			...(extra.objects ? [{ kind: 'memoryFileSystem' as const, fileSystem: extra.objects, mountPoint: '/obj' }] : []),
+			...(extra.outputDir ? [{ kind: 'vscodeFileSystem' as const, uri: extra.outputDir, mountPoint: GUEST_OUT }] : []),
 		],
 	});
 	const errDecoder = new TextDecoder();

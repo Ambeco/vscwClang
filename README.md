@@ -8,8 +8,8 @@ vscwClang runs WebAssembly builds of Clang and LLD inside the extension, so on v
 
 ## What it does
 
-- **Build** (`vscwClang: Build C++`): compiles every `.c`, `.cc`, `.cpp` and `.cxx` file in your workspace and links them into `a.out.wasm`. IDE scratch and build-output folders (`Debug`, `x64`, `build`, `enc_temp_folder`, `.vs`, ...) are skipped. If your folder holds several programs, narrow the `vscwclang.sourceGlobs` setting, because all matching files are linked into one program (two `main` functions will fail to link). Errors and warnings appear in the Problems panel at the right file, line and column.
-- **Build and Run** (`vscwClang: Build and Run C++`): builds, then runs the program in a VS Code terminal. The terminal supports line-by-line input, so programs can read from `std::cin` or `stdin`.
+- **Build** (`vscwClang: Build C++`): compiles every `.c`, `.cc`, `.cpp` and `.cxx` file in your workspace and links them into `a.out.wasm` under `.vscwclang/<mode>/` (`release` or `debug`) in your folder, next to a `build.log`. For read-only or virtual folders (such as GitHub repositories opened on vscode.dev) these go to the extension's storage instead, so those still build and run. You may want to add `.vscwclang/` to `.gitignore`. IDE scratch and build-output folders (`Debug`, `x64`, `build`, `enc_temp_folder`, `.vs`, ...) are skipped. If your folder holds several programs, narrow the `vscwclang.sourceGlobs` setting, because all matching files are linked into one program (two `main` functions will fail to link). Errors and warnings appear in the Problems panel at the right file, line and column.
+- **Build and Run** (`vscwClang: Build and Run C++`): builds, then runs the program in a VS Code terminal. The terminal supports line-by-line input, so programs can read from `std::cin` or `stdin`: type the input into the terminal, where it is echoed beside the output. **Build and Run with Arguments...** asks for command-line arguments first (remembered per workspace); the `vscwclang.run.args` setting gives fixed ones. Your folder is mounted at `/workspace`, and relative paths such as `input.txt` start there too.
 - **Flags**: the `vscwclang.flags` setting (default `-I/workspace`, your project root) is added to every Build and Run, e.g. `-std=c++20` or `-DNAME=1`.
 - **Tasks**: a `vscwclang` task type with a matching problem matcher, so builds can run from `tasks.json` with `sources`, `flags`, `mode` (`debug` or `release`) and `output` settings.
 
@@ -38,7 +38,7 @@ This is an early release.
 
 ## What your program can see
 
-Programs run in a sandbox: they can read and write files in your workspace folder, use stdin and stdout, read the clock and random numbers. There is no network, no other programs (`system()` and `popen` don't work, `fork` doesn't exist), no `/tmp` and no environment variables such as `HOME` yet. `mmap` of a file can read it, but writes through a shared mapping are not saved.
+Programs run in a sandbox: they can read and write files in your workspace folder, use stdin and stdout, read the clock and random numbers. `HOME` is `/home/user` (kept between runs), `TMPDIR` is `/tmp` (emptied before each run); both are writable and live in the extension's storage. `USER` and `LANG` are set too, and the `vscwclang.run.env` setting adds or removes variables. There is no network and no other programs (`system()` and `popen` don't work, `fork` doesn't exist). `mmap` of a file can read it, but writes through a shared mapping are not saved.
 
 ## Licenses
 

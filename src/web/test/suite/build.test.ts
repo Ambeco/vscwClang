@@ -2,6 +2,8 @@ import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { Wasm } from '@vscode/wasm-wasi';
 import { build } from '../../toolchain/toolchain';
+import { chooseArtifactDir } from '../../buildWorkspace';
+import { runProgram } from '../../runProgram';
 import { ToolchainStore } from '../../toolchain/toolchainStore';
 
 // Needs a workspace folder, --coi and ms-vscode.wasm-wasi-core (see the `test` script in package.json).
@@ -95,6 +97,92 @@ suite('vscwClang build (in browser)', function () {
 		assert.strictEqual(ok.exitCode, 0, ok.diagnostics);
 		assert.strictEqual((await runWasm(uri('rooted.wasm'))).exitCode, 0);
 	});
+
+	test('artifacts default to .vscwclang/<mode>/ in a writable folder, and the output may live outside the workspace', async () => {
+		const folder = vscode.workspace.workspaceFolders![0].uri;
+		const dirRelease = await chooseArtifactDir(context, folder, 'release');
+		const dirDebug = await chooseArtifactDir(context, folder, 'debug');
+		assert.strictEqual(dirRelease.toString(), vscode.Uri.joinPath(folder, '.vscwclang/release').toString());
+		assert.strictEqual(dirDebug.toString(), vscode.Uri.joinPath(folder, '.vscwclang/debug').toString());
+		// Read-only/virtual folders put the output in extension storage, which is mounted at /out rather than /workspace.
+		await write('elsewhere.cpp', 'int main() { return 5; }' + String.fromCharCode(10));
+		const output = vscode.Uri.joinPath(context.globalStorageUri, 'artifacts', 'k', 'release', 'a.out.wasm');
+		const result = await build({ sources: [uri('elsewhere.cpp')], output, flags: [], mode: 'release' }, log, context);
+		assert.strictEqual(result.exitCode, 0, result.diagnostics);
+		assert.strictEqual((await runWasm(output)).exitCode, 5);
+	});
+
+	// runProgram with a recording pseudoterminal; `onOutput` can type input in reply to what the program printed.
+	async function runInTerminal(wasmFile: vscode.Uri, args: string[], onOutput?: (text: string, pty: { handleInput?(data: string): void }) => void): Promise<{ exitCode: number; text: string }> {
+		let text = '';
+		const exitCode = await Promise.race([
+			runProgram(context, wasmFile, args, {
+				openTerminal: pty => {
+					pty.onDidWrite(d => { text += d; onOutput?.(text, pty); });
+					pty.open(undefined);
+				},
+			}),
+			new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`run hung; output so far: ${JSON.stringify(text)}`)), 20000)),
+		]);
+		return { exitCode, text };
+	}
+
+	test('Run gives the program HOME/TMPDIR, writable /tmp and /home/user, and its arguments', async function () {
+		this.timeout(60_000);
+		const nl = String.fromCharCode(10);
+		await write('envprog.cpp', ['#include <cstdio>', '#include <cstdlib>',
+			'static const char* env(const char* k) { const char* v = std::getenv(k); return v ? v : "(null)"; }',
+			'int main(int argc, char** argv) {',
+			'  std::printf("HOME=%s TMPDIR=%s USER=%s LANG=%s EXTRA=%s\\n", env("HOME"), env("TMPDIR"), env("USER"), env("LANG"), env("EXTRA"));',
+			'  FILE* f = std::fopen("/tmp/x.txt", "w"); if (!f) { std::puts("tmp-open-failed"); return 3; } std::fputs("tmpdata", f); std::fclose(f);',
+			'  char b[16] = {0}; f = std::fopen("/tmp/x.txt", "r"); std::fgets(b, 16, f); std::fclose(f); std::printf("tmp=%s\\n", b);',
+			'  f = std::fopen("/home/user/h.txt", "w"); std::printf("home=%d\\n", f != nullptr); if (f) std::fclose(f);',
+			'  for (int i = 1; i < argc; i++) std::printf("arg%d=[%s]\\n", i, argv[i]);',
+			'  f = std::fopen("vscw-rel-probe.txt", "r"); std::printf("rel=%d\\n", f != nullptr);',
+			'  f = std::fopen("/workspace/vscw-rel-probe.txt", "r"); std::printf("abs=%d\\n", f != nullptr);',
+			'  return 0; }', ''].join(nl));
+		const output = uri('envprog.wasm');
+		const built = await build({ sources: [uri('envprog.cpp')], output, flags: [], mode: 'release' }, log, context);
+		assert.strictEqual(built.exitCode, 0, built.diagnostics);
+		const rootProbe = vscode.Uri.joinPath(vscode.workspace.workspaceFolders![0].uri, 'vscw-rel-probe.txt');
+		await vscode.workspace.fs.writeFile(rootProbe, encoder.encode('x'));
+		const config = vscode.workspace.getConfiguration('vscwclang');
+		await config.update('run.env', { EXTRA: 'yes', LANG: null }, vscode.ConfigurationTarget.Global);
+		try {
+			const ran = await runInTerminal(output, ['in.txt', 'two words']);
+			assert.strictEqual(ran.exitCode, 0, ran.text);
+			assert.match(ran.text, /HOME=\/home\/user TMPDIR=\/tmp USER=user LANG=\(null\) EXTRA=yes/);
+			assert.match(ran.text, /tmp=tmpdata/);
+			assert.match(ran.text, /home=1/);
+			assert.match(ran.text, /rel=1/, 'relative paths resolve against the workspace folder');
+			assert.match(ran.text, /abs=1/);
+			assert.match(ran.text, /arg1=\[in\.txt\]/);
+			assert.match(ran.text, /arg2=\[two words\]/);
+		} finally {
+			await config.update('run.env', undefined, vscode.ConfigurationTarget.Global);
+		}
+	});
+
+	for (const [when, delayMs] of [['before the program reads (typed ahead)', 0], ['after the program is already waiting', 400]] as const) {
+	test(`Run: a program reading std::cin gets what is typed into the terminal ${when}, echoed beside its output`, async function () {
+		this.timeout(60_000);
+		const nl = String.fromCharCode(10);
+		await write('cinprog.cpp', ['#include <iostream>', '#include <string>',
+			'int main() { std::string name; int n = 0; std::cout << "name? " << std::flush; std::cin >> name >> n;',
+			'  std::cout << "Hello, " << name << " x" << n << std::endl; return 0; }', ''].join(nl));
+		const output = uri('cinprog.wasm');
+		const built = await build({ sources: [uri('cinprog.cpp')], output, flags: [], mode: 'release' }, log, context);
+		assert.strictEqual(built.exitCode, 0, built.diagnostics);
+		let typed = false;
+		const ran = await runInTerminal(output, [], (text, pty) => {
+			if (!typed && text.includes('name? ')) { typed = true; const type = () => { for (const key of 'Bob 7\r') { pty.handleInput?.(key); } }; if (delayMs === 0) { type(); } else { setTimeout(type, delayMs); } }
+		});
+		assert.strictEqual(ran.exitCode, 0, ran.text);
+		assert.match(ran.text, /name\? Bob 7/, 'typed input is echoed after the prompt');
+		assert.match(ran.text, /Hello, Bob x7/);
+		assert.match(ran.text, /exited with code 0/);
+	});
+	}
 
 	test('a failed assert exits with 134 instead of trapping (which would hang run())', async () => {
 		const nl = String.fromCharCode(10);

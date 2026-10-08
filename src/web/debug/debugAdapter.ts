@@ -30,7 +30,7 @@ export class VscwClangDebugAdapter implements vscode.DebugAdapter {
 			case 'launch': {
 				const folder = this.session.workspaceFolder?.uri;
 				if (!folder) { throw new Error('vscwClang: open a workspace folder before debugging.'); }
-				const program = vscode.Uri.joinPath(folder, req.arguments?.program ?? 'a.out.wasm');
+				const program = vscode.Uri.joinPath(folder, req.arguments?.program ?? '.vscwclang/debug/a.out.wasm');
 				const result = await build({ sources: [], output: program, flags: [], mode: 'debug' }, this.log, this.context);
 				throw new Error(`Build finished (exit ${result.exitCode}) but running/debugging is not implemented yet. See documents/remaining_work.md.`);
 			}

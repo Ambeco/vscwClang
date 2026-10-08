@@ -24,6 +24,7 @@
     "onCommand:vscwclang.downloadToolchain",
     "onCommand:vscwclang.clearToolchainCache",
     "onCommand:vscwclang.run",
+    "onCommand:vscwclang.runWithArgs",
     "onTaskType:vscwclang"
   ],
   "extensionDependencies": [
@@ -70,6 +71,22 @@
           ],
           "markdownDescription": "Directory names (at any depth, case-insensitive) whose files are never compiled: IDE scratch folders and build output. Replaces the default list when set."
         },
+        "vscwclang.run.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Arguments for `vscwClang: Build and Run`. `vscwClang: Build and Run with Arguments...` asks each time instead (pre-filled with the last answer)."
+        },
+        "vscwclang.run.env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": ["string", "null"]
+          },
+          "default": {},
+          "markdownDescription": "Environment variables for the program, added to the defaults `HOME=/home/user`, `TMPDIR=/tmp`, `USER=user`, `LANG=C.UTF-8`. Set a variable to `null` to remove a default."
+        },
         "vscwclang.toolTimeoutSeconds": {
           "type": "number",
           "default": 300,
@@ -86,6 +103,10 @@
       {
         "command": "vscwclang.run",
         "title": "vscwClang: Build and Run C++ (clang.wasm)"
+      },
+      {
+        "command": "vscwclang.runWithArgs",
+        "title": "vscwClang: Build and Run C++ with Arguments... (clang.wasm)"
       },
       {
         "command": "vscwclang.downloadToolchain",
@@ -122,7 +143,7 @@
               "program": {
                 "type": "string",
                 "description": "Workspace-relative path of the built .wasm.",
-                "default": "a.out.wasm"
+                "default": ".vscwclang/debug/a.out.wasm"
               }
             }
           }
@@ -132,7 +153,7 @@
             "type": "vscwclang",
             "request": "launch",
             "name": "Debug C++ (vscwClang)",
-            "program": "a.out.wasm"
+            "program": ".vscwclang/debug/a.out.wasm"
           }
         ]
       }
@@ -165,7 +186,7 @@
           },
           "output": {
             "type": "string",
-            "default": "a.out.wasm",
+            "default": ".vscwclang/debug/a.out.wasm",
             "description": "Output .wasm, relative to the workspace folder."
           }
         }
