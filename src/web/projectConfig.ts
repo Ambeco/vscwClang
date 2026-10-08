@@ -118,15 +118,24 @@ export async function chooseCompileDatabase(context: vscode.ExtensionContext, fo
 
 async function planDatabase(context: vscode.ExtensionContext, folder: vscode.Uri, log: vscode.OutputChannel, name: string, db: unknown, include: string[]): Promise<{ cancelled: boolean; options?: BuildOptions }> {
 	const relative = (uri: vscode.Uri) => uri.path.slice(folder.path.length + 1);
+	const entries = (Array.isArray(db) ? db : []) as { directory?: unknown; file?: unknown }[];
+	const known = new Set((await vscode.workspace.findFiles('**/*.{c,cc,cpp,cxx}', '**/node_modules/**')).map(relative));
+	// Share of the entries whose file, mapped with `root`, exists here. A root of "/" maps every path, so mapping alone proves nothing.
+	const coverage = (root: string) => {
+		const sources = entries.filter(e => typeof e?.file === 'string');
+		const hits = sources.filter(e => {
+			const cwd = typeof e.directory === 'string' ? hostToGuest(e.directory, '/workspace', root) ?? '/workspace' : '/workspace';
+			const guest = hostToGuest(e.file as string, cwd, root);
+			return guest !== undefined && known.has(guest.slice('/workspace/'.length));
+		});
+		return sources.length === 0 ? 0 : hits.length / sources.length;
+	};
 	let root = folder.path;
-	const entries = Array.isArray(db) ? db as { directory?: unknown; file?: unknown }[] : [];
-	const here = entries.some(e => typeof e?.file === 'string' && hostToGuest(e.file, typeof e.directory === 'string' ? hostToGuest(e.directory, '/workspace', root) ?? '/workspace' : '/workspace', root) !== undefined);
-	if (!here) {
+	if (coverage(root) === 0) {
 		// Made on another machine or in another folder: find where the workspace folder sat on that machine.
-		const known = new Set((await vscode.workspace.findFiles('**/*.{c,cc,cpp,cxx}', '**/node_modules/**')).map(relative));
 		const inferred = inferHostRoot(db, rel => known.has(rel));
-		if (inferred === undefined) {
-			throw new ProjectModelError(`vscwClang: no file listed in ${name} exists in this workspace folder, so its paths cannot be mapped. Did you mean to open the folder it was generated for, or to regenerate it here?`);
+		if (inferred === undefined || coverage(inferred) < 0.5) {
+			throw new ProjectModelError(`vscwClang: most files listed in ${name} do not exist in this workspace folder, so its paths cannot be mapped. Did you mean to open the folder it was generated for, or to regenerate it here?`);
 		}
 		root = inferred;
 		log.appendLine(`[vscwclang] ${name} was made for '${inferred}'; mapping it to /workspace`);

@@ -74,6 +74,11 @@ suite('hostToGuest and inferHostRoot', () => {
 		assert.strictEqual(hostToGuest('C:\\P\\src', '/workspace', '/c:/p'), '/workspace/src');
 	});
 
+	test('a workspace root of "/" maps everything, so callers must check existence', () => {
+		assert.strictEqual(hostToGuest('/usr/include', '/workspace', '/'), '/workspace/usr/include');
+		assert.strictEqual(hostToGuest('src', '/workspace', '/'), '/workspace/src');
+	});
+
 	test('infers the root from the longest existing tail', () => {
 		const exists = (rel: string) => rel === 'src/app.cpp';
 		assert.strictEqual(inferHostRoot(cmake, exists), '/home/u/proj');
