@@ -13,6 +13,8 @@ export interface BuildRequest {
 	output: vscode.Uri;
 	/** Extra user flags; restricted ones are rejected (see flagPolicy.ts). `-l`, `-L` and `-Wl,` flags go to wasm-ld, the rest to clang. */
 	flags: string[];
+	/** Extra flags for single sources, keyed by guest path (`/workspace/src/a.cpp`), added after `flags` with the same policy and routing. */
+	sourceFlags?: Record<string, string[]>;
 	/** "debug" adds -O0 -g (hook instrumentation and --export=__stack_pointer come with Milestone 4). */
 	mode: 'debug' | 'release';
 }
@@ -44,7 +46,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 	if (request.sources.length === 0) {
 		throw new Error('vscwClang: no source files to build. Did you mean to add a .c/.cc/.cpp/.cxx file to the workspace?');
 	}
-	const problems = checkUserFlags(request.flags);
+	const problems = [request.flags, ...Object.values(request.sourceFlags ?? {})].flatMap(checkUserFlags);
 	if (problems.length > 0) {
 		throw new Error(`vscwClang: unsupported compiler flags:\n${problems.join('\n')}`);
 	}
@@ -78,6 +80,8 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 	const run = (wasmFile: string, args: string[], extra?: ToolExtras) => runTool(wasm, toolchain, sysroot, wasmFile, args, extra);
 	const userFlags = splitFlags(request.flags, GUEST_WORKSPACE);
 	const modeFlags = request.mode === 'debug' ? ['-O0', '-g'] : [];
+	const ownFlags = new Map(sources.map(s => [s.guest, splitFlags(request.sourceFlags?.[s.guest] ?? [], GUEST_WORKSPACE)]));
+	const linkFlags = [...new Set([...userFlags.link, ...[...ownFlags.values()].flatMap(f => f.link)])];
 	const objectPaths: string[] = [];
 	const abortShim = await addAbortShim(objects, (args, extra) => run('clang.wasm', args, extra), flags.compile[SLICE].map(sub), log);
 	for (const [i, source] of sources.entries()) {
@@ -87,7 +91,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 		log.appendLine(`[vscwclang] compiling ${source.guest}`);
 		const started = Date.now();
 		const cc = await run('clang.wasm', [driver, ...flags.compile[SLICE].map(sub), '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics',
-			...modeFlags, ...userFlags.compile, '-c', source.guest, '-o', '-'], { captureStdout: true });
+			...modeFlags, ...userFlags.compile, ...ownFlags.get(source.guest)!.compile, '-c', source.guest, '-o', '-'], { captureStdout: true });
 		log.appendLine(`[vscwclang] compiled ${source.guest} in ${Date.now() - started} ms (exit ${cc.exitCode})`);
 		diagnostics += cc.stderr;
 		if (cc.exitCode === 0) {
@@ -101,7 +105,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 		log.appendLine(`[vscwclang] linking ${output}`);
 		const link = flags.link[SLICE].map(sub);
 		const linkStarted = Date.now();
-		const ld = await run('lld.wasm', ['wasm-ld', link[0], ...objectPaths, ...(abortShim ? [abortShim] : []), ...userFlags.link, ...link.slice(1), '-o', output], { objects, outputDir: outputInWorkspace ? undefined : outputDir });
+		const ld = await run('lld.wasm', ['wasm-ld', link[0], ...objectPaths, ...(abortShim ? [abortShim] : []), ...linkFlags, ...link.slice(1), '-o', output], { objects, outputDir: outputInWorkspace ? undefined : outputDir });
 		log.appendLine(`[vscwclang] linked in ${Date.now() - linkStarted} ms (exit ${ld.exitCode})`);
 		diagnostics += ld.stderr;
 		exitCode = ld.exitCode;

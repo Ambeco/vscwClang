@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { BuildOptions } from './buildWorkspace';
 import { GUEST_WORKSPACE, toGuestPath } from './toolchain/guestPaths';
-import { defaultBuildTask, isCompilerTask, listLaunches, listTasks, planFromTask, taskForLaunch, type BuildPlan, type LaunchEntry, type TaskEntry, type VariableContext } from './toolchain/projectModel';
+import { defaultBuildTask, hostToGuest, inferHostRoot, isCompilerTask, listLaunches, listTasks, planFromCompileCommands, planFromCompileFlags, planFromTask, ProjectModelError, taskForLaunch, type BuildPlan, type LaunchEntry, type TaskEntry, type VariableContext } from './toolchain/projectModel';
 
 const LAST_LAUNCH_KEY = 'vscwclang.lastLaunch';
 const CPP_LANGUAGES = new Set(['c', 'cpp']);
@@ -74,5 +74,84 @@ export async function chooseRun(context: vscode.ExtensionContext, folder: vscode
 	}
 	if (launch !== undefined) { log.appendLine(`[vscwclang] using launch.json configuration '${launch.name}'`); }
 	const entry = taskForLaunch(readTasks(folder), launch, variableContext(folder));
-	return { cancelled: false, launch, build: mapTask(entry, folder, log) };
+	let build = mapTask(entry, folder, log);
+	if (build === undefined) {
+		const database = await chooseCompileDatabase(context, folder, log);
+		if (database.cancelled) { return { cancelled: true }; }
+		build = database.options;
+	}
+	return { cancelled: false, launch, build };
+}
+
+const LAST_TARGET_KEY = 'vscwclang.lastCompileCommandsTarget';
+const ALL_TARGETS = '(all targets)';
+
+async function readText(uri: vscode.Uri): Promise<string | undefined> {
+	try { return new TextDecoder().decode(await vscode.workspace.fs.readFile(uri)).replace(/^﻿/, ''); } catch { return undefined; }
+}
+
+/**
+ * Build options from the folder's `compile_commands.json` (or, failing that, `compile_flags.txt`), the next source
+ * after `tasks.json`. Like CMake Tools' build target, a database naming several CMake targets asks which one to
+ * build (the last choice is listed first); `cancelled` means the user dismissed that picker. Undefined options mean
+ * "no database; use the extension's own settings".
+ */
+export async function chooseCompileDatabase(context: vscode.ExtensionContext, folder: vscode.Uri, log: vscode.OutputChannel): Promise<{ cancelled: boolean; options?: BuildOptions }> {
+	const settings = vscode.workspace.getConfiguration('vscwclang');
+	const configured = settings.get<string>('compileCommands', '').trim();
+	for (const name of configured !== '' ? [configured] : ['compile_commands.json', 'build/compile_commands.json']) {
+		const text = await readText(vscode.Uri.joinPath(folder, name));
+		if (text === undefined) { continue; }
+		let db: unknown;
+		try { db = JSON.parse(text); } catch (e) {
+			throw new ProjectModelError(`vscwClang: ${name} is not valid JSON (${(e as Error).message}). Did you mean to regenerate it (CMake: -DCMAKE_EXPORT_COMPILE_COMMANDS=ON)?`);
+		}
+		return planDatabase(context, folder, log, name, db, settings.get<string[]>('compileCommands.include', []));
+	}
+	const flagsText = await readText(vscode.Uri.joinPath(folder, 'compile_flags.txt'));
+	if (flagsText === undefined) { return { cancelled: false }; }
+	const plan = planFromCompileFlags(flagsText);
+	log.appendLine(`[vscwclang] using compile_flags.txt: ${plan.flags.join(' ')}`);
+	plan.notes.forEach(n => log.appendLine(`[vscwclang]   ${n}`));
+	return { cancelled: false, options: { flags: plan.flags, mode: plan.mode } };
+}
+
+async function planDatabase(context: vscode.ExtensionContext, folder: vscode.Uri, log: vscode.OutputChannel, name: string, db: unknown, include: string[]): Promise<{ cancelled: boolean; options?: BuildOptions }> {
+	const relative = (uri: vscode.Uri) => uri.path.slice(folder.path.length + 1);
+	let root = folder.path;
+	const entries = Array.isArray(db) ? db as { directory?: unknown; file?: unknown }[] : [];
+	const here = entries.some(e => typeof e?.file === 'string' && hostToGuest(e.file, typeof e.directory === 'string' ? hostToGuest(e.directory, '/workspace', root) ?? '/workspace' : '/workspace', root) !== undefined);
+	if (!here) {
+		// Made on another machine or in another folder: find where the workspace folder sat on that machine.
+		const known = new Set((await vscode.workspace.findFiles('**/*.{c,cc,cpp,cxx}', '**/node_modules/**')).map(relative));
+		const inferred = inferHostRoot(db, rel => known.has(rel));
+		if (inferred === undefined) {
+			throw new ProjectModelError(`vscwClang: no file listed in ${name} exists in this workspace folder, so its paths cannot be mapped. Did you mean to open the folder it was generated for, or to regenerate it here?`);
+		}
+		root = inferred;
+		log.appendLine(`[vscwclang] ${name} was made for '${inferred}'; mapping it to /workspace`);
+	}
+	let plan = planFromCompileCommands(db, root);
+	let target: string | undefined;
+	if (plan.targets.length > 1) {
+		const last = context.workspaceState.get<string>(LAST_TARGET_KEY);
+		const items = [ALL_TARGETS, ...plan.targets].sort((a, b) => Number(b === last) - Number(a === last));
+		const picked = await vscode.window.showQuickPick(items, { title: `vscwClang: Build which CMake target from ${name}?` });
+		if (picked === undefined) { return { cancelled: true }; }
+		await context.workspaceState.update(LAST_TARGET_KEY, picked);
+		if (picked !== ALL_TARGETS) { target = picked; plan = planFromCompileCommands(db, root, target); }
+	}
+	let sources = plan.sources;
+	if (include.length > 0) {
+		const allowed = new Set<string>();
+		for (const glob of include) { (await vscode.workspace.findFiles(glob)).forEach(uri => allowed.add(relative(uri))); }
+		sources = sources.filter(s => allowed.has(s));
+		if (sources.length === 0) {
+			throw new ProjectModelError(`vscwClang: none of the sources in ${name} match vscwclang.compileCommands.include (${include.join(', ')}). Did you mean a glob such as 'src/**'?`);
+		}
+	}
+	log.appendLine(`[vscwclang] using ${name}${target === undefined ? '' : ` target '${target}'`}: ${sources.length} source file(s) with their own flags`);
+	plan.notes.forEach(n => log.appendLine(`[vscwclang]   ${n}`));
+	const sourceFlags = Object.fromEntries(sources.map(s => [s, plan.perFileFlags[s]]));
+	return { cancelled: false, options: { sourceFiles: sources, sourceFlags, flags: [], mode: plan.mode } };
 }

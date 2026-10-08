@@ -16,6 +16,10 @@ export interface BuildOptions {
 	/** File name for the .wasm inside the artifact directory (unlike `outputName`, works on read-only folders). */
 	artifactName?: string;
 	flags?: string[];
+	/** Exact workspace-relative sources (each stat-checked); replaces `sourceGlobs` and the exclusion list. */
+	sourceFiles?: string[];
+	/** Extra flags per workspace-relative source. */
+	sourceFlags?: Record<string, string[]>;
 	mode?: 'debug' | 'release';
 }
 
@@ -39,7 +43,15 @@ export async function buildWorkspace(context: vscode.ExtensionContext, log: vsco
 	const explicit = new Map<string, vscode.Uri>();
 	const settings = vscode.workspace.getConfiguration('vscwclang');
 	const excluded = settings.get<string[]>('sourceExclude', DEFAULT_EXCLUDED_DIRS);
-	for (const glob of options.sourceGlobs ?? settings.get<string[]>('sourceGlobs', ['**/*.{c,cc,cpp,cxx}'])) {
+	for (const relative of options.sourceFiles ?? []) {
+		const uri = vscode.Uri.joinPath(folder, relative);
+		try { await vscode.workspace.fs.stat(uri); } catch {
+			throw new Error(`vscwClang: source file '${relative}' was not found in the workspace folder. Did you mean to build first (generated sources), or to regenerate compile_commands.json for this folder?`);
+		}
+		found.set(uri.toString(), uri);
+		explicit.set(uri.toString(), uri);
+	}
+	for (const glob of options.sourceFiles ? [] : options.sourceGlobs ?? settings.get<string[]>('sourceGlobs', ['**/*.{c,cc,cpp,cxx}'])) {
 		const matches = await vscode.workspace.findFiles(glob, '**/node_modules/**');
 		if (!/[*?[\]{}]/.test(glob)) {
 			if (matches.length === 0) { throw new Error(`vscwClang: source file '${glob}' was not found in the workspace folder. Did you mean a path relative to the folder, such as 'src/${glob.slice(glob.lastIndexOf('/') + 1)}'?`); }
@@ -50,7 +62,8 @@ export async function buildWorkspace(context: vscode.ExtensionContext, log: vsco
 	// findFiles' exclude glob is not honored on every virtual file system (seen under test-web), so filter ourselves.
 	const sources = [...found.values()].filter(uri => explicit.has(uri.toString()) || !isExcludedSource(uri.path.slice(folder.path.length), excluded));
 	log.appendLine(`[vscwclang] ${sources.length} source file(s) found (skipping directories named: ${excluded.join(', ')})`);
-	const result = await build({ sources, output, flags: options.flags ?? settings.get<string[]>('flags', []), mode }, log, context);
+	const sourceFlags = Object.fromEntries(Object.entries(options.sourceFlags ?? {}).map(([relative, flags]) => [`/workspace/${relative}`, flags]));
+	const result = await build({ sources, output, flags: options.flags ?? settings.get<string[]>('flags', []), sourceFlags, mode }, log, context);
 	log.appendLine(result.diagnostics);
 	await writeBuildLog(vscode.Uri.joinPath(output, '..'), result);
 	return { folder, output, result };

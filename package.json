@@ -62,6 +62,19 @@
           ],
           "markdownDescription": "Globs, relative to the workspace folder, of the source files that `vscwClang: Build` compiles together into one program. Narrow this (e.g. `[\"src/**/*.cpp\"]`) when the folder holds several programs, such as tests that each define `main`."
         },
+        "vscwclang.compileCommands": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Workspace-relative path of the `compile_commands.json` that Build and Run use when there is no default `tasks.json` build task. Empty looks for `compile_commands.json`, then `build/compile_commands.json`. Each source is compiled with the flags of its own entry; a CMake database with several targets asks which one to build."
+        },
+        "vscwclang.compileCommands.include": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Globs, relative to the workspace folder, that narrow which `compile_commands.json` entries are linked into the program (for databases of several programs that do not name CMake targets). Empty keeps them all."
+        },
         "vscwclang.sourceExclude": {
           "type": "array",
           "items": {

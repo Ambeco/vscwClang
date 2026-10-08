@@ -162,6 +162,64 @@ function argText(arg: unknown): string {
 	throw new ProjectModelError(`vscwClang: cannot read task argument ${JSON.stringify(arg)}. Did you mean a plain string?`);
 }
 
+interface ArgMapping {
+	/** Maps the directory of `-I`/`-isystem`/`-iquote`/`-L`; undefined drops the flag with a note. */
+	mapDir(dir: string): string | undefined;
+	/** Workspace-relative source for a positional source file; undefined ignores it (databases name the file separately). */
+	onSource(arg: string): string | undefined;
+	/** Compilation databases: strip `-c` and dependency-file flags. */
+	database?: boolean;
+}
+
+const DEPENDENCY_FLAGS = new Set(['-MD', '-MMD', '-MP', '-MG', '-M', '-MM']);
+const DEPENDENCY_VALUE_FLAGS = new Set(['-MF', '-MT', '-MQ']);
+
+/** Maps compiler arguments (without the compiler itself) onto flags, sources and the `-o` value; shared by tasks and databases. */
+function mapArgs(args: readonly string[], label: string, m: ArgMapping): { sources: string[]; flags: string[]; notes: string[]; output?: string } {
+	const sources: string[] = [];
+	const flags: string[] = [];
+	const notes: string[] = [];
+	let output: string | undefined;
+	for (let i = 0; i < args.length; i++) {
+		const a = args[i];
+		const pathFlag = PATH_FLAG.exec(a);
+		if (a.startsWith('@')) {
+			throw new ProjectModelError(`vscwClang: ${label}: response file '${a}' cannot be read. Did you mean to write its flags on the command line?`);
+		}
+		if (a === '-o') {
+			if (args[i + 1] === undefined) { throw new ProjectModelError(`vscwClang: ${label}: '-o' has no file name. Did you mean '-o \${fileDirname}/\${fileBasenameNoExtension}'?`); }
+			output = args[++i];
+		} else if (m.database && (a === '-c' || DEPENDENCY_FLAGS.has(a))) {
+			continue;
+		} else if (m.database && DEPENDENCY_VALUE_FLAGS.has(a)) {
+			i++;
+		} else if (COLOR_FLAGS.test(a)) {
+			notes.push(`dropped '${a}': diagnostics are parsed as plain text`);
+		} else if (a in DROPPED_FLAGS) {
+			notes.push(`dropped '${a}': ${DROPPED_FLAGS[a]}`);
+		} else if (VALUE_FLAGS.has(a)) {
+			if (args[i + 1] === undefined) { throw new ProjectModelError(`vscwClang: ${label}: '${a}' needs a value. Did you mean '${a}<value>'?`); }
+			flags.push(a, args[++i]);
+		} else if (pathFlag !== null) {
+			const flag = pathFlag[1];
+			const value = pathFlag[2] !== '' ? pathFlag[2] : args[++i];
+			if (value === undefined) { throw new ProjectModelError(`vscwClang: ${label}: '${a}' needs a directory. Did you mean '${a}<dir>'?`); }
+			const mapped = m.mapDir(value);
+			if (mapped === undefined) { notes.push(`dropped '${flag}${value}': it is outside the workspace, which is all a browser build can see`); } else { flags.push(`${flag}${mapped}`); }
+		} else if (a.startsWith('-')) {
+			flags.push(a);
+		} else if (SOURCE_EXTENSION.test(a)) {
+			const source = m.onSource(a);
+			if (source !== undefined) { sources.push(source); }
+		} else if (/\.(h|hh|hpp|hxx)$/i.test(a)) {
+			notes.push(`ignored header '${a}' on the command line`);
+		} else {
+			throw new ProjectModelError(`vscwClang: ${label}: cannot use '${a}' as an input. Did you mean a .c/.cpp source file? Object files and libraries cannot be linked in a browser build.`);
+		}
+	}
+	return { sources, flags, notes, output };
+}
+
 /** Maps one `tasks.json` compile task (a g++/clang++ command line) onto a build plan. */
 export function planFromTask(task: TaskLike, ctx: VariableContext): BuildPlan {
 	const label = typeof task.label === 'string' ? task.label : String(task.command);
@@ -180,39 +238,11 @@ export function planFromTask(task: TaskLike, ctx: VariableContext): BuildPlan {
 	const rawCwd = task.options?.cwd;
 	const cwd = typeof rawCwd === 'string' ? toGuestPath(resolveVariables(rawCwd, ctx), GUEST_WORKSPACE) : GUEST_WORKSPACE;
 
-	const sources: string[] = [];
-	const flags: string[] = [];
-	const notes: string[] = [];
-	let output: string | undefined;
 	const absolutize = (dir: string) => { try { return toGuestPath(dir, cwd); } catch { return dir; } };
-	for (let i = 0; i < args.length; i++) {
-		const a = args[i];
-		const pathFlag = PATH_FLAG.exec(a);
-		if (a === '-o') {
-			if (args[i + 1] === undefined) { throw new ProjectModelError(`vscwClang: task '${label}': '-o' has no file name. Did you mean '-o \${fileDirname}/\${fileBasenameNoExtension}'?`); }
-			output = args[++i];
-		} else if (COLOR_FLAGS.test(a)) {
-			notes.push(`dropped '${a}': diagnostics are parsed as plain text`);
-		} else if (a in DROPPED_FLAGS) {
-			notes.push(`dropped '${a}': ${DROPPED_FLAGS[a]}`);
-		} else if (VALUE_FLAGS.has(a)) {
-			if (args[i + 1] === undefined) { throw new ProjectModelError(`vscwClang: task '${label}': '${a}' needs a value. Did you mean '${a}<value>'?`); }
-			flags.push(a, args[++i]);
-		} else if (pathFlag !== null) {
-			const flag = pathFlag[1];
-			const value = pathFlag[2] !== '' ? pathFlag[2] : args[++i];
-			if (value === undefined) { throw new ProjectModelError(`vscwClang: task '${label}': '${a}' needs a directory. Did you mean '${a}<dir>'?`); }
-			flags.push(`${flag}${absolutize(value)}`);
-		} else if (a.startsWith('-')) {
-			flags.push(a);
-		} else if (SOURCE_EXTENSION.test(a)) {
-			sources.push(toWorkspaceRelative(toGuestPath(a, cwd)).replace(/(^|\/)\*\*\./, '$1**/*.'));
-		} else if (/\.(h|hh|hpp|hxx)$/i.test(a)) {
-			notes.push(`ignored header '${a}' on the command line`);
-		} else {
-			throw new ProjectModelError(`vscwClang: task '${label}': cannot use '${a}' as an input. Did you mean a .c/.cpp source file? Object files and libraries cannot be linked in a browser build.`);
-		}
-	}
+	const { sources, flags, notes, output } = mapArgs(args, `task '${label}'`, {
+		mapDir: absolutize,
+		onSource: a => toWorkspaceRelative(toGuestPath(a, cwd)).replace(/(^|\/)\*\*\./, '$1**/*.'),
+	});
 	if (sources.length === 0) {
 		throw new ProjectModelError(`vscwClang: task '${label}' names no source file. Did you mean to pass \${file}, or a glob such as \${workspaceFolder}/*.cpp?`);
 	}
@@ -223,6 +253,114 @@ export function planFromTask(task: TaskLike, ctx: VariableContext): BuildPlan {
 		outputName: output === undefined ? undefined : `${programStem(output)}.wasm`,
 		mode: flags.includes('-g') ? 'debug' : 'release',
 	};
+}
+
+export interface DatabasePlan extends BuildPlan {
+	/** Workspace-relative source -> compile flags of its own entry. */
+	perFileFlags: Record<string, string[]>;
+	/** CMake targets found in the whole database (from `CMakeFiles/<target>.dir/` object paths), sorted; empty when it names none. */
+	targets: string[];
+}
+
+function normalizeHostPath(path: string): string {
+	return path.replace(/\\/g, '/').replace(/^\/(?=[A-Za-z]:)/, '').replace(/\/+$/, '');
+}
+
+const isAbsoluteHostPath = (p: string) => p.startsWith('/') || /^[A-Za-z]:/.test(p);
+
+/**
+ * Maps a path from a compilation database (made on any machine) to a guest path: relative paths start at `cwd`,
+ * absolute ones must lie under `root` (the host path of the workspace folder). Undefined when outside the workspace.
+ */
+export function hostToGuest(path: string, cwd: string, root: string): string | undefined {
+	const p = normalizeHostPath(path);
+	const r = normalizeHostPath(root);
+	try {
+		if (!isAbsoluteHostPath(p)) { return toGuestPath(p, cwd); }
+		const fold = /^[A-Za-z]:/.test(r);
+		const [pc, rc] = fold ? [p.toLowerCase(), r.toLowerCase()] : [p, r];
+		if (pc === rc || pc.startsWith(`${rc}/`)) { return toGuestPath(GUEST_WORKSPACE + p.slice(r.length), GUEST_WORKSPACE); }
+		return p === GUEST_WORKSPACE || p.startsWith(`${GUEST_WORKSPACE}/`) ? toGuestPath(p, GUEST_WORKSPACE) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Finds the host path of the workspace folder a database was made against: the longest tail of an entry's source
+ * path that `exists` (a workspace-relative path test) names the root as whatever precedes it.
+ */
+export function inferHostRoot(db: unknown, exists: (relative: string) => boolean): string | undefined {
+	if (!Array.isArray(db)) { return undefined; }
+	for (const entry of db as { directory?: unknown; file?: unknown }[]) {
+		if (typeof entry?.file !== 'string') { continue; }
+		const file = normalizeHostPath(entry.file);
+		const full = isAbsoluteHostPath(file) || typeof entry.directory !== 'string' ? file : `${normalizeHostPath(entry.directory)}/${file}`;
+		const parts = full.split('/');
+		for (let i = 1; i < parts.length; i++) {
+			if (exists(parts.slice(i).join('/'))) { return parts.slice(0, i).join('/') || '/'; }
+		}
+	}
+	return undefined;
+}
+
+const CMAKE_TARGET = /(?:^|\/)CMakeFiles\/([^/]+)\.dir\//;
+
+/**
+ * Maps a `compile_commands.json` onto a build plan in which every entry's flags apply to its own file only.
+ *
+ * `root` is the host path of the workspace folder the file describes (see `inferHostRoot`). Like CMake Tools'
+ * build target, `target` keeps only the entries whose object file lies in `CMakeFiles/<target>.dir/`; without it all
+ * entries are kept. A second entry for a file already seen and non-C/C++ files are skipped with a note, as are paths
+ * outside the workspace (include directories are dropped, sources are skipped).
+ */
+export function planFromCompileCommands(db: unknown, root: string, target?: string): DatabasePlan {
+	if (!Array.isArray(db)) {
+		throw new ProjectModelError('vscwClang: compile_commands.json must be a JSON array of {directory, file, command or arguments} objects. Did you mean to regenerate it (CMake: -DCMAKE_EXPORT_COMPILE_COMMANDS=ON; Make: bear)?');
+	}
+	const notes: string[] = [];
+	const perFileFlags: Record<string, string[]> = {};
+	const targets = new Set<string>();
+	for (const [i, raw] of db.entries()) {
+		const e = raw as { directory?: unknown; file?: unknown; command?: unknown; arguments?: unknown; output?: unknown } | null;
+		if (e === null || typeof e !== 'object' || typeof e.file !== 'string' || (typeof e.command !== 'string' && !Array.isArray(e.arguments))) {
+			throw new ProjectModelError(`vscwClang: compile_commands.json entry ${i} needs a 'file' and a 'command' or 'arguments'. Did you mean to regenerate the file?`);
+		}
+		const label = `compile_commands.json entry '${e.file}'`;
+		if (!SOURCE_EXTENSION.test(e.file)) { notes.push(`skipped '${e.file}': not a C/C++ source`); continue; }
+		const cwd = typeof e.directory === 'string' ? hostToGuest(e.directory, GUEST_WORKSPACE, root) : GUEST_WORKSPACE;
+		const guest = cwd === undefined ? undefined : hostToGuest(e.file, cwd, root);
+		if (cwd === undefined || guest === undefined) { notes.push(`skipped '${e.file}': outside the workspace folder`); continue; }
+		let tokens = Array.isArray(e.arguments) ? e.arguments.map(String) : splitArgs((e.command as string).replace(/\\(?!["'\s])/g, '/'));
+		while (tokens.length > 0 && /^(ccache|sccache|distcc)$/i.test(programStem(tokens[0]))) { tokens = tokens.slice(1); }
+		if (tokens.length === 0) { throw new ProjectModelError(`vscwClang: ${label} has an empty command. Did you mean to regenerate the file?`); }
+		const unmappable = describeUnmappableCommand(tokens[0]);
+		if (unmappable !== undefined) { throw new ProjectModelError(`vscwClang: ${label}: ${unmappable}`); }
+		const mapped = mapArgs(tokens.slice(1), label, { mapDir: dir => hostToGuest(dir, cwd, root), onSource: () => undefined, database: true });
+		const problems = checkUserFlags(mapped.flags);
+		if (problems.length > 0) { throw new ProjectModelError(`vscwClang: ${label}: ${problems.join(' ')}`); }
+		const found = CMAKE_TARGET.exec(normalizeHostPath(mapped.output ?? (typeof e.output === 'string' ? e.output : '')))?.[1];
+		if (found !== undefined) { targets.add(found); }
+		if (target !== undefined && found !== target) { continue; }
+		const relative = toWorkspaceRelative(guest);
+		if (relative in perFileFlags) { notes.push(`skipped a second entry for '${relative}' (the first is used)`); continue; }
+		perFileFlags[relative] = mapped.flags;
+		mapped.notes.forEach(n => notes.push(`${relative}: ${n}`));
+	}
+	const sources = Object.keys(perFileFlags);
+	if (sources.length === 0) {
+		throw new ProjectModelError(`vscwClang: compile_commands.json has no usable C/C++ entries${target === undefined ? '' : ` for target '${target}'`} inside the workspace folder. Did you mean to open the folder the file was generated for?`);
+	}
+	return { sources, flags: [], notes, perFileFlags, targets: [...targets].sort(), mode: sources.some(f => perFileFlags[f].includes('-g')) ? 'debug' : 'release' };
+}
+
+/** Maps `compile_flags.txt` (one flag per line, relative paths from the workspace folder) onto flags for every source. */
+export function planFromCompileFlags(text: string): BuildPlan {
+	const args = text.replace(/^﻿/, '').split(/\r?\n/).map(l => l.trim()).filter(l => l !== '');
+	const { flags, notes } = mapArgs(args, 'compile_flags.txt', { mapDir: dir => { try { return toGuestPath(dir, GUEST_WORKSPACE); } catch { return undefined; } }, onSource: () => undefined, database: true });
+	const problems = checkUserFlags(flags);
+	if (problems.length > 0) { throw new ProjectModelError(`vscwClang: compile_flags.txt: ${problems.join(' ')}`); }
+	return { sources: [], flags, notes, mode: flags.includes('-g') ? 'debug' : 'release' };
 }
 
 function isBuildGroup(group: unknown): { build: boolean; isDefault: boolean } {

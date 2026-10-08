@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { VscwClangDebugAdapter } from './debug/debugAdapter';
 import { buildWorkspace, type BuildOptions } from './buildWorkspace';
-import { chooseRun, defaultBuildOptions, trackActiveCppFile } from './projectConfig';
+import { chooseCompileDatabase, chooseRun, defaultBuildOptions, trackActiveCppFile } from './projectConfig';
 import { runProgram } from './runProgram';
 import { joinArgs, splitArgs } from './toolchain/runEnvironment';
 import { registerTaskProvider } from './tasks';
@@ -16,7 +16,9 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscwclang.build', async () => {
-			const { folder, output, result } = await buildWorkspace(context, log, buildOptionsFor(log));
+			const options = await buildOptionsFor(context, log);
+			if (options.cancelled) { return; }
+			const { folder, output, result } = await buildWorkspace(context, log, options.build);
 			publishDiagnostics(diagnostics, folder, result.parsed, output);
 			reportBuild(log, output, result.exitCode);
 		}),
@@ -59,9 +61,14 @@ export function activate(context: vscode.ExtensionContext) {
 
 const LAST_ARGS_KEY = 'vscwclang.lastRunArgs';
 
-function buildOptionsFor(log: vscode.OutputChannel): BuildOptions | undefined {
+/** Build's options: the default `tasks.json` build task, else `compile_commands.json`/`compile_flags.txt`, else the settings (undefined). */
+async function buildOptionsFor(context: vscode.ExtensionContext, log: vscode.OutputChannel): Promise<{ cancelled: boolean; build?: BuildOptions }> {
 	const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
-	return folder && defaultBuildOptions(folder, log);
+	if (!folder) { return { cancelled: false }; }
+	const fromTask = defaultBuildOptions(folder, log);
+	if (fromTask !== undefined) { return { cancelled: false, build: fromTask }; }
+	const database = await chooseCompileDatabase(context, folder, log);
+	return { cancelled: database.cancelled, build: database.options };
 }
 
 /** Arguments and build for Run: from `launch.json` and its build task if present, else the `vscwclang` settings. */
