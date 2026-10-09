@@ -22,6 +22,8 @@ See `documents/design.md`.
 
 See `documents/remaining_work.md`. Briefly: toolchain host and in-browser compile, tasks/run, debug-build instrumentation, lldb reactor integration, full DAP.
 
+Aspirational, unscheduled stretch goal: compile clang itself (and ideally run its test suite) entirely inside this extension in the browser, with nothing installed on the desktop. Unlikely to ever be reached, but it's a useful compass for prioritizing work that scales toward a real compiler over work that only serves toy programs.
+
 ## 5. Credits
 
 Designed and overseen by [Ambeco](https://github.com/Ambeco), and coded mostly by Claude (or similar).
