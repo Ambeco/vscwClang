@@ -47,6 +47,11 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 ## Milestone 3: language support (optional, high value)
 - Basic C++ editing UX (snippets, file associations).
 - V3 idea: clangd (completion, go-to-definition, hover, diagnostics as you type) running as wasm behind a language client, filling the third of cpptools' three roles (design.md "Scope"). **clangd has not been ported to wasm yet; viability is unknown.** First check whether the llvm-project fork's artifacts can build `clangd.wasm` (single-thread, no process spawning, reading the sysroot memory FS and workspace files), how large it is, and how it would be hosted (the V1 `wasm-wasi-core` host or the V2 Worker host).
+- **Next investigation (in the `llvm-project` fork, before any V2 host work here):** clangd was previously assumed independent of this extension's hosting decisions; it is not, once it's a real dependency for IntelliSense. Before committing effort to V2 (the Worker host with spawn hook and threading, currently justified only by the sidestepped trap-hang and unimplemented concurrent compiles/threaded wasip1), answer whether clangd forces V2:
+  1. Can clangd build for `wasm32-wasip1` at all (single-thread, no fork/exec/process spawn)?
+  2. Roughly how large is `clangd.wasm`, independent of hosting — does it break the existing size-cap sidestep on its own?
+  3. Does clangd need real threads/spawn to be usable (its background-index worker thread), or can a single-threaded, blocking-per-request mode work acceptably in a browser IDE?
+  If clangd needs threads/spawn to be usable, that's a scope-justified reason to prioritize V2. If it can run credibly single-threaded, V1 may carry it and V2 stays deferred.
 - CMake/Make/Bazel/Meson support: **Plan A (decided), not started** — a separate extension that drives those build systems and feeds this one (and clangd, once it exists) via `compile_commands.json`, which this extension already reads (design.md "Project model and integration"). **Plan B (fallback only)** is a reasonable CMake subset implemented directly in this extension, only if Plan A proves impractical.
 
 ## Milestone 4: debug build + hook runtime
