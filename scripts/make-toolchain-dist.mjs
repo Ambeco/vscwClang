@@ -46,6 +46,11 @@ for (const [wasmName, zipName] of [['clang.wasm', 'clang.zip'], ['lld.wasm', 'll
 	const content = readFileSync(join(artifacts, 'bin', wasmName));
 	add(wasmName, content, 'zip', zipSync({ [wasmName]: [content, { level: 9 }] }), zipName);
 }
+const clangdPath = join(artifacts, 'bin', 'clangd.wasm');
+if (existsSync(clangdPath)) {
+	const content = readFileSync(clangdPath);
+	add('clangd.wasm', content, 'zip', zipSync({ 'clangd.wasm': [content, { level: 9 }] }), 'clangd.zip');
+}
 const sysroot = readFileSync(join(artifacts, 'zips', 'sysroot.zip'));
 add('sysroot.zip', sysroot, 'raw', sysroot, 'sysroot.zip');
 const flags = readFileSync(join(artifacts, 'compile-flags.json'));
