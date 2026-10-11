@@ -36,7 +36,7 @@ This is an early release.
 - **Terminal input has no end-of-file key.** A program that reads until EOF waits until you press Ctrl+C.
 - **Crashes.** A failed `assert`, `abort()` or `std::terminate` ends the program with `exited with code 134 (aborted)`. Other crashes (out-of-bounds memory access, division by zero, stack overflow) leave the terminal waiting with no message until you press Ctrl+C, because the WebAssembly runtime doesn't report them.
 - **No debugger yet.** Breakpoints and stepping are planned but not implemented.
-- **No code completion or IntelliSense.** This extension builds and runs code; it doesn't provide language features.
+- **IntelliSense is early.** A clangd language server (WebAssembly, single-threaded) provides completion, hover and go-to-definition. Because it has no background indexing thread, the extension indexes your workspace sources one file at a time after startup (progress shows in the status bar), starting with files named by your `tasks.json`/`launch.json`, then files near the ones you have open. Until it finishes, cross-file results can be incomplete, and editing may feel slower. The `vscwclang.indexing.enabled`, `vscwclang.indexing.pauseMs` and `vscwclang.indexing.holdOpenMs` settings turn indexing off or tune its pacing. Opening a C/C++ file downloads clangd on first use.
 
 ## What your program can see
 
