@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { defaultBuildTask, isCompilerTask, listLaunches, listTasks, planFromTask, programStem, resolveVariables, taskForLaunch, toGuestPath, type VariableContext } from '../../toolchain/projectModel';
+import { configuredSources, defaultBuildTask, isCompilerTask, listLaunches, listTasks, planFromTask, programStem, resolveVariables, taskForLaunch, toGuestPath, type VariableContext } from '../../toolchain/projectModel';
 
 const ctx: VariableContext = { folderName: 'proj', file: 'src/app/main.cpp' };
 
@@ -178,6 +178,17 @@ suite('launch.json and task selection', () => {
 		assert.strictEqual(taskForLaunch(tasks, { name: 'x', args: [], program: 'nomatch' }, ctx)?.label, 'C/C++: g++ build active file');
 		assert.strictEqual(taskForLaunch(tasks, undefined, ctx)?.label, 'C/C++: g++ build active file');
 		assert.strictEqual(taskForLaunch(listTasks([{ label: 'z', command: 'g++', args: ['z.cpp'] }]), undefined, ctx), undefined);
+	});
+
+	test('configuredSources: default build task plus each launch config task, skipping non-compiler tasks', () => {
+		const set = listTasks([
+			{ label: 'make', command: 'make' },
+			{ label: 'default', command: 'g++', args: ['a.cpp', 'b.cpp'], group: { kind: 'build', isDefault: true } },
+			{ label: 'other', command: 'g++', args: ['o.cpp', 'a.cpp'] },
+		]);
+		const launches = [{ name: 'l', args: [], preLaunchTask: 'other' }, { name: 'm', args: [], preLaunchTask: 'make' }];
+		assert.deepStrictEqual(configuredSources(set, launches, ctx), ['a.cpp', 'b.cpp', 'o.cpp']);
+		assert.deepStrictEqual(configuredSources([], [], ctx), []);
 	});
 
 	test('isCompilerTask looks at the first word only', () => {

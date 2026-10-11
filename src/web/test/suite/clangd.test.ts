@@ -281,4 +281,26 @@ suite('vscwClang clangd (in browser)', function () {
 		assert.strictEqual(def[0].uri, uri('lib.cpp'), 'expected the definition in the now-closed lib.cpp, not a header declaration only');
 		await client.shutdown();
 	});
+
+	test('fake-opening a .cpp also indexes its header\'s own symbols (an inline function defined only in the header)', async () => {
+		// quintuple is defined entirely in lib.h (no .cpp has its own definition), so this isolates whether
+		// sweeping a .cpp that #includes a header is enough to index that header's symbols, or whether
+		// documents/remaining_work.md's "their includes" priority tier is independently needed.
+		const libHeader = 'inline int quintuple(int x) { return x * 5; }\n';
+		const otherText = '#include "lib.h"\nint useOther() { return quintuple(1); }\n';
+		const mainText = '#include "lib.h"\nint main() { return quintuple(5); }\n';
+		const client = await withCompileCommands({ 'lib.h': libHeader, 'other.cpp': otherText, 'main.cpp': mainText });
+		await client.init();
+		// Sweep: open then close other.cpp (which pulls in lib.h), without ever opening lib.h or main.cpp directly.
+		await client.open('other.cpp', otherText);
+		await client.waitNote(n => n.method === 'textDocument/publishDiagnostics' && (n.params as { uri: string }).uri === uri('other.cpp'));
+		await client.close('other.cpp');
+		await client.open('main.cpp', mainText);
+		await client.waitNote(n => n.method === 'textDocument/publishDiagnostics' && (n.params as { uri: string }).uri === uri('main.cpp'));
+		const callLine = 1, callChar = mainText.split('\n')[1].indexOf('quintuple') + 1;
+		const def = await client.request('textDocument/definition', { textDocument: { uri: uri('main.cpp') }, position: { line: callLine, character: callChar } }) as { uri: string }[];
+		assert.ok(Array.isArray(def) && def.length > 0, `go-to-definition found nothing for a header-only symbol after sweeping a different TU that includes it: ${JSON.stringify(def)}`);
+		assert.strictEqual(def[0].uri, uri('lib.h'), `expected the definition in lib.h: ${JSON.stringify(def)}`);
+		await client.shutdown();
+	});
 });

@@ -26,7 +26,9 @@
     "onCommand:vscwclang.run",
     "onCommand:vscwclang.runWithArgs",
     "onTaskType:vscwclang",
-    "onTaskType:cppbuild"
+    "onTaskType:cppbuild",
+    "onLanguage:c",
+    "onLanguage:cpp"
   ],
   "extensionDependencies": [
     "ms-vscode.wasm-wasi-core"
@@ -62,6 +64,23 @@
           ],
           "markdownDescription": "Globs, relative to the workspace folder, of the source files that `vscwClang: Build` compiles together into one program. Narrow this (e.g. `[\"src/**/*.cpp\"]`) when the folder holds several programs, such as tests that each define `main`."
         },
+        "vscwclang.indexing.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Index the workspace's source files in the background so go-to-definition, find symbol and completion see the whole project, not just open files. Progress shows in the status bar. Turn off if editing feels sluggish while it runs; only open files are then known to the language server."
+        },
+        "vscwclang.indexing.pauseMs": {
+          "type": "number",
+          "default": 200,
+          "minimum": 0,
+          "markdownDescription": "Pause in milliseconds between files while indexing, leaving a gap for completion and hover requests. Raise it if the editor feels slow while indexing; lower it to finish indexing sooner."
+        },
+        "vscwclang.indexing.holdOpenMs": {
+          "type": "number",
+          "default": 300,
+          "minimum": 0,
+          "markdownDescription": "How long in milliseconds each file is held open for the language server to parse it while indexing. Raise it for very large files that end up only partly indexed."
+        },
         "vscwclang.compileCommands": {
           "type": "string",
           "default": "",
@@ -81,7 +100,20 @@
             "type": "string"
           },
           "default": [
-            "node_modules", ".git", ".vscwclang", ".vs", "enc_temp_folder", "Debug", "Release", "x64", "x86", "build", "out", "dist", "CMakeFiles", ".cache"
+            "node_modules",
+            ".git",
+            ".vscwclang",
+            ".vs",
+            "enc_temp_folder",
+            "Debug",
+            "Release",
+            "x64",
+            "x86",
+            "build",
+            "out",
+            "dist",
+            "CMakeFiles",
+            ".cache"
           ],
           "markdownDescription": "Directory names (at any depth, case-insensitive) whose files are never compiled: IDE scratch folders and build output. Replaces the default list when set."
         },
@@ -96,7 +128,10 @@
         "vscwclang.run.env": {
           "type": "object",
           "additionalProperties": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "default": {},
           "markdownDescription": "Environment variables for the program, added to the defaults `HOME=/home/user`, `TMPDIR=/tmp`, `USER=user`, `LANG=C.UTF-8`. Set a variable to `null` to remove a default."
@@ -287,6 +322,7 @@
   },
   "dependencies": {
     "@vscode/wasm-wasi": "^1.0.1",
-    "fflate": "^0.8.3"
+    "fflate": "^0.8.3",
+    "vscode-languageclient": "^10.1.2"
   }
 }

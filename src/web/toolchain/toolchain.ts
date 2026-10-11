@@ -157,11 +157,16 @@ async function addAbortShim(objects: MemoryFileSystem, clang: (args: string[], e
 let sysrootPromise: Promise<SysrootFs> | undefined;
 const modules = new Map<string, Promise<WebAssembly.Module>>();
 
-let store: ToolchainStore | undefined;
+const stores = new Map<string, ToolchainStore>();
 
-/** The shared toolchain cache; `vscwclang.downloadToolchain` and every build go through it. */
+/** The shared toolchain cache for `context.globalStorageUri`; `vscwclang.downloadToolchain` and every build go through it. */
 export function getToolchainStore(context: StoreContext, log: vscode.OutputChannel): ToolchainStore {
-	store ??= new ToolchainStore(context, log);
+	const key = context.globalStorageUri.toString();
+	let store = stores.get(key);
+	if (!store) {
+		store = new ToolchainStore(context, log);
+		stores.set(key, store);
+	}
 	return store;
 }
 

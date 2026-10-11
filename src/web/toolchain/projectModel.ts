@@ -425,3 +425,18 @@ export function taskForLaunch(tasks: readonly TaskEntry[], launch: LaunchEntry |
 	}
 	return defaultBuildTask(tasks);
 }
+
+/**
+ * Workspace-relative files/globs that the build config names: the default build task's sources plus those of
+ * the task each `launch.json` configuration builds. Tasks that are not mappable compiler tasks are skipped
+ * silently (the index sweep only wants a hint of which files matter, not an error).
+ */
+export function configuredSources(tasks: readonly TaskEntry[], launches: readonly LaunchEntry[], ctx: VariableContext): string[] {
+	const found = new Set<string>();
+	const candidates = [defaultBuildTask(tasks), ...launches.map(l => taskForLaunch(tasks, l, ctx))];
+	for (const entry of candidates) {
+		if (entry === undefined || !isCompilerTask(entry.task)) { continue; }
+		try { planFromTask(entry.task, ctx).sources.forEach(s => found.add(s)); } catch { /* unmappable task: no hint */ }
+	}
+	return [...found];
+}
