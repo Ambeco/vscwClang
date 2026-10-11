@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { DEFAULT_EXCLUDED_DIRS, isExcludedSource } from './toolchain/sourceFilter';
 import { artifactsBelongInFolder, artifactSubdir, storageKeyFor } from './toolchain/artifactPolicy';
 import { build, type BuildResult } from './toolchain/toolchain';
+import type { ParsedDiagnostic } from './toolchain/diagnostics';
 
 export interface WorkspaceBuild {
 	folder: vscode.Uri;
@@ -32,8 +33,11 @@ export interface BuildOptions {
  * Sources come from `sourceGlobs` (default: the `vscwclang.sourceGlobs` setting), minus any file under a directory
  * named in `vscwclang.sourceExclude` (IDE scratch and build-output folders by default). A glob without wildcards
  * names one file: it is never excluded, and it is an error if it does not exist.
+ *
+ * `onDiagnostics` is called with `[]` when the build starts (so stale diagnostics can be cleared) and then with
+ * all diagnostics so far after each source compiles; the returned `result.parsed` is still the final word.
  */
-export async function buildWorkspace(context: vscode.ExtensionContext, log: vscode.OutputChannel, options: BuildOptions = {}): Promise<WorkspaceBuild> {
+export async function buildWorkspace(context: vscode.ExtensionContext, log: vscode.OutputChannel, options: BuildOptions = {}, onDiagnostics?: (parsed: ParsedDiagnostic[], folder: vscode.Uri, output: vscode.Uri) => void): Promise<WorkspaceBuild> {
 	const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
 	if (!folder) { throw new Error('vscwClang: open a workspace folder first.'); }
 	const mode = options.mode ?? 'release';
@@ -63,7 +67,8 @@ export async function buildWorkspace(context: vscode.ExtensionContext, log: vsco
 	const sources = [...found.values()].filter(uri => explicit.has(uri.toString()) || !isExcludedSource(uri.path.slice(folder.path.length), excluded));
 	log.appendLine(`[vscwclang] ${sources.length} source file(s) found (skipping directories named: ${excluded.join(', ')})`);
 	const sourceFlags = Object.fromEntries(Object.entries(options.sourceFlags ?? {}).map(([relative, flags]) => [`/workspace/${relative}`, flags]));
-	const result = await build({ sources, output, flags: options.flags ?? settings.get<string[]>('flags', []), sourceFlags, mode }, log, context);
+	onDiagnostics?.([], folder, output);
+	const result = await build({ sources, output, flags: options.flags ?? settings.get<string[]>('flags', []), sourceFlags, mode, onDiagnostics: onDiagnostics && (parsed => onDiagnostics(parsed, folder, output)) }, log, context);
 	log.appendLine(result.diagnostics);
 	await writeBuildLog(vscode.Uri.joinPath(output, '..'), result);
 	return { folder, output, result };

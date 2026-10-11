@@ -17,6 +17,8 @@ export interface BuildRequest {
 	sourceFlags?: Record<string, string[]>;
 	/** "debug" adds -O0 -g (hook instrumentation and --export=__stack_pointer come with Milestone 4). */
 	mode: 'debug' | 'release';
+	/** Called after each source finishes compiling with every diagnostic so far, so errors can show before the build ends. */
+	onDiagnostics?: (parsedSoFar: ParsedDiagnostic[]) => void;
 }
 
 export interface BuildResult {
@@ -94,6 +96,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 			...modeFlags, ...userFlags.compile, ...ownFlags.get(source.guest)!.compile, '-c', source.guest, '-o', '-'], { captureStdout: true });
 		log.appendLine(`[vscwclang] compiled ${source.guest} in ${Date.now() - started} ms (exit ${cc.exitCode})`);
 		diagnostics += cc.stderr;
+		if (cc.stderr !== '') { request.onDiagnostics?.(parseDiagnostics(diagnostics)); }
 		if (cc.exitCode === 0) {
 			objects.createFile(objectName, cc.stdout);
 			objectPaths.push(`/obj/${objectName}`);

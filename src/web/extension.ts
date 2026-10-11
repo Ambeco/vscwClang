@@ -21,7 +21,7 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('vscwclang.build', async () => {
 			const options = await buildOptionsFor(context, log);
 			if (options.cancelled) { return; }
-			const { folder, output, result } = await buildWorkspace(context, log, options.build);
+			const { folder, output, result } = await buildWorkspace(context, log, options.build, (parsed, f, o) => publishDiagnostics(diagnostics, f, parsed, o));
 			publishDiagnostics(diagnostics, folder, result.parsed, output);
 			reportBuild(log, output, result.exitCode);
 		}),
@@ -84,7 +84,7 @@ async function runPlan(context: vscode.ExtensionContext, log: vscode.OutputChann
 }
 
 async function buildAndRun(context: vscode.ExtensionContext, log: vscode.OutputChannel, diagnostics: vscode.DiagnosticCollection, args: string[], build?: BuildOptions): Promise<void> {
-	const { folder, output, result } = await buildWorkspace(context, log, build);
+	const { folder, output, result } = await buildWorkspace(context, log, build, (parsed, f, o) => publishDiagnostics(diagnostics, f, parsed, o));
 	publishDiagnostics(diagnostics, folder, result.parsed, output);
 	if (reportBuild(log, output, result.exitCode)) { await runProgram(context, output, args); }
 }

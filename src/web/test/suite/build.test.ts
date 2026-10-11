@@ -241,6 +241,20 @@ suite('vscwClang build (in browser)', function () {
 		assert.strictEqual(errors[0].line, 2);
 	});
 
+	test('onDiagnostics reports errors after the failing source, before later sources finish', async () => {
+		await write('early-bad.cpp', 'int a() { return missing; }\n');
+		await write('late-ok.cpp', 'int b() { return 0; }\n');
+		const seen: number[] = [];
+		const logged: string[] = [];
+		const watch = { ...log, appendLine: (s: string) => { logged.push(s); log.appendLine(s); } } as vscode.OutputChannel;
+		const result = await build({
+			sources: [uri('early-bad.cpp'), uri('late-ok.cpp')], output: uri('early.wasm'), flags: [], mode: 'release',
+			onDiagnostics: parsed => seen.push(parsed.filter(d => d.severity === 'error').length + logged.filter(l => l.includes('compiled') && l.includes('late-ok')).length * 100),
+		}, watch, context);
+		assert.notStrictEqual(result.exitCode, 0);
+		assert.deepStrictEqual(seen, [1], 'one callback, with the error, before late-ok.cpp had finished compiling');
+	});
+
 	test('task provider offers build tasks and the problem matcher produces diagnostics', async function () {
 		this.timeout(60_000);
 		await vscode.extensions.all.find(e => e.id.endsWith('.vscwclang'))?.activate();
