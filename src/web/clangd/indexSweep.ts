@@ -70,6 +70,8 @@ export class IndexSweep implements vscode.Disposable {
 	private readonly priorityQueue: string[] = [];
 	private readonly queue: string[] = [];
 	private readonly queued = new Set<string>();
+	/** Real (host) uri for each protocol uri seen; the protocol uri alone (guest path) cannot be read from the host file system. */
+	private readonly hostUris = new Map<string, vscode.Uri>();
 	private readonly ownership = new Map<string, Ownership>();
 	/** Directories holding at least one currently (really) open document; see "priority tiers" in the class doc. */
 	private readonly realDirCounts = new Map<string, number>();
@@ -121,6 +123,7 @@ export class IndexSweep implements vscode.Disposable {
 				continue;
 			}
 			this.queued.add(protocolUri);
+			this.hostUris.set(protocolUri, uri);
 			this.total++;
 			this.queueFor(protocolUri, tier).push(protocolUri);
 		}
@@ -209,7 +212,7 @@ export class IndexSweep implements vscode.Disposable {
 	}
 
 	private async indexOneFile(protocolUri: string): Promise<void> {
-		const uri = vscode.Uri.parse(protocolUri);
+		const uri = this.hostUris.get(protocolUri) ?? vscode.Uri.parse(protocolUri);
 		let text: string;
 		try {
 			text = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
@@ -238,6 +241,7 @@ export class IndexSweep implements vscode.Disposable {
 		// The real close already told clangd the file is gone; queue it again so the sweep re-indexes it later.
 		if (!this.queued.has(protocolUri)) {
 			this.queued.add(protocolUri);
+			this.hostUris.set(protocolUri, doc.uri);
 			this.total++;
 			this.queueFor(protocolUri).push(protocolUri);
 			this.reportProgress();

@@ -203,6 +203,26 @@ suite('vscwClang IndexSweep', function () {
 		}
 	});
 
+	test('files are read from their host uri even when the protocol uri is a guest path', async () => {
+		const file = vscode.Uri.joinPath(dir, 'mapped.cpp');
+		await vscode.workspace.fs.writeFile(file, encoder.encode('int mapped() { return 7; }\n'));
+		const opened: { uri: string; text: string }[] = [];
+		const sender: NotificationSender = {
+			sendNotification: (type, params) => {
+				if (type.method === 'textDocument/didOpen') { opened.push({ uri: (params as { textDocument: { uri: string } }).textDocument.uri, text: (params as { textDocument: { text: string } }).textDocument.text }); }
+				return Promise.resolve();
+			},
+		};
+		const sweep = new IndexSweep(sender, uri => `file:///workspace/${uri.path.slice(uri.path.lastIndexOf('/') + 1)}`, log, { holdOpenMs: 10, pauseMs: 0 });
+		try {
+			sweep.enqueue([file]);
+			await sweep.waitUntilIdle();
+			assert.deepStrictEqual(opened, [{ uri: 'file:///workspace/mapped.cpp', text: 'int mapped() { return 7; }\n' }]);
+		} finally {
+			sweep.dispose();
+		}
+	});
+
 	test('enqueue skips a file that is already really open', async () => {
 		const file = vscode.Uri.joinPath(dir, 'already-open.cpp');
 		await vscode.workspace.fs.writeFile(file, encoder.encode('int main() { return 0; }\n'));
