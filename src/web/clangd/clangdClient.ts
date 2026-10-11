@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { Wasm, type WasmProcess } from '@vscode/wasm-wasi';
 import { LanguageClient, ReadableStreamMessageReader, WriteableStreamMessageWriter, type LanguageClientOptions, type MessageTransports } from 'vscode-languageclient/browser';
-import { loadSysroot } from '../toolchain/sysroot';
+import { loadCompileFlags, loadSysroot } from '../toolchain/sysroot';
+import { fallbackFlags } from './fallbackFlags';
 import { getToolchainStore } from '../toolchain/toolchain';
 import { GUEST_WORKSPACE, fromGuestPath, toGuestPath } from '../toolchain/guestPaths';
 import { configuredSources } from '../toolchain/projectModel';
@@ -27,7 +28,8 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 
 	const toolchain = getToolchainStore(context, log);
 	const wasm = await Wasm.load();
-	const [bits, sysroot] = await Promise.all([toolchain.getFile('clangd.wasm'), loadSysroot(wasm, toolchain)]);
+	const [bits, sysroot, flags] = await Promise.all([toolchain.getFile('clangd.wasm'), loadSysroot(wasm, toolchain), loadCompileFlags(toolchain)]);
+	const compileFlags = flags.compile['wasm32-wasip1'].map(f => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource'));
 	const module = await WebAssembly.compile(bits);
 
 	const tmpDir = vscode.Uri.joinPath(context.globalStorageUri, CLANGD_TMP);
@@ -95,6 +97,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	const clientOptions: LanguageClientOptions = {
 		documentSelector: [{ language: 'c' }, { language: 'cpp' }],
 		uriConverters: { code2Protocol, protocol2Code },
+		initializationOptions: { fallbackFlags: fallbackFlags(compileFlags, vscode.workspace.getConfiguration('vscwclang').get<string[]>('flags', [])) },
 		middleware: {
 			// Must run (and close any fake-indexed copy) before `next()` sends the real didOpen; see indexSweep.ts.
 			didOpen: async (document, next) => { await indexSweep.willRealOpen(document); return next(document); },

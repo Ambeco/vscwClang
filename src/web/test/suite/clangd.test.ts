@@ -5,6 +5,7 @@ import { loadSysroot, type SysrootFs } from '../../toolchain/sysroot';
 import { getToolchainStore } from '../../toolchain/toolchain';
 import { describeUnsupportedImports } from '../../toolchain/wasiImports';
 import { GUEST_WORKSPACE } from '../../toolchain/guestPaths';
+import { fallbackFlags } from '../../clangd/fallbackFlags';
 import { GUEST_TMP } from '../../toolchain/runEnvironment';
 
 /**
@@ -166,8 +167,8 @@ suite('vscwClang clangd (in browser)', function () {
 			return n;
 		}
 
-		async init(): Promise<void> {
-			await this.request('initialize', { processId: null, rootUri: `file://${GUEST_PROJECT}`, capabilities: {} });
+		async init(initializationOptions?: unknown): Promise<void> {
+			await this.request('initialize', { processId: null, rootUri: `file://${GUEST_PROJECT}`, capabilities: {}, initializationOptions });
 			await this.notify('initialized', {});
 		}
 
@@ -211,6 +212,18 @@ suite('vscwClang clangd (in browser)', function () {
 		}));
 		return start({ ...files, 'compile_commands.json': JSON.stringify(commands) });
 	}
+
+	test('fallbackFlags let a file with no compile_commands entry find libc++ headers', async () => {
+		const text = '#include <fstream>\n#include <iostream>\nint main() { std::ifstream in("x"); std::cout << 1; }\n';
+		const sysrootFlags = CPP_FLAGS.filter(f => !f.startsWith('-std')).map(f => f.replace('--target=wasm32-wasip1', '--target=wasm32-unknown-wasip1'));
+		const client = await start({ 'nocommands.cpp': text });
+		await client.init({ fallbackFlags: fallbackFlags(sysrootFlags, []) });
+		await client.open('nocommands.cpp', text);
+		const note = await client.waitNote(n => n.method === 'textDocument/publishDiagnostics' && (n.params as { uri: string }).uri === uri('nocommands.cpp'));
+		const diags = (note.params as { diagnostics: { message: string }[] }).diagnostics;
+		assert.deepStrictEqual(diags.filter(d => /not found|no member named/i.test(d.message)), [], JSON.stringify(diags));
+		await client.shutdown();
+	});
 
 	test('starts, initializes, and shuts down cleanly over wasm-wasi-core pipes', async () => {
 		const client = await start();
