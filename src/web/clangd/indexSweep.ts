@@ -90,7 +90,7 @@ export class IndexSweep implements vscode.Disposable {
 		private readonly log: vscode.OutputChannel,
 		private readonly options: IndexSweepOptions = {},
 	) {
-		for (const doc of vscode.workspace.textDocuments) {
+		for (const doc of vscode.workspace.textDocuments.filter(isCppDocument)) {
 			const protocolUri = code2Protocol(doc.uri);
 			this.ownership.set(protocolUri, 'real');
 			this.addRealDir(protocolUri);
@@ -233,6 +233,8 @@ export class IndexSweep implements vscode.Disposable {
 	}
 
 	private onRealClose(doc: vscode.TextDocument): void {
+		// Output channels, logs and other non-source documents also fire close events; code2Protocol would map them to /workspace.
+		if (!isCppDocument(doc)) { return; }
 		const protocolUri = this.code2Protocol(doc.uri);
 		if (this.ownership.get(protocolUri) === 'real') {
 			this.ownership.delete(protocolUri);
@@ -248,6 +250,10 @@ export class IndexSweep implements vscode.Disposable {
 		}
 		this.wake();
 	}
+}
+
+function isCppDocument(doc: vscode.TextDocument): boolean {
+	return doc.languageId === 'c' || doc.languageId === 'cpp';
 }
 
 function languageIdFor(uri: vscode.Uri): string {
