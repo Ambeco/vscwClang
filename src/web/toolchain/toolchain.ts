@@ -5,6 +5,7 @@ import { checkUserFlags, splitFlags } from './flagPolicy';
 import { GUEST_WORKSPACE, toGuestPath } from './guestPaths';
 import { loadCompileFlags, loadSysroot, type SysrootFs } from './sysroot';
 import { ToolchainStore, type StoreContext } from './toolchainStore';
+import debugStubSource from '../debug/debugStub.c';
 
 export interface BuildRequest {
 	/** Source files to compile; all must be inside the first workspace folder. */
@@ -15,7 +16,7 @@ export interface BuildRequest {
 	flags: string[];
 	/** Extra flags for single sources, keyed by guest path (`/workspace/src/a.cpp`), added after `flags` with the same policy and routing. */
 	sourceFlags?: Record<string, string[]>;
-	/** "debug" adds -O0 -g (hook instrumentation and --export=__stack_pointer come with Milestone 4). */
+	/** "debug" adds -O0 -g, sancov instrumentation, and links the debug stub (debug/debugStub.c). */
 	mode: 'debug' | 'release';
 	/** Called after each source finishes compiling with every diagnostic so far, so errors can show before the build ends. */
 	onDiagnostics?: (parsedSoFar: ParsedDiagnostic[]) => void;
@@ -81,11 +82,13 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 	const objects = await wasm.createMemoryFileSystem();
 	const run = (wasmFile: string, args: string[], extra?: ToolExtras) => runTool(wasm, toolchain, sysroot, wasmFile, args, extra);
 	const userFlags = splitFlags(request.flags, GUEST_WORKSPACE);
-	const modeFlags = request.mode === 'debug' ? ['-O0', '-g'] : [];
+	const modeFlags = request.mode === 'debug' ? ['-O0', '-g', '-fsanitize-coverage=trace-pc-guard'] : [];
 	const ownFlags = new Map(sources.map(s => [s.guest, splitFlags(request.sourceFlags?.[s.guest] ?? [], GUEST_WORKSPACE)]));
 	const linkFlags = [...new Set([...userFlags.link, ...[...ownFlags.values()].flatMap(f => f.link)])];
 	const objectPaths: string[] = [];
-	const abortShim = await addAbortShim(objects, (args, extra) => run('clang.wasm', args, extra), flags.compile[SLICE].map(sub), log);
+	const clang = (args: string[], extra: ToolExtras) => run('clang.wasm', args, extra);
+	const abortShim = await addShim(objects, clang, flags.compile[SLICE].map(sub), log, ABORT_SHIM);
+	const debugStub = request.mode === 'debug' ? await addShim(objects, clang, flags.compile[SLICE].map(sub), log, DEBUG_STUB) : undefined;
 	for (const [i, source] of sources.entries()) {
 		const base = source.guest.slice(source.guest.lastIndexOf('/') + 1);
 		const objectName = `${i}-${base}.o`;
@@ -108,7 +111,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 		log.appendLine(`[vscwclang] linking ${output}`);
 		const link = flags.link[SLICE].map(sub);
 		const linkStarted = Date.now();
-		const ld = await run('lld.wasm', ['wasm-ld', link[0], ...objectPaths, ...(abortShim ? [abortShim] : []), ...linkFlags, ...link.slice(1), '-o', output], { objects, outputDir: outputInWorkspace ? undefined : outputDir });
+		const ld = await run('lld.wasm', ['wasm-ld', link[0], ...objectPaths, ...(abortShim ? [abortShim] : []), ...(debugStub ? [debugStub, '--export=__sanitizer_cov_trace_pc_guard'] : []), ...linkFlags, ...link.slice(1), '-o', output], { objects, outputDir: outputInWorkspace ? undefined : outputDir });
 		log.appendLine(`[vscwclang] linked in ${Date.now() - linkStarted} ms (exit ${ld.exitCode})`);
 		diagnostics += ld.stderr;
 		exitCode = ld.exitCode;
@@ -139,21 +142,29 @@ export const ABORT_SHIM_SOURCE = [
 	'',
 ].join(NL);
 
-let abortShimObject: Uint8Array<ArrayBuffer> | undefined;
+interface Shim { name: string; source: string; flags: string[]; failure: string }
 
-/** Puts the compiled abort shim in `objects` and returns its guest path; undefined (build goes on) if it cannot be compiled. */
-async function addAbortShim(objects: MemoryFileSystem, clang: (args: string[], extra: ToolExtras) => Promise<{ exitCode: number; stderr: string; stdout: Uint8Array<ArrayBuffer> }>, compileFlags: string[], log: vscode.OutputChannel): Promise<string | undefined> {
-	if (!abortShimObject) {
-		objects.createFile('vscwclang-abort.c', new TextEncoder().encode(ABORT_SHIM_SOURCE));
-		const cc = await clang(['clang', ...compileFlags, '-fno-color-diagnostics', '-fno-caret-diagnostics', '-c', '/obj/vscwclang-abort.c', '-o', '-'], { captureStdout: true, objects });
+const ABORT_SHIM: Shim = { name: 'abort', source: ABORT_SHIM_SOURCE, flags: [], failure: 'a failed assert will leave the program hanging until Ctrl+C' };
+// Compiled without sancov (the stub is the hook), at -O2 because it runs on every basic block.
+const DEBUG_STUB: Shim = { name: 'debugstub', source: debugStubSource, flags: ['-O2'], failure: 'breakpoints will not work' };
+
+const shimObjects = new Map<string, Uint8Array<ArrayBuffer>>();
+
+/** Puts the compiled shim in `objects` and returns its guest path; undefined (build goes on) if it cannot be compiled. */
+async function addShim(objects: MemoryFileSystem, clang: (args: string[], extra: ToolExtras) => Promise<{ exitCode: number; stderr: string; stdout: Uint8Array<ArrayBuffer> }>, compileFlags: string[], log: vscode.OutputChannel, shim: Shim): Promise<string | undefined> {
+	let object = shimObjects.get(shim.name);
+	if (!object) {
+		objects.createFile(`vscwclang-${shim.name}.c`, new TextEncoder().encode(shim.source));
+		const cc = await clang(['clang', ...compileFlags, ...shim.flags, '-fno-color-diagnostics', '-fno-caret-diagnostics', '-c', `/obj/vscwclang-${shim.name}.c`, '-o', '-'], { captureStdout: true, objects });
 		if (cc.exitCode !== 0) {
-			log.appendLine(`[vscwclang] warning: could not build the abort() helper (exit ${cc.exitCode}); a failed assert will leave the program hanging until Ctrl+C. ${cc.stderr.trim()}`);
+			log.appendLine(`[vscwclang] warning: could not build the ${shim.name} helper (exit ${cc.exitCode}); ${shim.failure}. ${cc.stderr.trim()}`);
 			return undefined;
 		}
-		abortShimObject = cc.stdout;
+		object = cc.stdout;
+		shimObjects.set(shim.name, object);
 	}
-	objects.createFile('vscwclang-abort.o', abortShimObject);
-	return '/obj/vscwclang-abort.o';
+	objects.createFile(`vscwclang-${shim.name}.o`, object);
+	return `/obj/vscwclang-${shim.name}.o`;
 }
 
 // Caches survive across builds: unzipping the sysroot (~2 s) and compiling clang.wasm (~1 s) dominate small builds.

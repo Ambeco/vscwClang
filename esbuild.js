@@ -72,6 +72,7 @@ async function main() {
 		outdir: 'dist/web',
 		external: ['vscode'],
 		logLevel: 'silent',
+		loader: { '.c': 'text' },
 		// Node.js global to browser globalThis
 		define: {
 			global: 'globalThis',
