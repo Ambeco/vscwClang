@@ -33,6 +33,8 @@ function globToRegExp(glob: string): RegExp {
  *
  * A path is excluded if the glob matches it or any directory above it, so `**` + `/build` skips everything under
  * any `build` folder. Matching ignores case, since the folders being skipped often come from Windows tools.
+ *
+ * @helper
  */
 export function makeSourceExcluder(exclude: Readonly<Record<string, unknown>>): (relativePath: string) => boolean {
 	const patterns = Object.entries(exclude).filter(([, v]) => v === true).map(([glob]) => globToRegExp(glob));

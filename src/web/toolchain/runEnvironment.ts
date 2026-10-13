@@ -20,6 +20,8 @@ export function defaultRunEnvironment(extra: Record<string, string | null> = {})
  * escapes the next character. No globbing, variables or redirection.
  *
  * Throws on an unterminated quote, with a suggestion.
+ *
+ * @helper
  */
 export function splitArgs(line: string): string[] {
 	const args: string[] = [];
@@ -51,7 +53,7 @@ export function splitArgs(line: string): string[] {
 	return args;
 }
 
-/** Joins arguments back into a line that `splitArgs` reads as the same list (for pre-filling the prompt). */
+/** @helper Joins arguments back into a line that `splitArgs` reads as the same list (for pre-filling the prompt). */
 export function joinArgs(args: readonly string[]): string {
 	return args.map(a => (a !== '' && /^[\w@%+=:,./-]+$/.test(a)) ? a : `'${a.replace(/'/g, `'\\''`)}'`).join(' ');
 }

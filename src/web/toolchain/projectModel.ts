@@ -78,7 +78,7 @@ const DROPPED_FLAGS: Record<string, string> = {
 const VALUE_FLAGS = new Set(['-x', '-D', '-U', '-l', '-include', '-imacros', '-Xlinker', '-Xclang', '-Xpreprocessor', '-Xassembler', '-MF', '-MT', '-MQ', '-idirafter']);
 const PATH_FLAG = /^(-isystem|-iquote|-I|-L)(.*)$/;
 
-/** Name without directory and without a trailing `.exe` or `.wasm`, so a desktop `-o`/`program` and our output compare equal. */
+/** @helper Name without directory and without a trailing `.exe` or `.wasm`, so a desktop `-o`/`program` and our output compare equal. */
 export function programStem(path: string): string {
 	return (path.replace(/\\/g, '/').split('/').pop() ?? '').replace(/\.(exe|wasm)$/i, '');
 }
@@ -90,7 +90,7 @@ function unknownVariable(name: string): ProjectModelError {
 	return new ProjectModelError(`vscwClang: unsupported variable '\${${name}}'. ${hint}`);
 }
 
-/** Substitutes `${...}` variables with guest paths. */
+/** @helper Substitutes `${...}` variables with guest paths. */
 export function resolveVariables(text: string, ctx: VariableContext): string {
 	return text.replace(/\$\{([^}]*)\}/g, (_match, name: string) => {
 		const file = () => {
@@ -271,6 +271,8 @@ const isAbsoluteHostPath = (p: string) => p.startsWith('/') || /^[A-Za-z]:/.test
 /**
  * Maps a path from a compilation database (made on any machine) to a guest path: relative paths start at `cwd`,
  * absolute ones must lie under `root` (the host path of the workspace folder). Undefined when outside the workspace.
+ *
+ * @helper
  */
 export function hostToGuest(path: string, cwd: string, root: string): string | undefined {
 	const p = normalizeHostPath(path);

@@ -12,6 +12,8 @@ interface ChunkManifest {
  *
  * Extensions are the only viable place to load large binaries from on vscode.dev (CORS/COEP), and Marketplace
  * size caps are undocumented, so large files are shipped as chunks. The manifest's size and SHA-256 are checked.
+ *
+ * @helper
  */
 export async function readChunked(dir: vscode.Uri, name: string): Promise<Uint8Array<ArrayBuffer>> {
 	const manifestBytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(dir, `${name}.chunks.json`));

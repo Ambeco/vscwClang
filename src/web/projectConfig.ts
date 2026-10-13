@@ -19,7 +19,7 @@ export function trackActiveCppFile(): vscode.Disposable {
 	return vscode.window.onDidChangeActiveTextEditor(note);
 }
 
-/** Whether the user (not just the extension's default) set this setting anywhere. */
+/** @helper Whether the user (not just the extension's default) set this setting anywhere. */
 export function isUserSet(config: vscode.WorkspaceConfiguration, key: string): boolean {
 	const i = config.inspect(key);
 	return i !== undefined && [i.globalValue, i.workspaceValue, i.workspaceFolderValue, i.globalLanguageValue, i.workspaceLanguageValue, i.workspaceFolderLanguageValue].some(v => v !== undefined);

@@ -4,6 +4,23 @@ A VS Code for Web extension that compiles, runs and debugs C/C++ entirely in the
 `clang.wasm`/`lld.wasm` (built by the `llvm-project` fork) and an lldb-derived symbol/value library.
 Output is always WebAssembly (WASI); only minor restrictions are placed on compiler flags.
 
+## Layout
+```
+src/web/
+  extension.ts                 # activation, command registration
+  buildWorkspace.ts            # workspace build orchestration, artifact dir choice
+  projectConfig.ts             # settings, tasks.json and launch.json read from VS Code
+  runProgram.ts
+  tasks.ts
+  clangd/                      # language client and index sweep
+  debug/                       # inline DAP adapter, stub channel, lldb reactor host
+  toolchain/                   # vscode-free logic plus the compiler host (toolchain.ts)
+  test/suite/                  # *.node.test.ts run in node, the rest under test-web
+documents/
+scripts/                       # toolchain dist and test runner scripts
+```
+Reusable helpers are listed in `documents/helpers.md`.
+
 ## Components
 - `src/web/extension.ts`: activation; registers the build command, debug configuration provider and inline debug adapter factory.
 - `src/web/toolchain/toolchainDownload.ts` (vscode-free, node-tested) and `toolchainStore.ts` (extension-storage cache, progress UI): the toolchain loader; see Distribution.

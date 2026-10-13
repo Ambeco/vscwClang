@@ -15,3 +15,7 @@
 - Never regenerate `dist/` for an already-pinned toolchain tag: zips may embed timestamps and change the manifest hash, which breaks every installed pin. See `documents/remaining_work.md` "Publishing a new toolchain version".
 - Check `documents/design.md` "Scope" before adding features; the project is deliberately narrow.
 - The git repo root is the nested `vsclang\vsclang` folder, not the outer working directory. Glob results are prefixed `vsclang\`, so paths built from the outer directory double up (`...\vsclang\vsclang\vsclang\...`); `cd` into the repo (or use absolute paths) before running git or npm.
+
+# Code map and helpers
+
+- A reusable exported function/class gets `@helper` in its JSDoc and a line in `documents/helpers.md`; `design.md` "Layout" lists the main folders. `npm run test-node` (`codeMap.node.test.ts`) fails with the exact line to add or remove when they drift.
