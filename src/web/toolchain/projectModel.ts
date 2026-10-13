@@ -102,7 +102,7 @@ export function resolveVariables(text: string, ctx: VariableContext): string {
 		const slash = () => { const f = file(); return f.lastIndexOf('/'); };
 		const base = () => file().slice(slash() + 1);
 		switch (name) {
-			case 'workspaceFolder': case 'cwd': return GUEST_WORKSPACE;
+			case 'workspaceFolder': case 'workspaceRoot': case 'cwd': return GUEST_WORKSPACE;
 			case 'workspaceFolderBasename': return ctx.folderName;
 			case 'pathSeparator': case '/': return '/';
 			case 'file': return `${GUEST_WORKSPACE}/${file()}`;

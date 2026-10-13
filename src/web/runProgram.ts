@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { Wasm } from '@vscode/wasm-wasi';
+import { runEnvSetting } from './projectConfig';
 import { describeUnsupportedImports } from './toolchain/wasiImports';
 import { defaultRunEnvironment, GUEST_HOME, GUEST_TMP } from './toolchain/runEnvironment';
 
@@ -70,10 +71,9 @@ export async function runProgram(context: vscode.ExtensionContext, program: vsco
 		vscode.window.createTerminal({ name: `vscwClang: ${name}`, pty }).show(true);
 	}
 	const [tmp, home] = await prepareScratchDirs(context);
-	const settings = vscode.workspace.getConfiguration('vscwclang');
 	const process = await wasm.createProcess(name, module, {
 		args,
-		env: defaultRunEnvironment(settings.get<Record<string, string | null>>('run.env', {})),
+		env: defaultRunEnvironment(runEnvSetting()),
 		stdio: pty.stdio,
 		mountPoints: [
 			{ kind: 'workspaceFolder' },

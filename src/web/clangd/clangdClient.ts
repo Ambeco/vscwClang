@@ -6,10 +6,11 @@ import { fallbackFlags } from './fallbackFlags';
 import { getToolchainStore } from '../toolchain/toolchain';
 import { GUEST_WORKSPACE, fromGuestPath, toGuestPath } from '../toolchain/guestPaths';
 import { configuredSources } from '../toolchain/projectModel';
-import { readLaunches, readTasks, variableContext } from '../projectConfig';
+import { clangdLogLevel, logsClangdStderr } from '../toolchain/cppToolsSettings';
+import { intelliSenseEnabled, loggingLevel, readLaunches, readTasks, userFlags, variableContext } from '../projectConfig';
 import { IndexSweep, discoverWorkspaceSources } from './indexSweep';
 
-const CLANGD_ARGS = ['-sync', '-background-index=false', '-resource-dir=/resource', '-log=error'];
+const CLANGD_ARGS = ['-sync', '-background-index=false', '-resource-dir=/resource'];
 const CLANGD_TMP = 'clangd-tmp';
 
 /**
@@ -25,6 +26,11 @@ const CLANGD_TMP = 'clangd-tmp';
 export async function startClangdClient(context: vscode.ExtensionContext, log: vscode.OutputChannel): Promise<vscode.Disposable | undefined> {
 	const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
 	if (!folder) { return undefined; }
+	if (!intelliSenseEnabled()) {
+		log.appendLine('[vscwclang] IntelliSense is off (vscwclang.intelliSense.enabled, or C_Cpp.intelliSenseEngine: disabled); clangd was not started. Reload the window after changing it.');
+		return undefined;
+	}
+	const level = loggingLevel();
 
 	const toolchain = getToolchainStore(context, log);
 	const wasm = await Wasm.load();
@@ -36,7 +42,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	await vscode.workspace.fs.createDirectory(tmpDir);
 
 	const process = await wasm.createProcess('clangd', module, {
-		args: CLANGD_ARGS,
+		args: [...CLANGD_ARGS, `-log=${clangdLogLevel(level)}`],
 		stdio: { in: { kind: 'pipeIn' }, out: { kind: 'pipeOut' }, err: { kind: 'pipeOut' } },
 		mountPoints: [
 			{ kind: 'workspaceFolder' },
@@ -46,7 +52,11 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 		],
 	});
 	const stderrChunks: string[] = [];
-	process.stderr?.onData(d => stderrChunks.push(new TextDecoder().decode(d)));
+	process.stderr?.onData(d => {
+		const text = new TextDecoder().decode(d);
+		stderrChunks.push(text);
+		if (logsClangdStderr(level)) { log.append(text); }
+	});
 	const exited = process.run();
 	const transports = makeMessageTransports(process, exited, log);
 	void exited.then(code => { if (code !== 0) { log.appendLine(`[vscwclang] clangd exited unexpectedly (code ${code}): ${stderrChunks.join('').slice(-800)}`); } });
@@ -97,7 +107,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	const clientOptions: LanguageClientOptions = {
 		documentSelector: [{ language: 'c' }, { language: 'cpp' }],
 		uriConverters: { code2Protocol, protocol2Code },
-		initializationOptions: { fallbackFlags: fallbackFlags(compileFlags, vscode.workspace.getConfiguration('vscwclang').get<string[]>('flags', [])) },
+		initializationOptions: { fallbackFlags: fallbackFlags(compileFlags, userFlags(log, true).flags) },
 		middleware: {
 			// Must run (and close any fake-indexed copy) before `next()` sends the real didOpen; see indexSweep.ts.
 			didOpen: async (document, next) => { await indexSweep.willRealOpen(document); return next(document); },

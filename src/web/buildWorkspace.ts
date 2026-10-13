@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { DEFAULT_EXCLUDED_DIRS, isExcludedSource } from './toolchain/sourceFilter';
+import { sourceExcluder, userFlags, workspaceRelativeGlobs } from './projectConfig';
 import { artifactsBelongInFolder, artifactSubdir, storageKeyFor } from './toolchain/artifactPolicy';
 import { build, type BuildResult } from './toolchain/toolchain';
 import type { ParsedDiagnostic } from './toolchain/diagnostics';
@@ -31,7 +31,7 @@ export interface BuildOptions {
  * is read-only or virtual (see `chooseArtifactDir`); an explicit `outputName` (workspace-relative) overrides that.
  *
  * Sources come from `sourceGlobs` (default: the `vscwclang.sourceGlobs` setting), minus any file under a directory
- * named in `vscwclang.sourceExclude` (IDE scratch and build-output folders by default). A glob without wildcards
+ * matched by `vscwclang.files.exclude` (IDE scratch and build-output folders by default). A glob without wildcards
  * names one file: it is never excluded, and it is an error if it does not exist.
  *
  * `onDiagnostics` is called with `[]` when the build starts (so stale diagnostics can be cleared) and then with
@@ -46,7 +46,7 @@ export async function buildWorkspace(context: vscode.ExtensionContext, log: vsco
 	const found = new Map<string, vscode.Uri>();
 	const explicit = new Map<string, vscode.Uri>();
 	const settings = vscode.workspace.getConfiguration('vscwclang');
-	const excluded = settings.get<string[]>('sourceExclude', DEFAULT_EXCLUDED_DIRS);
+	const isExcluded = sourceExcluder();
 	for (const relative of options.sourceFiles ?? []) {
 		const uri = vscode.Uri.joinPath(folder, relative);
 		try { await vscode.workspace.fs.stat(uri); } catch {
@@ -55,7 +55,7 @@ export async function buildWorkspace(context: vscode.ExtensionContext, log: vsco
 		found.set(uri.toString(), uri);
 		explicit.set(uri.toString(), uri);
 	}
-	for (const glob of options.sourceFiles ? [] : options.sourceGlobs ?? settings.get<string[]>('sourceGlobs', ['**/*.{c,cc,cpp,cxx}'])) {
+	for (const glob of options.sourceFiles ? [] : options.sourceGlobs ?? workspaceRelativeGlobs('sourceGlobs', ['**/*.{c,cc,cpp,cxx}'])) {
 		const matches = await vscode.workspace.findFiles(glob, '**/node_modules/**');
 		if (!/[*?[\]{}]/.test(glob)) {
 			if (matches.length === 0) { throw new Error(`vscwClang: source file '${glob}' was not found in the workspace folder. Did you mean a path relative to the folder, such as 'src/${glob.slice(glob.lastIndexOf('/') + 1)}'?`); }
@@ -64,11 +64,12 @@ export async function buildWorkspace(context: vscode.ExtensionContext, log: vsco
 		for (const uri of matches) { found.set(uri.toString(), uri); }
 	}
 	// findFiles' exclude glob is not honored on every virtual file system (seen under test-web), so filter ourselves.
-	const sources = [...found.values()].filter(uri => explicit.has(uri.toString()) || !isExcludedSource(uri.path.slice(folder.path.length), excluded));
-	log.appendLine(`[vscwclang] ${sources.length} source file(s) found (skipping directories named: ${excluded.join(', ')})`);
+	const sources = [...found.values()].filter(uri => explicit.has(uri.toString()) || !isExcluded(uri.path.slice(folder.path.length)));
+	log.appendLine(`[vscwclang] ${sources.length} source file(s) found (skipping what vscwclang.files.exclude matches)`);
 	const sourceFlags = Object.fromEntries(Object.entries(options.sourceFlags ?? {}).map(([relative, flags]) => [`/workspace/${relative}`, flags]));
+	const settingsFlags = userFlags(log);
 	onDiagnostics?.([], folder, output);
-	const result = await build({ sources, output, flags: options.flags ?? settings.get<string[]>('flags', []), sourceFlags, mode, onDiagnostics: onDiagnostics && (parsed => onDiagnostics(parsed, folder, output)) }, log, context);
+	const result = await build({ sources, output, flags: options.flags ?? settingsFlags.flags, languageFlags: options.flags ? undefined : { c: settingsFlags.c, cpp: settingsFlags.cpp }, sourceFlags, mode, onDiagnostics: onDiagnostics && (parsed => onDiagnostics(parsed, folder, output)) }, log, context);
 	log.appendLine(result.diagnostics);
 	await writeBuildLog(vscode.Uri.joinPath(output, '..'), result);
 	return { folder, output, result };

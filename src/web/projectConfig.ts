@@ -1,7 +1,9 @@
 import * as vscode from 'vscode';
 import type { BuildOptions } from './buildWorkspace';
-import { GUEST_WORKSPACE, toGuestPath } from './toolchain/guestPaths';
-import { defaultBuildTask, hostToGuest, inferHostRoot, isCompilerTask, listLaunches, listTasks, planFromCompileCommands, planFromCompileFlags, planFromTask, ProjectModelError, taskForLaunch, type BuildPlan, type LaunchEntry, type TaskEntry, type VariableContext } from './toolchain/projectModel';
+import { compileCommandsPath, cppToolsFlags, mergeExclude } from './toolchain/cppToolsSettings';
+import { GUEST_WORKSPACE, stripWorkspaceFolder, toGuestPath } from './toolchain/guestPaths';
+import { DEFAULT_EXCLUDE, makeSourceExcluder } from './toolchain/sourceFilter';
+import { defaultBuildTask, hostToGuest, inferHostRoot, isCompilerTask, listLaunches, listTasks, planFromCompileCommands, planFromCompileFlags, planFromTask, ProjectModelError, resolveVariables, taskForLaunch, type BuildPlan, type LaunchEntry, type TaskEntry, type VariableContext } from './toolchain/projectModel';
 
 const LAST_LAUNCH_KEY = 'vscwclang.lastLaunch';
 const CPP_LANGUAGES = new Set(['c', 'cpp']);
@@ -15,6 +17,106 @@ export function trackActiveCppFile(): vscode.Disposable {
 	};
 	note(vscode.window.activeTextEditor);
 	return vscode.window.onDidChangeActiveTextEditor(note);
+}
+
+/** Whether the user (not just the extension's default) set this setting anywhere. */
+export function isUserSet(config: vscode.WorkspaceConfiguration, key: string): boolean {
+	const i = config.inspect(key);
+	return i !== undefined && [i.globalValue, i.workspaceValue, i.workspaceFolderValue, i.globalLanguageValue, i.workspaceLanguageValue, i.workspaceFolderLanguageValue].some(v => v !== undefined);
+}
+
+/**
+ * The flags Build and clangd use when no task or compile database supplies them: `vscwclang.flags` if the user set
+ * it, else its default plus whatever their `C_Cpp.default.*` settings (cpptools, usually from a desktop session on
+ * the same project) ask for. `vscwclang.useCppToolsSettings` turns the fallback off. Notes about unusable entries
+ * go to `log` when given.
+ *
+ * `${workspaceFolder}` and the other variables (see `resolveVariables`) are expanded in every entry; an entry that
+ * cannot be (an `${env:...}`, or `${file}` with no editor) is an error, or with `lenient` (clangd's startup flags,
+ * which have no active file) is dropped with a note.
+ *
+ * The C and C++ standards are returned apart (`c`, `cpp`) because `-std=` is an error for the other language;
+ * clangd's single fallback flag list therefore ignores them.
+ */
+export function userFlags(log?: vscode.OutputChannel, lenient = false): { flags: string[]; c: string[]; cpp: string[] } {
+	const settings = vscode.workspace.getConfiguration('vscwclang');
+	const own = resolveSettingStrings(settings.get<string[]>('flags', []), 'vscwclang.flags', log, lenient);
+	if (isUserSet(settings, 'flags') || !settings.get<boolean>('useCppToolsSettings', true)) { return { flags: own, c: [], cpp: [] }; }
+	const cpptools = vscode.workspace.getConfiguration('C_Cpp');
+	const mapped = cppToolsFlags({
+		defines: cpptools.get('default.defines'),
+		includePath: cpptools.get('default.includePath'),
+		compilerArgs: cpptools.get('default.compilerArgs'),
+		cppStandard: cpptools.get('default.cppStandard'),
+		cStandard: cpptools.get('default.cStandard'),
+	}, text => resolveVariables(text, settingsContext()));
+	mapped.notes.forEach(n => log?.appendLine(`[vscwclang] ${n}`));
+	return { flags: [...own, ...mapped.flags], c: mapped.cFlags, cpp: mapped.cppFlags };
+}
+
+function settingsContext(): VariableContext {
+	const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
+	return folder ? variableContext(folder) : { folderName: '' };
+}
+
+/**
+ * Expands `${workspaceFolder}` (as `/workspace`, the path the compiler and program see) and the other variables
+ * `resolveVariables` knows in the strings of a setting meant for them (flags, program arguments, environment).
+ * An unusable entry throws naming the setting; with `lenient` it is dropped and logged instead.
+ */
+export function resolveSettingStrings(values: readonly string[], setting: string, log?: vscode.OutputChannel, lenient = false): string[] {
+	const ctx = settingsContext();
+	const out: string[] = [];
+	for (const value of values) {
+		try { out.push(resolveVariables(value, ctx)); } catch (e) {
+			const message = `${(e as Error).message} (in the ${setting} setting, entry '${value}')`;
+			if (!lenient) { throw new ProjectModelError(message); }
+			log?.appendLine(`[vscwclang] skipped: ${message.replace(/^vscwClang: /, '')}`);
+		}
+	}
+	return out;
+}
+
+/** `vscwclang.run.args` with variables expanded. */
+export function runArgsSetting(): string[] {
+	return resolveSettingStrings(vscode.workspace.getConfiguration('vscwclang').get<string[]>('run.args', []), 'vscwclang.run.args');
+}
+
+/** `vscwclang.run.env` with variables expanded in its values (`null`, which removes a default, is kept). */
+export function runEnvSetting(): Record<string, string | null> {
+	const env = vscode.workspace.getConfiguration('vscwclang').get<Record<string, string | null>>('run.env', {});
+	const names = Object.keys(env).filter(k => typeof env[k] === 'string');
+	const values = resolveSettingStrings(names.map(k => env[k] as string), 'vscwclang.run.env');
+	return { ...env, ...Object.fromEntries(names.map((k, i) => [k, values[i]])) };
+}
+
+/** `vscwclang.sourceGlobs`-style globs, which are host-relative, so `${workspaceFolder}/` is just dropped. */
+export function workspaceRelativeGlobs(setting: string, fallback: string[]): string[] {
+	return vscode.workspace.getConfiguration('vscwclang').get<string[]>(setting, fallback).map(stripWorkspaceFolder);
+}
+
+/**
+ * Predicate for `vscwclang.files.exclude` (glob object, like cpptools' `C_Cpp.files.exclude`, which is merged in
+ * unless `vscwclang.useCppToolsSettings` is off). Takes a path relative to the workspace folder.
+ */
+export function sourceExcluder(): (relativePath: string) => boolean {
+	const settings = vscode.workspace.getConfiguration('vscwclang');
+	const own = settings.get<Record<string, unknown>>('files.exclude', { ...DEFAULT_EXCLUDE });
+	const cpptools = settings.get<boolean>('useCppToolsSettings', true) ? vscode.workspace.getConfiguration('C_Cpp').get<unknown>('files.exclude') : undefined;
+	return makeSourceExcluder(mergeExclude(own, isUserSet(settings, 'files.exclude'), cpptools));
+}
+
+/** `vscwclang.loggingLevel`, defaulting to the user's `C_Cpp.loggingLevel` when ours is unset. */
+export function loggingLevel(): string {
+	const settings = vscode.workspace.getConfiguration('vscwclang');
+	return isUserSet(settings, 'loggingLevel') ? settings.get<string>('loggingLevel', 'Error') : vscode.workspace.getConfiguration('C_Cpp').get<string>('loggingLevel') ?? 'Error';
+}
+
+/** `vscwclang.intelliSense.enabled`, defaulting to off when the user's `C_Cpp.intelliSenseEngine` is `disabled`. */
+export function intelliSenseEnabled(): boolean {
+	const settings = vscode.workspace.getConfiguration('vscwclang');
+	if (isUserSet(settings, 'intelliSense.enabled')) { return settings.get<boolean>('intelliSense.enabled', true); }
+	return vscode.workspace.getConfiguration('C_Cpp').get<string>('intelliSenseEngine') !== 'disabled';
 }
 
 /** What `${file}` and friends mean right now: the last C/C++ editor, if it lies inside `folder`. */
@@ -98,7 +200,7 @@ async function readText(uri: vscode.Uri): Promise<string | undefined> {
  */
 export async function chooseCompileDatabase(context: vscode.ExtensionContext, folder: vscode.Uri, log: vscode.OutputChannel): Promise<{ cancelled: boolean; options?: BuildOptions }> {
 	const settings = vscode.workspace.getConfiguration('vscwclang');
-	const configured = settings.get<string>('compileCommands', '').trim();
+	const configured = compileCommandsPath(settings.get<unknown>('compileCommands')) ?? compileCommandsPath(vscode.workspace.getConfiguration('C_Cpp').get<unknown>('default.compileCommands')) ?? '';
 	for (const name of configured !== '' ? [configured] : ['compile_commands.json', 'build/compile_commands.json']) {
 		const text = await readText(vscode.Uri.joinPath(folder, name));
 		if (text === undefined) { continue; }
@@ -106,7 +208,7 @@ export async function chooseCompileDatabase(context: vscode.ExtensionContext, fo
 		try { db = JSON.parse(text); } catch (e) {
 			throw new ProjectModelError(`vscwClang: ${name} is not valid JSON (${(e as Error).message}). Did you mean to regenerate it (CMake: -DCMAKE_EXPORT_COMPILE_COMMANDS=ON)?`);
 		}
-		return planDatabase(context, folder, log, name, db, settings.get<string[]>('compileCommands.include', []));
+		return planDatabase(context, folder, log, name, db, workspaceRelativeGlobs('compileCommands.include', []));
 	}
 	const flagsText = await readText(vscode.Uri.joinPath(folder, 'compile_flags.txt'));
 	if (flagsText === undefined) { return { cancelled: false }; }

@@ -52,7 +52,7 @@
           "default": [
             "-I/workspace"
           ],
-          "markdownDescription": "Extra flags for `vscwClang: Build` and `Build and Run`. `/workspace` is your workspace folder, so the default `-I/workspace` lets sources include headers relative to the project root (`#include \"utils/foo.hpp\"`). `-l`, `-L` and `-Wl,` flags go to the linker; restricted flags (`--target`, `-o`, ...) are rejected. A task's own `flags` replace these."
+          "markdownDescription": "Extra flags for `vscwClang: Build` and `Build and Run`. `/workspace` is your workspace folder, so the default `-I/workspace` lets sources include headers relative to the project root (`#include \"utils/foo.hpp\"`). `-l`, `-L` and `-Wl,` flags go to the linker; restricted flags (`--target`, `-o`, ...) are rejected. A task's own `flags` replace these. When you have not set this, flags from cpptools' `C_Cpp.default.defines`, `includePath` (workspace paths only), `cppStandard` and `cStandard` (each applied only to its own language), and `compilerArgs` are added too (see `vscwclang.useCppToolsSettings`).  `${workspaceFolder}` (as `/workspace`), `${workspaceFolderBasename}`, `${file}` and the other file variables are expanded; `${env:}`, `${command:}` and `${input:}` are not supported."
         },
         "vscwclang.sourceGlobs": {
           "type": "array",
@@ -62,7 +62,7 @@
           "default": [
             "**/*.{c,cc,cpp,cxx}"
           ],
-          "markdownDescription": "Globs, relative to the workspace folder, of the source files that `vscwClang: Build` compiles together into one program. Narrow this (e.g. `[\"src/**/*.cpp\"]`) when the folder holds several programs, such as tests that each define `main`."
+          "markdownDescription": "Globs, relative to the workspace folder, of the source files that `vscwClang: Build` compiles together into one program. Narrow this (e.g. `[\"src/**/*.cpp\"]`) when the folder holds several programs, such as tests that each define `main`. A leading `${workspaceFolder}/` is accepted and ignored."
         },
         "vscwclang.indexing.enabled": {
           "type": "boolean",
@@ -82,9 +82,15 @@
           "markdownDescription": "How long in milliseconds each file is held open for the language server to parse it while indexing. Raise it for very large files that end up only partly indexed."
         },
         "vscwclang.compileCommands": {
-          "type": "string",
+          "type": [
+            "string",
+            "array"
+          ],
           "default": "",
-          "markdownDescription": "Workspace-relative path of the `compile_commands.json` that Build and Run use when there is no default `tasks.json` build task. Empty looks for `compile_commands.json`, then `build/compile_commands.json`. Each source is compiled with the flags of its own entry; a CMake database with several targets asks which one to build."
+          "markdownDescription": "Workspace-relative path of the `compile_commands.json` that Build and Run use when there is no default `tasks.json` build task; a string or a list, of which the first is used (same shape as cpptools' `C_Cpp.default.compileCommands`, which is the fallback when this is empty; `${workspaceFolder}/` prefixes are accepted). Empty looks for `compile_commands.json`, then `build/compile_commands.json`. Each source is compiled with the flags of its own entry; a CMake database with several targets asks which one to build.",
+          "items": {
+            "type": "string"
+          }
         },
         "vscwclang.compileCommands.include": {
           "type": "array",
@@ -92,30 +98,30 @@
             "type": "string"
           },
           "default": [],
-          "markdownDescription": "Globs, relative to the workspace folder, that narrow which `compile_commands.json` entries are linked into the program (for databases of several programs that do not name CMake targets). Empty keeps them all."
+          "markdownDescription": "Globs, relative to the workspace folder, that narrow which `compile_commands.json` entries are linked into the program (for databases of several programs that do not name CMake targets). Empty keeps them all. A leading `${workspaceFolder}/` is accepted and ignored."
         },
-        "vscwclang.sourceExclude": {
-          "type": "array",
-          "items": {
-            "type": "string"
+        "vscwclang.files.exclude": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
           },
-          "default": [
-            "node_modules",
-            ".git",
-            ".vscwclang",
-            ".vs",
-            "enc_temp_folder",
-            "Debug",
-            "Release",
-            "x64",
-            "x86",
-            "build",
-            "out",
-            "dist",
-            "CMakeFiles",
-            ".cache"
-          ],
-          "markdownDescription": "Directory names (at any depth, case-insensitive) whose files are never compiled: IDE scratch folders and build output. Replaces the default list when set."
+          "default": {
+            "**/node_modules": true,
+            "**/.git": true,
+            "**/.vscwclang": true,
+            "**/.vs": true,
+            "**/enc_temp_folder": true,
+            "**/Debug": true,
+            "**/Release": true,
+            "**/x64": true,
+            "**/x86": true,
+            "**/build": true,
+            "**/out": true,
+            "**/dist": true,
+            "**/CMakeFiles": true,
+            "**/.cache": true
+          },
+          "markdownDescription": "Globs, relative to the workspace folder, of files and folders that are never compiled or indexed: IDE scratch folders and build output by default. Same shape as cpptools' `C_Cpp.files.exclude` (`true` excludes, `false` un-excludes a default), which is merged in unless `vscwclang.useCppToolsSettings` is off. Supports `**`, `*`, `?` and `{a,b}`, ignoring case. A file named explicitly by a task or compile database is never excluded. A leading `${workspaceFolder}/` is accepted and ignored."
         },
         "vscwclang.run.args": {
           "type": "array",
@@ -123,7 +129,7 @@
             "type": "string"
           },
           "default": [],
-          "markdownDescription": "Arguments for `vscwClang: Build and Run`. A `launch.json` configuration (`cppdbg`, `cppvsdbg`, `lldb`, `codelldb`) that has `args` takes precedence. `vscwClang: Build and Run with Arguments...` asks each time instead (pre-filled with the last answer)."
+          "markdownDescription": "Arguments for `vscwClang: Build and Run`. A `launch.json` configuration (`cppdbg`, `cppvsdbg`, `lldb`, `codelldb`) that has `args` takes precedence. `vscwClang: Build and Run with Arguments...` asks each time instead (pre-filled with the last answer).  `${workspaceFolder}` (as `/workspace`), `${workspaceFolderBasename}`, `${file}` and the other file variables are expanded; `${env:}`, `${command:}` and `${input:}` are not supported."
         },
         "vscwclang.run.env": {
           "type": "object",
@@ -134,13 +140,35 @@
             ]
           },
           "default": {},
-          "markdownDescription": "Environment variables for the program, added to the defaults `HOME=/home/user`, `TMPDIR=/tmp`, `USER=user`, `LANG=C.UTF-8`. Set a variable to `null` to remove a default."
+          "markdownDescription": "Environment variables for the program, added to the defaults `HOME=/home/user`, `TMPDIR=/tmp`, `USER=user`, `LANG=C.UTF-8`. Set a variable to `null` to remove a default. `${workspaceFolder}` and the other variables are expanded in values (as in `vscwclang.run.args`)."
         },
         "vscwclang.toolTimeoutSeconds": {
           "type": "number",
           "default": 300,
           "minimum": 0,
           "markdownDescription": "Seconds to wait for each clang or wasm-ld invocation before stopping it and reporting an error. Compilers print nothing while working, so a crashed run cannot be told apart from a slow one; raise this for very large sources. `0` disables the timeout."
+        },
+        "vscwclang.useCppToolsSettings": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Use the C/C++ extension's `C_Cpp.default.*` settings (`defines`, `includePath`, `cppStandard`, `cStandard`, `compilerArgs`) as extra flags when `vscwclang.flags` is not set, and its `C_Cpp.files.exclude`, `C_Cpp.default.compileCommands`, `C_Cpp.loggingLevel` and `C_Cpp.intelliSenseEngine` as defaults. Lets a project configured for cpptools on desktop work here unchanged."
+        },
+        "vscwclang.intelliSense.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Run the clangd language server for completion, hover, go-to-definition and as-you-type diagnostics. Turn off to skip clangd's download, memory use and indexing when you only need Build and Run. Defaults to off if `C_Cpp.intelliSenseEngine` is `disabled`. Reload the window to apply."
+        },
+        "vscwclang.loggingLevel": {
+          "type": "string",
+          "enum": [
+            "None",
+            "Error",
+            "Warning",
+            "Information",
+            "Debug"
+          ],
+          "default": "Error",
+          "markdownDescription": "How much of clangd's log to show in the `vscwclang` output channel (same values as cpptools' `C_Cpp.loggingLevel`, which is the default when this is unset). `None` and `Error` show only errors. Reload the window to apply."
         }
       }
     },

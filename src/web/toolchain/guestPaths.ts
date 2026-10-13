@@ -13,3 +13,11 @@ export function fromGuestPath(folderPath: string, guestPath: string): string | u
 	if (guestPath !== GUEST_WORKSPACE && !guestPath.startsWith(`${GUEST_WORKSPACE}/`)) { return undefined; }
 	return folderPath.replace(/\/+$/, '') + guestPath.slice(GUEST_WORKSPACE.length);
 }
+
+/**
+ * Drops a leading `${workspaceFolder}/` (or `${workspaceRoot}/`) so a setting that is already workspace-relative on
+ * the host accepts the cpptools spelling. Settings that reach the compiler or program use `resolveVariables` instead.
+ */
+export function stripWorkspaceFolder(path: string): string {
+	return path.replace(/^\$\{(?:workspaceFolder|workspaceRoot)\}[\\/]?/, '');
+}

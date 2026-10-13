@@ -16,6 +16,8 @@ export interface BuildRequest {
 	flags: string[];
 	/** Extra flags for single sources, keyed by guest path (`/workspace/src/a.cpp`), added after `flags` with the same policy and routing. */
 	sourceFlags?: Record<string, string[]>;
+	/** Flags for every C (`.c`) or C++ source respectively, placed before `flags` so those can override them. */
+	languageFlags?: { c: string[]; cpp: string[] };
 	/** "debug" adds -O0 -g, sancov instrumentation, and links the debug stub (debug/debugStub.c). */
 	mode: 'debug' | 'release';
 	/** Called after each source finishes compiling with every diagnostic so far, so errors can show before the build ends. */
@@ -96,7 +98,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 		log.appendLine(`[vscwclang] compiling ${source.guest}`);
 		const started = Date.now();
 		const cc = await run('clang.wasm', [driver, ...flags.compile[SLICE].map(sub), '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics',
-			...modeFlags, ...userFlags.compile, ...ownFlags.get(source.guest)!.compile, '-c', source.guest, '-o', '-'], { captureStdout: true });
+			...modeFlags, ...(request.languageFlags?.[driver === 'clang' ? 'c' : 'cpp'] ?? []), ...userFlags.compile, ...ownFlags.get(source.guest)!.compile, '-c', source.guest, '-o', '-'], { captureStdout: true });
 		log.appendLine(`[vscwclang] compiled ${source.guest} in ${Date.now() - started} ms (exit ${cc.exitCode})`);
 		diagnostics += cc.stderr;
 		if (cc.stderr !== '') { request.onDiagnostics?.(parseDiagnostics(diagnostics)); }

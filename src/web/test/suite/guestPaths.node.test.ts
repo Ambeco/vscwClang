@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { fromGuestPath, toGuestPath } from '../../toolchain/guestPaths';
+import { stripWorkspaceFolder, fromGuestPath, toGuestPath } from '../../toolchain/guestPaths';
 
 suite('guestPaths', () => {
 	test('maps in and out of the workspace', () => {
@@ -12,5 +12,19 @@ suite('guestPaths', () => {
 		assert.strictEqual(toGuestPath('/ws/proj', '/ws/proj2/a.cpp'), undefined);
 		assert.strictEqual(fromGuestPath('/ws/proj', '/workspace2/a.cpp'), undefined);
 		assert.strictEqual(fromGuestPath('/ws/proj', '/sysroot/include/x.h'), undefined);
+	});
+});
+
+suite('stripWorkspaceFolder', () => {
+	test('drops a leading workspace variable and its slash, either style', () => {
+		const backslash = String.fromCharCode(92);
+		assert.strictEqual(stripWorkspaceFolder('${workspaceFolder}/build/cc.json'), 'build/cc.json');
+		assert.strictEqual(stripWorkspaceFolder('${workspaceRoot}' + backslash + 'src/**'), 'src/**');
+		assert.strictEqual(stripWorkspaceFolder('${workspaceFolder}'), '');
+	});
+
+	test('leaves everything else alone', () => {
+		assert.strictEqual(stripWorkspaceFolder('src/${workspaceFolder}'), 'src/${workspaceFolder}');
+		assert.strictEqual(stripWorkspaceFolder('build/x.json'), 'build/x.json');
 	});
 });

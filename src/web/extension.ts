@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { VscwClangDebugAdapter } from './debug/debugAdapter';
 import { buildWorkspace, type BuildOptions } from './buildWorkspace';
-import { chooseCompileDatabase, chooseRun, defaultBuildOptions, trackActiveCppFile } from './projectConfig';
+import { chooseCompileDatabase, chooseRun, defaultBuildOptions, runArgsSetting, trackActiveCppFile } from './projectConfig';
 import { runProgram } from './runProgram';
 import { joinArgs, splitArgs } from './toolchain/runEnvironment';
 import { registerTaskProvider } from './tasks';
@@ -77,10 +77,9 @@ async function buildOptionsFor(context: vscode.ExtensionContext, log: vscode.Out
 /** Arguments and build for Run: from `launch.json` and its build task if present, else the `vscwclang` settings. */
 async function runPlan(context: vscode.ExtensionContext, log: vscode.OutputChannel): Promise<{ cancelled: boolean; args: string[]; build?: BuildOptions }> {
 	const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
-	const settingsArgs = vscode.workspace.getConfiguration('vscwclang').get<string[]>('run.args', []);
-	if (!folder) { return { cancelled: false, args: settingsArgs }; }
+	if (!folder) { return { cancelled: false, args: runArgsSetting() }; }
 	const chosen = await chooseRun(context, folder, log);
-	return { cancelled: chosen.cancelled, args: chosen.launch?.args ?? settingsArgs, build: chosen.build };
+	return { cancelled: chosen.cancelled, args: chosen.launch?.args ?? runArgsSetting(), build: chosen.build };
 }
 
 async function buildAndRun(context: vscode.ExtensionContext, log: vscode.OutputChannel, diagnostics: vscode.DiagnosticCollection, args: string[], build?: BuildOptions): Promise<void> {

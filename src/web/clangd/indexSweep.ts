@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { DidCloseTextDocumentNotification, DidOpenTextDocumentNotification, type DidCloseTextDocumentParams, type DidOpenTextDocumentParams } from 'vscode-languageclient/browser';
-import { DEFAULT_EXCLUDED_DIRS, isExcludedSource } from '../toolchain/sourceFilter';
+import { sourceExcluder, workspaceRelativeGlobs } from '../projectConfig';
 
 /** The slice of `LanguageClient` the sweep needs; narrowed so it can be constructed before the real client is. */
 export interface NotificationSender {
@@ -269,18 +269,18 @@ function delay(ms: number): Promise<void> {
 }
 
 /**
- * Finds workspace source files the same way `buildWorkspace` does (`vscwclang.sourceGlobs`/`sourceExclude`), so
+ * Finds workspace source files the same way `buildWorkspace` does (`vscwclang.sourceGlobs`/`files.exclude`), so
  * the sweep indexes what the project actually builds rather than every stray `.cpp` under an excluded directory.
  */
 export async function discoverWorkspaceSources(): Promise<vscode.Uri[]> {
 	const settings = vscode.workspace.getConfiguration('vscwclang');
-	const excluded = settings.get<string[]>('sourceExclude', DEFAULT_EXCLUDED_DIRS);
-	const globs = settings.get<string[]>('sourceGlobs', ['**/*.{c,cc,cpp,cxx}']);
+	const isExcluded = sourceExcluder();
+	const globs = workspaceRelativeGlobs('sourceGlobs', ['**/*.{c,cc,cpp,cxx}']);
 	const found = new Map<string, vscode.Uri>();
 	for (const glob of globs) {
 		const matches = await vscode.workspace.findFiles(glob, '**/node_modules/**');
 		for (const uri of matches) { found.set(uri.toString(), uri); }
 	}
 	const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
-	return [...found.values()].filter(uri => !folder || !isExcludedSource(uri.path.slice(folder.path.length), excluded));
+	return [...found.values()].filter(uri => !folder || !isExcluded(uri.path.slice(folder.path.length)));
 }
