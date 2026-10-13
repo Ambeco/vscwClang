@@ -14,3 +14,4 @@
 - In Bash heredocs a double backslash arrives as one: write regexes and escape sequences with the Edit/Write tools, not shell-embedded Python or JS. Several files here are CRLF; normalize in Python before multi-line replacements.
 - Never regenerate `dist/` for an already-pinned toolchain tag: zips may embed timestamps and change the manifest hash, which breaks every installed pin. See `documents/remaining_work.md` "Publishing a new toolchain version".
 - Check `documents/design.md` "Scope" before adding features; the project is deliberately narrow.
+- The git repo root is the nested `vsclang\vsclang` folder, not the outer working directory. Glob results are prefixed `vsclang\`, so paths built from the outer directory double up (`...\vsclang\vsclang\vsclang\...`); `cd` into the repo (or use absolute paths) before running git or npm.
