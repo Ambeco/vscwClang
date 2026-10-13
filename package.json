@@ -288,8 +288,8 @@
   },
   "scripts": {
     "test": "vscode-test-web --browserType=chromium --coi --extensionId=ms-vscode.wasm-wasi-core --extensionDevelopmentPath=. --extensionTestsPath=dist/web/test/suite/extensionTests.js src/web/test/fixtures/workspace",
-    "toolchain-dist": "node scripts/make-toolchain-dist.mjs llvm-artifacts llvm-artifacts/dist",
-    "pretest": "node scripts/make-toolchain-dist.mjs llvm-artifacts llvm-artifacts/dist --if-missing && npm run compile-web",
+    "toolchain-dist": "node scripts/make-toolchain-dist.mjs --release llvm-artifacts --dist ../../llvm-artifacts/dist --mtdist ../../llvm-artifacts/mtdist",
+    "pretest": "node scripts/make-toolchain-dist.mjs --release llvm-artifacts --dist llvm-artifacts/dist --if-missing && npm run compile-web",
     "vscode:prepublish": "npm run package-web",
     "compile-web": "npm run check-types && npm run lint && node esbuild.js",
     "watch-web": "npm-run-all -p watch-web:*",
