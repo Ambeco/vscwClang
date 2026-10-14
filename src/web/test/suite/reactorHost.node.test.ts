@@ -81,6 +81,11 @@ suiteIfReactor('ReactorHost (real lldb-wasm-reactor.wasm, real debug build)', fu
 		assert.ok(seen, 'the hook stop in add() fired');
 		assert.strictEqual(seen.bt.length, 3, seen.bt.join('\n'));
 		assert.match(seen.bt[0], /prog\.c:\d+/);
+		// Each frame resolves to its own function (add, caller, main), not all to the first DWARF function.
+		const lines = seen.bt.map(f => Number(/prog\.c:(\d+)/.exec(f)?.[1]));
+		assert.ok(lines[0] >= 3 && lines[0] <= 8, `frame 0 in add(): ${seen.bt[0]}`);
+		assert.ok(lines[1] >= 10 && lines[1] <= 16, `frame 1 in caller(): ${seen.bt[1]}`);
+		assert.ok(lines[2] >= 19 && lines[2] <= 20, `frame 2 in main(): ${seen.bt[2]}`);
 		assert.match(seen.values[0], /\(int\) a = 1\b/);
 		assert.match(seen.values[1], /\(int\) b = 10\b/);
 		assert.match(seen.values[2], /\(int\) c = 11\b/);
