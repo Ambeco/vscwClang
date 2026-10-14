@@ -48,7 +48,7 @@ suite('vscwClang clangd client (in browser)', function () {
 
 	test('a diagnostic from a real clangd session reaches VS Code\'s own diagnostics for an open .cpp file', async () => {
 		const CPP_FLAGS = ['--target=wasm32-wasip1', '--sysroot=/sysroot', '-resource-dir=/resource',
-			'-isystem/sysroot/include/wasm32-wasip1/noeh/c++/v1', '-isystem/sysroot/include/c++/v1', '-fno-exceptions', '-std=c++20'];
+			'-isystem/sysroot/include/wasm32-wasip1/eh/c++/v1', '-isystem/sysroot/include/c++/v1', '-fwasm-exceptions', '-std=c++20'];
 		const file = vscode.Uri.joinPath(dir, 'broken.cpp');
 		const guestDir = `/workspace/${vscode.workspace.asRelativePath(dir, false)}`;
 		await write('compile_commands.json', JSON.stringify([

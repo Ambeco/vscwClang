@@ -204,7 +204,7 @@ suite('vscwClang clangd (in browser)', function () {
 	}
 
 	const CPP_FLAGS = ['--target=wasm32-wasip1', '--sysroot=/sysroot', '-resource-dir=/resource',
-		'-isystem/sysroot/include/wasm32-wasip1/noeh/c++/v1', '-isystem/sysroot/include/c++/v1', '-fno-exceptions', '-std=c++20'];
+		'-isystem/sysroot/include/wasm32-wasip1/eh/c++/v1', '-isystem/sysroot/include/c++/v1', '-fwasm-exceptions', '-std=c++20'];
 
 	async function withCompileCommands(files: Record<string, string>): Promise<LspClient> {
 		const commands = Object.keys(files).filter(n => n.endsWith('.cpp')).map(file => ({

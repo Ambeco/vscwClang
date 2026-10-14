@@ -5,9 +5,10 @@
 //          [--mtdist <outDir>] [--tag <tag>] [--chunk-mib 16] [--pin] [--if-missing]
 //   --release     output of llvm-project/wasi-tests/package_release.mjs (supplies sysroot/, resource/, compile-flags.json)
 //   --llvm        llvm-project checkout (default ../../llvm-project relative to this repo)
-//   --dist        single-threaded layout: build-single-threaded/bin/{clang,lld,clangd}.wasm,
+//   --dist        single-threaded layout: build-single-threaded/bin/{clang,lld,clangd,llvm-ar}.wasm,
 //                 build-lldb-single-threaded/bin/lldb-wasm-reactor.wasm
 //   --mtdist      multithreaded layout: build/bin/{clang,lld}.wasm, build-clangd-threads/bin/clangd.wasm,
+//                 build-single-threaded/bin/llvm-ar.wasm (llvm-ranlib = llvm-ar.wasm run with argv[0] llvm-ranlib),
 //                 build-lldb/bin/lldb-wasm-reactor.wasm (imports wasi.thread-spawn)
 //   --pin         write the --dist manifest's SHA-256 into src/web/toolchain/toolchainPin.ts
 //   --if-missing  skip a layout whose <outDir>/manifest.json already exists
@@ -29,12 +30,14 @@ const layouts = [
 		['lld.wasm', 'build-single-threaded/bin/lld.wasm'],
 		['clangd.wasm', 'build-single-threaded/bin/clangd.wasm'],
 		['lldb-wasm-reactor.wasm', 'build-lldb-single-threaded/bin/lldb-wasm-reactor.wasm'],
+		['llvm-ar.wasm', 'build-single-threaded/bin/llvm-ar.wasm'],
 	] },
 	{ outDir: option('--mtdist'), name: 'mtdist', binaries: [
 		['clang.wasm', 'build/bin/clang.wasm'],
 		['lld.wasm', 'build/bin/lld.wasm'],
 		['clangd.wasm', 'build-clangd-threads/bin/clangd.wasm'],
 		['lldb-wasm-reactor.wasm', 'build-lldb/bin/lldb-wasm-reactor.wasm'],
+		['llvm-ar.wasm', 'build-single-threaded/bin/llvm-ar.wasm'], // no threaded variant: llvm-ar spawns no threads
 	] },
 ].filter((l) => l.outDir);
 if (!release || layouts.length === 0) {
