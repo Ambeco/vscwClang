@@ -92,6 +92,10 @@ The channel is the program's own stdio. At startup the stub sends `hello` and bl
 lldb reads memory synchronously but the channel is asynchronous, so `PagedMemory` serves the current stop from a page cache, recording misses; `evaluateWithMemory` fetches the missed pages and re-runs the lldb call. lldb formats a failed read into the value text instead of throwing and keeps that result for the stop, so each re-run must first call `ReactorHost.setStop` again with the same frames. Verified on `wasm-wasi-core` pipes (`debugStub.test.ts`) and in a worker harness with blocking stdin plus the real reactor (`stubChannel.node.test.ts`).
 
 ## Alternatives considered
+### Reader thread inside the debug stub
+- Pros: would apply breakpoint changes and pause while the program runs freely.
+- Cons: `wasm-wasi-core` has no thread-spawn; stdin is shared with the program, so a reader would consume its input (the channel works only because commands and program input never overlap); does not reduce overhead, which comes from the per-basic-block hook.
+
 ### Write build artifacts only to extension storage
 - Pros: never touches the user's folder; works for read-only repositories.
 - Cons: the user cannot reach the binary or logs, and nothing is shared across devices; used only for read-only or virtual folders.
