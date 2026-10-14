@@ -196,6 +196,30 @@ suite('vscwClang build (in browser)', function () {
 		assert.doesNotMatch(ran.stdout, /after/);
 	});
 
+	for (const mode of ['release', 'debug'] as const) {
+		test(`C++ exceptions ${mode === 'debug' ? 'build' : 'work'} in ${mode}: catch by type, std::exception, rethrow, library throws, unwinding`, async () => {
+			const nl = String.fromCharCode(10);
+			const source = ['#include <cstdio>', '#include <stdexcept>', '#include <string>', '#include <vector>',
+				'struct Guard { ~Guard() { std::puts("unwound"); } };',
+				'static void thrower(int k) { Guard g; if (k == 1) throw 42; if (k == 2) throw std::runtime_error("boom"); }',
+				'int main() {',
+				'  try { thrower(1); } catch (int v) { std::printf("int %d\\n", v); }',
+				'  try { thrower(2); } catch (const std::exception& e) { std::printf("what %s\\n", e.what()); }',
+				'  try { try { thrower(2); } catch (...) { throw; } } catch (const std::runtime_error&) { std::puts("rethrown"); }',
+				'  try { std::vector<int> v; (void)v.at(3); } catch (const std::out_of_range&) { std::puts("out_of_range"); }',
+				'  try { (void)std::stoi("x"); } catch (const std::invalid_argument&) { std::puts("invalid_argument"); }',
+				'  return 0;',
+				'}', ''].join(nl);
+			await write(`eh-${mode}.cpp`, source);
+			const built = await build({ sources: [uri(`eh-${mode}.cpp`)], output: uri(`eh-${mode}.wasm`), flags: [], mode }, log, context);
+			assert.strictEqual(built.exitCode, 0, built.diagnostics);
+			if (mode === 'debug') { return; } // a debug build waits at startup for the debugger host, so only building is checked here
+			const ran = await runWasm(uri(`eh-${mode}.wasm`));
+			assert.strictEqual(ran.stdout, ['unwound', 'int 42', 'unwound', 'what boom', 'unwound', 'rethrown', 'out_of_range', 'invalid_argument', ''].join(nl));
+			assert.strictEqual(ran.exitCode, 0);
+		});
+	}
+
 	test('a program that defines its own abort() keeps it', async () => {
 		const nl = String.fromCharCode(10);
 		await write('ownabort.cpp', ['#include <cstdlib>', '#include <wasi/api.h>', 'extern "C" void abort() { __wasi_proc_exit(7); }', 'int main() { std::abort(); }', ''].join(nl));
