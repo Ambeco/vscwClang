@@ -220,6 +220,83 @@ suite('vscwClang build (in browser)', function () {
 		});
 	}
 
+	const NL = String.fromCharCode(10);
+	async function buildAndRun(name: string, sources: Record<string, string>, flags: string[] = []) {
+		for (const [file, text] of Object.entries(sources)) { await write(file, text); }
+		const built = await build({ sources: Object.keys(sources).map(uri), output: uri(`${name}.wasm`), flags, mode: 'release' }, log, context);
+		return { built, ran: built.exitCode === 0 ? await runWasm(uri(`${name}.wasm`)) : undefined };
+	}
+
+	for (const [label, body] of [
+		['a noexcept function that throws', 'void f() noexcept { throw 1; }\nint main() { std::puts("before"); f(); std::puts("after"); }'],
+		['a destructor that throws', 'struct D { ~D() { throw 1; } };\nint main() { std::puts("before"); { D d; } std::puts("after"); }'],
+	] as const) {
+		test(`C++ exceptions: ${label} reaches std::terminate (exit 134)`, async () => {
+			const { built, ran } = await buildAndRun(`eh-terminate-${label.split(' ')[1]}`, { [`eh-terminate-${label.split(' ')[1]}.cpp`]: `#include <cstdio>\n${body}\n` });
+			assert.strictEqual(built.exitCode, 0, built.diagnostics);
+			assert.strictEqual(ran?.exitCode, 134);
+			assert.match(ran?.stdout ?? '', /before/);
+			assert.doesNotMatch(ran?.stdout ?? '', /after/);
+		});
+	}
+
+	test('C++ exceptions: exception_ptr, nested_exception and a custom hierarchy caught by base reference', async () => {
+		const { built, ran } = await buildAndRun('eh-advanced', { 'eh-advanced.cpp': [
+			'#include <cstdio>', '#include <exception>', '#include <stdexcept>',
+			'struct Base : std::exception { const char* what() const noexcept override { return "base"; } };',
+			'struct Derived : Base { int code = 7; };',
+			'static void inner() { throw std::logic_error("inner"); }',
+			'static void outer() { try { inner(); } catch (...) { std::throw_with_nested(std::runtime_error("outer")); } }',
+			'int main() {',
+			'  std::exception_ptr p;',
+			'  try { throw Derived(); } catch (...) { p = std::current_exception(); }',
+			'  try { std::rethrow_exception(p); } catch (const Base& b) { std::printf("base %s\\n", b.what()); }',
+			'  try { std::rethrow_exception(p); } catch (const Derived& d) { std::printf("derived %d\\n", d.code); }',
+			'  try { outer(); } catch (const std::exception& e) {',
+			'    std::printf("%s\\n", e.what());',
+			'    try { std::rethrow_if_nested(e); } catch (const std::exception& n) { std::printf("nested %s\\n", n.what()); }',
+			'  }',
+			'  std::exception_ptr q = std::make_exception_ptr(42);',
+			'  try { std::rethrow_exception(q); } catch (int v) { std::printf("ptr %d\\n", v); }',
+			'  return 0;', '}', ''].join('\n') });
+		assert.strictEqual(built.exitCode, 0, built.diagnostics);
+		assert.strictEqual(ran?.stdout, ['base base', 'derived 7', 'outer', 'nested inner', 'ptr 42', ''].join(NL));
+		assert.strictEqual(ran?.exitCode, 0);
+	});
+
+	for (const flags of [['-O2'], ['-O3', '-flto']]) {
+		test(`C++ exceptions: a throw in one source file is caught in another, with ${flags.join(' ')}`, async () => {
+			const { built, ran } = await buildAndRun(`eh-tu-${flags.join('')}`, {
+				'eh-thrower.cpp': '#include <stdexcept>\nint thrower(int k) { if (k > 0) { throw std::out_of_range("tu"); } return k; }\n',
+				'eh-main.cpp': ['#include <cstdio>', '#include <stdexcept>', 'int thrower(int);',
+					'struct G { ~G() { std::puts("unwound"); } };',
+					'int main() { try { G g; thrower(1); } catch (const std::out_of_range& e) { std::printf("caught %s\\n", e.what()); } return thrower(0); }', ''].join('\n'),
+			}, flags);
+			assert.strictEqual(built.exitCode, 0, built.diagnostics);
+			assert.strictEqual(ran?.stdout, ['unwound', 'caught tu', ''].join(NL));
+			assert.strictEqual(ran?.exitCode, 0);
+		});
+	}
+
+	test('C++ exceptions: -fno-exceptions builds and runs a program without throw, and rejects one with it', async () => {
+		const ok = await buildAndRun('eh-off-ok', { 'eh-off-ok.cpp': '#include <cstdio>\nint main() { std::puts("fine"); }\n' }, ['-fno-exceptions']);
+		assert.strictEqual(ok.built.exitCode, 0, ok.built.diagnostics);
+		assert.strictEqual(ok.ran?.stdout, `fine${NL}`);
+		const bad = await buildAndRun('eh-off-bad', { 'eh-off-bad.cpp': 'int main() { throw 1; }\n' }, ['-fno-exceptions']);
+		assert.notStrictEqual(bad.built.exitCode, 0);
+		assert.match(bad.built.diagnostics, /exceptions/i);
+	});
+
+	// Known bug (documents/remaining_work.md "Uncaught C++ exception escapes the program"): run() never settles, and even the
+	// Promise.race below did not fire (the test hit the 180 s suite timeout), so it is skipped until the host fix lands. Un-skip then.
+	test.skip('C++ exceptions: an uncaught exception exits 134 instead of hanging', async function () {
+		const { built } = await buildAndRun('eh-uncaught', { 'eh-uncaught.cpp': '#include <cstdio>\nint main() { std::puts("before"); throw 1; }\n' });
+		assert.strictEqual(built.exitCode, 0, built.diagnostics);
+		const outcome = await Promise.race([runWasm(uri('eh-uncaught.wasm')), new Promise<'hung'>(resolve => setTimeout(() => resolve('hung'), 8000))]);
+		assert.notStrictEqual(outcome, 'hung', 'run() never settled');
+		assert.strictEqual((outcome as { exitCode: number }).exitCode, 134);
+	});
+
 	test('a program that defines its own abort() keeps it', async () => {
 		const nl = String.fromCharCode(10);
 		await write('ownabort.cpp', ['#include <cstdlib>', '#include <wasi/api.h>', 'extern "C" void abort() { __wasi_proc_exit(7); }', 'int main() { std::abort(); }', ''].join(nl));
