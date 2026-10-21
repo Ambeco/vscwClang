@@ -208,7 +208,7 @@ export async function chooseCompileDatabase(context: vscode.ExtensionContext, fo
 		try { db = JSON.parse(text); } catch (e) {
 			throw new ProjectModelError(`vscwClang: ${name} is not valid JSON (${(e as Error).message}). Did you mean to regenerate it (CMake: -DCMAKE_EXPORT_COMPILE_COMMANDS=ON)?`);
 		}
-		return planDatabase(context, folder, log, name, db, workspaceRelativeGlobs('compileCommands.include', []));
+		return planDatabase(context, folder, log, name, db, workspaceRelativeGlobs('compileCommandsInclude', []));
 	}
 	const flagsText = await readText(vscode.Uri.joinPath(folder, 'compile_flags.txt'));
 	if (flagsText === undefined) { return { cancelled: false }; }
@@ -258,7 +258,7 @@ async function planDatabase(context: vscode.ExtensionContext, folder: vscode.Uri
 		for (const glob of include) { (await vscode.workspace.findFiles(glob)).forEach(uri => allowed.add(relative(uri))); }
 		sources = sources.filter(s => allowed.has(s));
 		if (sources.length === 0) {
-			throw new ProjectModelError(`vscwClang: none of the sources in ${name} match vscwclang.compileCommands.include (${include.join(', ')}). Did you mean a glob such as 'src/**'?`);
+			throw new ProjectModelError(`vscwClang: none of the sources in ${name} match vscwclang.compileCommandsInclude (${include.join(', ')}). Did you mean a glob such as 'src/**'?`);
 		}
 	}
 	log.appendLine(`[vscwclang] using ${name}${target === undefined ? '' : ` target '${target}'`}: ${sources.length} source file(s) with their own flags`);

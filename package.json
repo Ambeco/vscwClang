@@ -92,7 +92,7 @@
             "type": "string"
           }
         },
-        "vscwclang.compileCommands.include": {
+        "vscwclang.compileCommandsInclude": {
           "type": "array",
           "items": {
             "type": "string"
