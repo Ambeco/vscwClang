@@ -1,65 +1,73 @@
 import * as vscode from 'vscode';
-import { build } from '../toolchain/toolchain';
+import { Wasm } from '@vscode/wasm-wasi';
+import { processOptions } from '../runProgram';
+import { getToolchainStore } from '../toolchain/toolchain';
+import { describeUnsupportedImports } from '../toolchain/wasiImports';
+import { DebugController, type DebugTarget } from './debugController';
+import { workspacePathMapper } from './pathMapper';
+import { ReactorHost } from './reactorHost';
+import { StubDebuggee } from './stubDebuggee';
+import { scanProgram } from './wasmScan';
 
-interface DapMessage { seq: number; type: string; command?: string; arguments?: any; }
+/** What a debug launch needs from the extension: the freshly built debug program, and the arguments to run it with. */
+export interface DebugLaunchPlan { output: vscode.Uri; args: string[] }
 
 /**
  * Inline Debug Adapter: lives in the extension host (web extensions have no child processes).
- * Template only: handles the DAP handshake, then fails the launch loudly. Real stepping/breakpoints/
- * variables are milestones 4-6 in documents/remaining_work.md.
+ *
+ * A thin shell over `DebugController`, which holds the protocol logic. This class does the parts that need VS Code:
+ * `plan` builds the program in debug mode (returning undefined after reporting a failed build), then the program
+ * runs under `wasm-wasi-core` with the debug stub's channel on its stdio, and lldb's reactor decodes its DWARF.
+ *
+ * The program's stdout and stderr go to the Debug Console; its stdin is not connected (the stub owns it), so a
+ * program that reads input waits forever. A program that traps (out-of-bounds, `__builtin_trap`) hangs the session
+ * until Stop, as in Run (vscode-wasm#303).
  */
 export class VscwClangDebugAdapter implements vscode.DebugAdapter {
 	private readonly emitter = new vscode.EventEmitter<vscode.DebugProtocolMessage>();
 	readonly onDidSendMessage = this.emitter.event;
-	private seq = 1;
+	private readonly controller: DebugController;
+	private target: DebugTarget | undefined;
 
-	constructor(private readonly session: vscode.DebugSession, private readonly log: vscode.OutputChannel, private readonly context: vscode.ExtensionContext) {}
-
-	handleMessage(message: vscode.DebugProtocolMessage): void {
-		const m = message as DapMessage;
-		if (m.type !== 'request') { return; }
-		void this.handleRequest(m).catch(err => this.respond(m, false, { message: String(err?.message ?? err) }));
+	constructor(private readonly session: vscode.DebugSession, private readonly log: vscode.OutputChannel, private readonly context: vscode.ExtensionContext, private readonly plan: () => Promise<DebugLaunchPlan | undefined>) {
+		this.controller = new DebugController({
+			launch: () => this.launchTarget(),
+			send: message => this.emitter.fire(message as vscode.DebugProtocolMessage),
+		});
 	}
 
-	private async handleRequest(req: DapMessage): Promise<void> {
-		switch (req.command) {
-			case 'initialize':
-				this.respond(req, true, { supportsConfigurationDoneRequest: true });
-				this.send({ type: 'event', event: 'initialized' });
-				return;
-			case 'launch': {
-				const folder = this.session.workspaceFolder?.uri;
-				if (!folder) { throw new Error('vscwClang: open a workspace folder before debugging.'); }
-				const program = vscode.Uri.joinPath(folder, req.arguments?.program ?? '.vscwclang/debug/a.out.wasm');
-				const result = await build({ sources: [], output: program, flags: [], mode: 'debug' }, this.log, this.context);
-				throw new Error(`Build finished (exit ${result.exitCode}) but running/debugging is not implemented yet. See documents/remaining_work.md.`);
-			}
-			case 'configurationDone':
-			case 'setBreakpoints':
-			case 'setExceptionBreakpoints':
-				this.respond(req, true, { breakpoints: [] });
-				return;
-			case 'threads':
-				this.respond(req, true, { threads: [] });
-				return;
-			case 'disconnect':
-			case 'terminate':
-				this.respond(req, true, {});
-				return;
-			default:
-				throw new Error(`vscwClang debug adapter: DAP request '${req.command}' is not implemented yet. Did you mean to implement it in src/web/debug/debugAdapter.ts?`);
-		}
+	handleMessage(message: vscode.DebugProtocolMessage): void { this.controller.handleMessage(message); }
+
+	private async launchTarget(): Promise<DebugTarget> {
+		const plan = await this.plan();
+		if (!plan) { throw new Error('vscwClang: the debug build failed or was cancelled; see Problems and the vscwclang output.'); }
+		const name = plan.output.path.slice(plan.output.path.lastIndexOf('/') + 1);
+		const program = await vscode.workspace.fs.readFile(plan.output) as Uint8Array<ArrayBuffer>;
+		const module = await WebAssembly.compile(program);
+		const unsupported = describeUnsupportedImports(WebAssembly.Module.imports(module));
+		if (unsupported !== undefined) { throw new Error(`vscwClang: cannot debug ${name}. ${unsupported}`); }
+		const scan = scanProgram(program);
+		const reactorModule = await WebAssembly.compile(await getToolchainStore(this.context, this.log).getFile('lldb-wasm-reactor.wasm'));
+		const reactor = await ReactorHost.create(reactorModule, undefined, line => this.log.appendLine(line));
+		reactor.createTarget(program);
+
+		const wasm = await Wasm.load();
+		const process = await wasm.createProcess(name, module, { ...await processOptions(this.context, plan.args), stdio: { in: { kind: 'pipeIn' }, out: { kind: 'pipeOut' }, err: { kind: 'pipeOut' } } });
+		let debuggee: StubDebuggee | undefined;
+		process.stdout?.onData(chunk => debuggee?.feedStdout(chunk));
+		process.stderr?.onData(chunk => debuggee?.feedStderr(chunk));
+		const exited = process.run();
+		const encoder = new TextEncoder();
+		debuggee = new StubDebuggee({ send: text => process.stdin!.write(encoder.encode(text)), exited, terminate: () => void process.terminate(), guardSites: scan.guardSites });
+
+		const folder = this.session.workspaceFolder?.uri ?? vscode.workspace.workspaceFolders?.[0]?.uri;
+		if (!folder) { throw new Error('vscwClang: open a workspace folder before debugging.'); }
+		this.target = { session: debuggee, reactor, program, scan, paths: workspacePathMapper({ uri: folder.toString(), scheme: folder.scheme, path: folder.path, fsPath: folder.fsPath }) };
+		return this.target;
 	}
 
-	private respond(req: DapMessage, success: boolean, body: object): void {
-		this.send(success
-			? { type: 'response', request_seq: req.seq, command: req.command, success, body }
-			: { type: 'response', request_seq: req.seq, command: req.command, success, ...body });
+	dispose(): void {
+		void this.target?.session.terminate();
+		this.emitter.dispose();
 	}
-
-	private send(msg: object): void {
-		this.emitter.fire({ seq: this.seq++, ...msg } as vscode.DebugProtocolMessage);
-	}
-
-	dispose(): void { this.emitter.dispose(); }
 }

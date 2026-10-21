@@ -1,7 +1,8 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { Wasm, type WasmProcess } from '@vscode/wasm-wasi';
-import { PAGE_SIZE, StubSession } from '../../debug/stubChannel';
+import { PAGE_SIZE } from '../../debug/pagedMemory';
+import { StubSession } from '../../debug/stubChannel';
 import { scanProgram } from '../../debug/wasmScan';
 import { describeUnsupportedImports } from '../../toolchain/wasiImports';
 

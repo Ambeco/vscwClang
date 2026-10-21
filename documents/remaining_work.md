@@ -84,23 +84,25 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Done and unit-tested: `intell
 - Deliberately skipped: `default.compilerPath/intelliSenseMode/macFrameworkPath/windowsSdkVersion` (one wasm32 target), `vcFormat.*` (clang-format would be a separate item), `vcpkg`, `debugger.*`, `copilotHover`, resource caps (`maxMemory`, `maxConcurrentThreads`, caches), `doxygen.*`, `enhancedColorization`.
 
 ## Milestone 4: debug build + hook runtime
-- "Debug" mode flags: `-O0 -g -fsanitize-coverage=trace-pc-guard -Wl,--export=__stack_pointer`; decide hook granularity (trace-pc-guard vs. per-line pass) and measure overhead.
+- Debug builds use `-O0 -g -fsanitize-coverage=trace-pc-guard,no-prune` (no-prune: the default pruning leaves blocks without a guard, which breaks line-to-block mapping) and link the stub. Per-block hooks make stops block-granular; a per-line instrumentation pass in the llvm-project fork would make breakpoints exact and stepping line by line. Measure the overhead of `no-prune` on a real program (2.5x on fib(27) was with pruning).
 - Provide the hook import (`__sanitizer_cov_trace_pc_guard`) from JS; map guard -> pc -> source line.
 - Run the debuggee in its own Worker; pause synchronously inside the hook via `Atomics.wait` on a shared buffer; resume on continue/step.
 - JS-side shadow call stack from `__stack_pointer` deltas between hook firings (see llvm-project design.md).
 
 ## Milestone 5: lldb reactor integration
-- Done (2026-10-11): single-threaded `lldb-wasm-reactor.wasm` (no `thread-spawn`, unshared memory) hosted by `src/web/debug/reactorHost.ts` over `@bjorn3/browser_wasi_shim`; `reactorHost.node.test.ts` stops a real debug build inside `add()` and checks the 3-frame backtrace and values. Still to do: add the reactor to `BUILD_FILES`/the toolchain pin once llvm-project publishes it to `dist` (the local copy in `llvm-artifacts/bin` is a temporary one), and load it lazily on first debug launch.
-- Debuggee host: the stub spike is done (`debug/debugStub.c`, `debug/stubChannel.ts`; design.md "Debug stub channel"). The stub is now compiled (`-O2`, no sancov) and linked in Debug builds with `-fsanitize-coverage=trace-pc-guard` on user sources (`toolchain.ts` `addShim`); not yet verified end-to-end in the browser. Remaining: a `StubSession`-driven DAP adapter (`debugAdapter.ts`) with `setStop` re-issue on retries; Run-style terminal that only forwards typed input to stdin while the program is running; map line-level stepping (the stub steps per basic block, so the adapter repeats `into`/`over` until the source line changes); pause and breakpoint changes while the program runs freely (not possible today: the stub only reads stdin at stops). First slice: the adapter queues breakpoint changes made while running and applies them at the next stop. Later spike: poll stdin every N hooks (`poll_oneoff`/non-blocking read, unverified under wasm-wasi-core) with `-Wl,--wrap=read` so the stub owns stdin and passes the program's bytes through. Full fix is the V2 Worker host writing guard bits into shared memory and pausing via `Atomics.wait`; leaf functions without `__stack_pointer` use are absent from the stub's frame list; measure overhead on a real program (2.5x on fib(27) in Node).
-- Add `lldb-wasm-reactor.wasm` to the toolchain bundle and host it (imported `read_memory`/`write_memory`; spawned threads need the same imports and must not call `_initialize`).
-- `wasm_dbg_init` / `create_target` on build output; `resolve_pc` for line mapping; `set_stop` + `format_value` for variables.
-- The reactor is not in `built-snapshot/` today; produce and publish it.
+- Reactor: `lldb-wasm-reactor.wasm` is hosted by `src/web/debug/reactorHost.ts` over `@bjorn3/browser_wasi_shim` (no custom imports needed from the host). To do: add it to `BUILD_FILES`/publish it (it is in the local `llvm-artifacts/dist` manifest, but the pinned `v24.0.1` has none, so Debug on real vscode.dev needs v24.0.2 published and pinned); the adapter fetches it lazily at the first debug launch via `getFile('lldb-wasm-reactor.wasm')`.
+- **Debug adapter, first slice (done, node- and browser-tested): launch (debug build, then the program held at startup), line breakpoints, continue, step in/over/out, stop on entry, stack trace, hover/Watch/Debug Console evaluation of variable paths, program stdout/stderr to the Debug Console, terminate.** Structure: `DebugController` (vscode-free DAP logic) over the `DebuggeeSession` interface, implemented by `StubDebuggee` over the stub channel; `debugAdapter.ts` is the VS Code shell. The custom runner will be a second `DebuggeeSession` implementation.
+- Open: verify Debug end to end on real vscode.dev (F5, first-run reactor download, Problems on a failed debug build).
+- Open: the Variables pane lists no locals. The reactor cannot enumerate a frame's variables (needs an export in the llvm-project fork), and `formatValue` returns text, so structs, arrays and pointers do not expand either.
+- Open: stops are at block starts (see Milestone 4): an entry-block stop sees parameters before they are spilled, and a line mid-block stops at the block's first line (the response says so). Outer frames show the line of their last block start, not the call line (true call-site pcs need the custom runner's `captureWasmFrames`).
+- Open: C++ function names in the stack are mangled (`_ZL3addii`); demangle them. `launch.json` `program` is ignored (Debug always rebuilds), function and hit-count breakpoints are not implemented, `.debug_line` is parsed for every launch (unmeasured on large programs), and the line index and breakpoint resolution have no cache.
+- Open: the debugged program's stdin is not connected (the stub owns it), so a program that reads input waits forever; a Run-style terminal that forwards typed input only while the program runs is needed. Pause, breakpoint changes while running, and traps as stopped states need the custom runner (guard bits in shared memory, `Atomics.wait`).
+- Open: browser tests of the stub-based adapter (`debugAdapter.test.ts`) cover one program; add a multi-file program and a program with a C++ exception.
 
 ## Milestone 6: full DAP surface
-- Breakpoints (line, function, hit count), step in/over/out, continue, pause.
-- Threads, stack trace, scopes, variables (structs/arrays/pointers expand), hover/watch (variable-path subset only; no JIT expression evaluator, by decision).
-- Wasm traps map to a stopped state with a stack.
-- Debug console I/O, `launch` args/env/cwd, `terminate`/`disconnect` cleanup.
+- Breakpoints: function breakpoints, hit counts, conditions (line breakpoints are done).
+- Pause; threads (only `main` today); scopes that list locals and expandable variables (see Milestone 5); wasm traps map to a stopped state with a stack (custom runner).
+- Debug console input, `launch` env/cwd.
 
 ## Milestone 7: release
 - Marketplace packaging (web-only, no bundled binaries), CI running the web tests, README screenshots, CHANGELOG.

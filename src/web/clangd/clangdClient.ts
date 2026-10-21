@@ -22,11 +22,15 @@ const CLANGD_TMP = 'clangd-tmp';
  * The background indexer needs a worker thread this single-threaded build doesn't have, hence
  * `-background-index=false`; `IndexSweep` (`indexSweep.ts`) works around that with a didOpen/didClose fake-
  * indexing sweep over the workspace's source files (documents/remaining_work.md "V3 idea: clangd").
+ *
+ * Only one client may be live per extension host: the server's commands (`clangd.applyFix`, ...) are registered
+ * globally, so a second client fails to initialize. The test workspace turns the activation client off
+ * (`.vscode/settings.json`) so a test can start its own, with `ignoreIntelliSenseSetting`.
  */
-export async function startClangdClient(context: vscode.ExtensionContext, log: vscode.OutputChannel): Promise<vscode.Disposable | undefined> {
+export async function startClangdClient(context: vscode.ExtensionContext, log: vscode.OutputChannel, options: { ignoreIntelliSenseSetting?: boolean } = {}): Promise<vscode.Disposable | undefined> {
 	const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
 	if (!folder) { return undefined; }
-	if (!intelliSenseEnabled()) {
+	if (!options.ignoreIntelliSenseSetting && !intelliSenseEnabled()) {
 		log.appendLine('[vscwclang] IntelliSense is off (vscwclang.intelliSense.enabled, or C_Cpp.intelliSenseEngine: disabled); clangd was not started. Reload the window after changing it.');
 		return undefined;
 	}

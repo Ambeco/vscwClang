@@ -84,7 +84,8 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 	const objects = await wasm.createMemoryFileSystem();
 	const run = (wasmFile: string, args: string[], extra?: ToolExtras) => runTool(wasm, toolchain, sysroot, wasmFile, args, extra);
 	const userFlags = splitFlags(request.flags, GUEST_WORKSPACE);
-	const modeFlags = request.mode === 'debug' ? ['-O0', '-g', '-fsanitize-coverage=trace-pc-guard'] : [];
+	// no-prune: by default sancov skips blocks it deems redundant, but a line breakpoint needs a guard at every block start.
+	const modeFlags = request.mode === 'debug' ? ['-O0', '-g', '-fsanitize-coverage=trace-pc-guard,no-prune'] : [];
 	const ownFlags = new Map(sources.map(s => [s.guest, splitFlags(request.sourceFlags?.[s.guest] ?? [], GUEST_WORKSPACE)]));
 	const linkFlags = [...new Set([...userFlags.link, ...[...ownFlags.values()].flatMap(f => f.link)])];
 	const objectPaths: string[] = [];

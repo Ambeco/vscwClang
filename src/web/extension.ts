@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { VscwClangDebugAdapter } from './debug/debugAdapter';
+import { VscwClangDebugAdapter, type DebugLaunchPlan } from './debug/debugAdapter';
 import { buildWorkspace, type BuildOptions } from './buildWorkspace';
 import { chooseCompileDatabase, chooseRun, defaultBuildOptions, runArgsSetting, trackActiveCppFile } from './projectConfig';
 import { runProgram } from './runProgram';
@@ -57,7 +57,7 @@ export function activate(context: vscode.ExtensionContext) {
 			provideDebugConfigurations: () => [{ type: 'vscwclang', request: 'launch', name: 'Debug C++ (vscwClang)', program: '.vscwclang/debug/a.out.wasm' }],
 		}),
 		vscode.debug.registerDebugAdapterDescriptorFactory('vscwclang', {
-			createDebugAdapterDescriptor: session => new vscode.DebugAdapterInlineImplementation(new VscwClangDebugAdapter(session, log, context)),
+			createDebugAdapterDescriptor: session => new vscode.DebugAdapterInlineImplementation(new VscwClangDebugAdapter(session, log, context, () => debugPlan(context, log, diagnostics))),
 		}),
 	);
 }
@@ -86,6 +86,15 @@ async function buildAndRun(context: vscode.ExtensionContext, log: vscode.OutputC
 	const { folder, output, result } = await buildWorkspace(context, log, build, (parsed, f, o) => publishDiagnostics(diagnostics, f, parsed, o));
 	publishDiagnostics(diagnostics, folder, result.parsed, output);
 	if (reportBuild(log, output, result.exitCode)) { await runProgram(context, output, args); }
+}
+
+/** Builds the workspace in debug mode with the same sources, flags and arguments as Run; undefined if the build fails or is cancelled. */
+async function debugPlan(context: vscode.ExtensionContext, log: vscode.OutputChannel, diagnostics: vscode.DiagnosticCollection): Promise<DebugLaunchPlan | undefined> {
+	const run = await runPlan(context, log);
+	if (run.cancelled) { return undefined; }
+	const { folder, output, result } = await buildWorkspace(context, log, { ...run.build, mode: 'debug' }, (parsed, f, o) => publishDiagnostics(diagnostics, f, parsed, o));
+	publishDiagnostics(diagnostics, folder, result.parsed, output);
+	return reportBuild(log, output, result.exitCode) ? { output, args: run.args } : undefined;
 }
 
 function reportBuild(log: vscode.OutputChannel, output: vscode.Uri, exitCode: number): boolean {

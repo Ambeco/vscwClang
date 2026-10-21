@@ -12,6 +12,8 @@
  * Guard addresses identify breakpoints and frames: `scanProgram` maps them to DWARF pcs.
  */
 
+import { PAGE_SIZE, PagedMemory, evaluateWithMemory } from './pagedMemory';
+
 const FRAME_START = new TextEncoder().encode('\x1b_vscw ');
 const FRAME_END = [0x1b, 0x5c];
 const decoder = new TextDecoder();
@@ -117,58 +119,6 @@ export class FrameDemux {
 	}
 }
 
-export const PAGE_SIZE = 4096;
-
-/**
- * Page cache for one stop. `read` never fails: a missing page is recorded in `misses` and the read returns nothing
- * (lldb reports an error that `evaluateWithMemory` discards). A page the stub could not read is cached as
- * unreadable so retries terminate.
- */
-export class PagedMemory {
-	private readonly pages = new Map<number, Uint8Array | null>();
-	readonly misses = new Set<number>();
-
-	read = (addr: number, size: number): Uint8Array => {
-		const first = Math.floor(addr / PAGE_SIZE), last = Math.floor((addr + Math.max(size, 1) - 1) / PAGE_SIZE);
-		const out = new Uint8Array(size);
-		let missing = false;
-		for (let page = first; page <= last; page++) {
-			const data = this.pages.get(page);
-			if (data === undefined) { this.misses.add(page); missing = true; continue; }
-			if (data === null) { return new Uint8Array(0); }
-			const from = Math.max(addr, page * PAGE_SIZE), to = Math.min(addr + size, (page + 1) * PAGE_SIZE);
-			out.set(data.subarray(from - page * PAGE_SIZE, to - page * PAGE_SIZE), from - addr);
-		}
-		return missing ? new Uint8Array(0) : out;
-	};
-
-	has(page: number): boolean { return this.pages.has(page); }
-	set(page: number, data: Uint8Array | null): void { this.pages.set(page, data); }
-	clear(): void { this.pages.clear(); this.misses.clear(); }
-}
-
-/**
- * Runs a synchronous lldb call, fetching the pages it missed and re-running it until it reads only cached memory.
- *
- * lldb does not throw on a failed read: it formats `<read memory ... failed>` into the value, and keeps that result
- * for the rest of the stop, so a plain re-run repeats it. `reset` must therefore start a fresh stop before each
- * re-run (`ReactorHost.setStop` with the same frames).
- */
-export async function evaluateWithMemory<T>(memory: PagedMemory, fetchPages: (pages: number[]) => Promise<void>, op: () => T, reset: () => void = () => undefined, maxRounds = 16): Promise<T> {
-	for (let round = 0; ; round++) {
-		if (round > 0) { reset(); }
-		memory.misses.clear();
-		let result: T | undefined, error: unknown;
-		try { result = op(); } catch (e) { error = e; }
-		if (memory.misses.size === 0) {
-			if (error !== undefined) { throw error; }
-			return result as T;
-		}
-		if (round >= maxRounds) { throw new Error(`vscwClang: reading the debuggee's memory still missed pages after ${maxRounds} fetch rounds; did you mean to expand a smaller value?`); }
-		await fetchPages([...memory.misses]);
-	}
-}
-
 export interface StopEvent { reason: string; frames: StubFrame[] }
 
 /**
@@ -182,6 +132,7 @@ export class StubSession {
 	private readonly demux: FrameDemux;
 	private readonly inbox: StubMessage[] = [];
 	private waiter: (() => void) | undefined;
+	private closed = false;
 	guardRange: { start: number; end: number } | undefined;
 
 	constructor(private readonly send: (text: string) => void | Promise<void>, onProgramStderr: (b: Uint8Array) => void) {
@@ -198,6 +149,7 @@ export class StubSession {
 			if (i >= 0) { return this.inbox.splice(i, 1)[0]; }
 			const err = this.inbox.findIndex(m => m.kind === 'error');
 			if (err >= 0 && !match(this.inbox[err])) { const m = this.inbox.splice(err, 1)[0] as { text: string }; throw new Error(`vscwClang: the debug stub reported an error while waiting for ${what}: ${m.text}`); }
+			if (this.closed) { throw new Error(`vscwClang: the debug stub channel was closed while waiting for ${what}; the program has exited.`); }
 			const left = deadline - Date.now();
 			if (left <= 0) { throw new Error(`vscwClang: timed out after ${timeoutMs} ms waiting for ${what} from the debug stub; did the program exit, or is it waiting for input?`); }
 			await new Promise<void>(resolve => { const t = setTimeout(resolve, left); this.waiter = () => { clearTimeout(t); resolve(); }; });
@@ -215,15 +167,23 @@ export class StubSession {
 	async setBreakpoints(guardAddrs: number[]): Promise<void> { await this.send(stubCommands.breakpoints(guardAddrs)); }
 	async resume(how: 'go' | 'into' | 'over' | 'out'): Promise<void> { await this.send(stubCommands[how]()); }
 
+	/** Reads memory from the stopped program; undefined if the stub reports it unreadable. */
+	async readMemory(addr: number, len: number, timeoutMs = 30_000): Promise<Uint8Array | undefined> {
+		await this.send(stubCommands.mem(addr, len));
+		const m = await this.take(x => (x.kind === 'mem' || x.kind === 'memerr') && x.addr === addr, `memory at 0x${addr.toString(16)}`, timeoutMs);
+		return m.kind === 'mem' ? m.data : undefined;
+	}
+
 	/** Fetches whole pages into the cache. */
 	async fetchPages(pages: number[], timeoutMs = 30_000): Promise<void> {
 		for (const page of pages) {
 			if (this.memory.has(page)) { continue; }
-			await this.send(stubCommands.mem(page * PAGE_SIZE, PAGE_SIZE));
-			const m = await this.take(x => (x.kind === 'mem' || x.kind === 'memerr') && x.addr === page * PAGE_SIZE, `memory page 0x${(page * PAGE_SIZE).toString(16)}`, timeoutMs);
-			this.memory.set(page, m.kind === 'mem' ? m.data : null);
+			this.memory.set(page, await this.readMemory(page * PAGE_SIZE, PAGE_SIZE, timeoutMs) ?? null);
 		}
 	}
+
+	/** Unblocks any pending wait with an error; call when the program has exited. */
+	close(): void { this.closed = true; this.waiter?.(); }
 
 	/** Runs a synchronous lldb call over this stop's memory. */
 	evaluate<T>(op: () => T, reset?: () => void): Promise<T> { return evaluateWithMemory(this.memory, pages => this.fetchPages(pages), op, reset); }

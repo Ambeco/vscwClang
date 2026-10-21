@@ -10,7 +10,8 @@ import { startClangdClient } from '../../clangd/clangdClient';
  * Starts its own client (its own `ExtensionContext`-shaped storage dir, its own toolchain-url override) rather
  * than relying on the one `extension.ts` starts at activation: that one runs once, before any suite, with the
  * default (CDN) `toolchainUrl` and the real (possibly read-only, in the test harness) `globalStorageUri`, so
- * nothing here could configure it in time anyway.
+ * nothing here could configure it in time anyway. The fixture workspace's `.vscode/settings.json` turns the
+ * activation client off, because two live clients collide on the server's command ids.
  */
 suite('vscwClang clangd client (in browser)', function () {
 	this.timeout(60_000);
@@ -32,7 +33,7 @@ suite('vscwClang clangd client (in browser)', function () {
 		await vscode.workspace.getConfiguration('vscwclang').update('toolchainUrl', toolchainUrl, vscode.ConfigurationTarget.Global);
 		const context = { extensionUri: extension.extensionUri, globalStorageUri: vscode.Uri.joinPath(dir, 'storage') } as vscode.ExtensionContext;
 		try {
-			disposable = await startClangdClient(context, log);
+			disposable = await startClangdClient(context, log, { ignoreIntelliSenseSetting: true });
 		} catch {
 			this.skip();
 			return;

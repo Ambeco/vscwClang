@@ -219,8 +219,13 @@
             "properties": {
               "program": {
                 "type": "string",
-                "description": "Workspace-relative path of the built .wasm.",
+                "description": "Not used yet: Debug builds the workspace in debug mode (the same sources and flags as Run) and debugs the result.",
                 "default": ".vscwclang/debug/a.out.wasm"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop at the first instrumented block of the program instead of running to the first breakpoint.",
+                "default": false
               }
             }
           }

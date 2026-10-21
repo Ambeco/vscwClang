@@ -102,11 +102,13 @@ export interface WasmModuleInfo {
 	funcExports: Map<string, number>;
 	/** Function index -> name, from the `name` section (absent in stripped toolchain binaries, present in user debug builds). */
 	names: Map<number, string>;
+	/** Custom sections other than `name` (e.g. `.debug_line`): payload start and end as file offsets. */
+	customSections: Map<string, { start: number; end: number }>;
 }
 
 export function parseModule(bytes: Uint8Array): WasmModuleInfo {
 	const r = new Reader(bytes, 8);
-	const mod: WasmModuleInfo = { funcImports: [], codeStart: -1, bodies: [], funcExports: new Map(), names: new Map() };
+	const mod: WasmModuleInfo = { funcImports: [], codeStart: -1, bodies: [], funcExports: new Map(), names: new Map(), customSections: new Map() };
 	while (r.pos < bytes.length) {
 		const id = r.u8();
 		const size = r.u32();
@@ -136,7 +138,9 @@ export function parseModule(bytes: Uint8Array): WasmModuleInfo {
 				r.pos += bodySize;
 			}
 		} else if (id === 0) {
-			if (r.name() === 'name') {
+			const sectionName = r.name();
+			if (sectionName !== 'name') { mod.customSections.set(sectionName, { start: r.pos, end }); }
+			if (sectionName === 'name') {
 				while (r.pos < end) {
 					const sub = r.u8(), subSize = r.u32(), subEnd = r.pos + subSize;
 					if (sub === 1) {

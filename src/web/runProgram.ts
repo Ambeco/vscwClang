@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { Wasm } from '@vscode/wasm-wasi';
+import { Wasm, type Environment, type MountPointDescriptor } from '@vscode/wasm-wasi';
 import { runEnvSetting } from './projectConfig';
 import { describeUnsupportedImports } from './toolchain/wasiImports';
 import { defaultRunEnvironment, GUEST_HOME, GUEST_TMP } from './toolchain/runEnvironment';
@@ -43,6 +43,20 @@ async function prepareScratchDirs(context: vscode.ExtensionContext): Promise<[vs
 	return [tmp, home];
 }
 
+/** What Run and Debug share: arguments, environment, and the `/workspace`, `/tmp` and `/home/user` mounts. */
+export async function processOptions(context: vscode.ExtensionContext, args: string[]): Promise<{ args: string[]; env: Environment; mountPoints: MountPointDescriptor[] }> {
+	const [tmp, home] = await prepareScratchDirs(context);
+	return {
+		args,
+		env: defaultRunEnvironment(runEnvSetting()),
+		mountPoints: [
+			{ kind: 'workspaceFolder' },
+			{ kind: 'vscodeFileSystem', uri: tmp, mountPoint: GUEST_TMP },
+			{ kind: 'vscodeFileSystem', uri: home, mountPoint: GUEST_HOME },
+		],
+	};
+}
+
 /**
  * Runs a built .wasm under wasm-wasi-core with stdio wired to a new terminal.
  *
@@ -70,17 +84,7 @@ export async function runProgram(context: vscode.ExtensionContext, program: vsco
 	} else {
 		vscode.window.createTerminal({ name: `vscwClang: ${name}`, pty }).show(true);
 	}
-	const [tmp, home] = await prepareScratchDirs(context);
-	const process = await wasm.createProcess(name, module, {
-		args,
-		env: defaultRunEnvironment(runEnvSetting()),
-		stdio: pty.stdio,
-		mountPoints: [
-			{ kind: 'workspaceFolder' },
-			{ kind: 'vscodeFileSystem', uri: tmp, mountPoint: GUEST_TMP },
-			{ kind: 'vscodeFileSystem', uri: home, mountPoint: GUEST_HOME },
-		],
-	});
+	const process = await wasm.createProcess(name, module, { ...await processOptions(context, args), stdio: pty.stdio });
 	let terminated = false;
 	const terminate = () => { terminated = true; void process.terminate(); };
 	const stop = [pty.onDidCtrlC(terminate), pty.onDidCloseTerminal(terminate)];
