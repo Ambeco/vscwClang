@@ -19,7 +19,7 @@ export function checkUserFlags(flags: readonly string[]): string[] {
 		} else if (f.startsWith('--sysroot') || f === '-isysroot' || f.startsWith('-resource-dir') || f === '-nostdinc' || f === '-nostdlibinc') {
 			reject('the sysroot and resource dir are fixed by the toolchain', `'-I<dir>' for extra headers inside the workspace`);
 		} else if (f.startsWith('--target') || f === '-target' || f.startsWith('-march=') || f.startsWith('-mcpu=')) {
-			reject('output is always wasm32-wasip1', `to select threads via the 'threads' setting instead`);
+			reject('output is always wasm32-wasip1', 'to remove it');
 		} else if (f === '-o' || f === '-c' || f === '-S' || f === '-E') {
 			reject('the build command controls output and compile/link stages', `the build output setting instead`);
 		} else if (isNoGcSections(f, flags[i - 1])) {
