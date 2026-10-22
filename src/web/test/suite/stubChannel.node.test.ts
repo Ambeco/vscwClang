@@ -12,6 +12,7 @@ const REACTOR = join(ROOT, 'llvm-artifacts', 'bin', 'lldb-wasm-reactor.wasm');
 // progstub.wasm is fixtures/debug/prog.c plus src/web/debug/debugStub.c (wasi-sdk 34):
 //   clang -O2 -c debugStub.c -o debugStub.o
 //   clang -O0 -g -fsanitize-coverage=trace-pc-guard prog.c debugStub.o -Wl,--export=__sanitizer_cov_trace_pc_guard -o progstub.wasm
+// `node scripts/build-debug-fixtures.mjs` rebuilds both stub fixtures with llvm-artifacts' own clang/lld; rerun it after editing debugStub.c.
 const PROG = join(ROOT, 'src', 'web', 'test', 'fixtures', 'debug', 'progstub.wasm');
 const ESC = String.fromCharCode(27);
 const frame = (text: string) => `${ESC}_vscw ${text}${ESC}\\`;

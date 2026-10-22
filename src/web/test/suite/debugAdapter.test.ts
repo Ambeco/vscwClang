@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
-import { VscwClangDebugAdapter } from '../../debug/debugAdapter';
+import { VscwClangDebugAdapter, type DebugHost, type ProgramTerminal } from '../../debug/debugAdapter';
 import { build } from '../../toolchain/toolchain';
 import { DapClient, type DapMessage } from './dapClient';
 
@@ -42,15 +42,15 @@ suite('vscwClang debug adapter (in browser)', function () {
 
 	teardown(() => { adapters.forEach(a => a.dispose()); adapters = []; });
 
-	/** An adapter whose "debug build" is a real `build()` of main.cpp in debug mode. */
-	function newClient(): DapClient {
-		const output = vscode.Uri.joinPath(dir, 'main.debug.wasm');
+	/** An adapter whose "debug build" is a real `build()` of `source` in debug mode. */
+	function newClient(source = 'main.cpp', host?: DebugHost): DapClient {
+		const output = vscode.Uri.joinPath(dir, `${source}.debug.wasm`);
 		const plan = async () => {
-			const built = await build({ sources: [vscode.Uri.joinPath(dir, 'main.cpp')], output, flags: [], mode: 'debug' }, log, context);
+			const built = await build({ sources: [vscode.Uri.joinPath(dir, source)], output, flags: [], mode: 'debug' }, log, context);
 			assert.strictEqual(built.exitCode, 0, built.diagnostics);
 			return { output, args: [] };
 		};
-		const adapter = new VscwClangDebugAdapter({ workspaceFolder: { uri: folder } } as vscode.DebugSession, log, context, plan);
+		const adapter = new VscwClangDebugAdapter({ workspaceFolder: { uri: folder } } as vscode.DebugSession, log, context, plan, host);
 		adapters.push(adapter);
 		const client = new DapClient(request => adapter.handleMessage(request as vscode.DebugProtocolMessage));
 		adapter.onDidSendMessage(m => client.receive(m as unknown as DapMessage));
@@ -62,7 +62,7 @@ suite('vscwClang debug adapter (in browser)', function () {
 	test('builds in debug mode, stops at a breakpoint with a stack trace and values, steps, and runs to the exit code', async () => {
 		const client = newClient();
 		await client.ok('initialize', { adapterID: 'vscwclang' });
-		await client.ok('launch', {});
+		await client.ok('launch', { console: 'internalConsole' });
 		await client.event('initialized');
 		const set = await client.ok('setBreakpoints', { source: { path: sourcePath() }, breakpoints: [{ line: 6 }] });
 		assert.strictEqual(set.breakpoints[0].verified, true, JSON.stringify(set));
@@ -88,6 +88,72 @@ suite('vscwClang debug adapter (in browser)', function () {
 		assert.strictEqual((await client.event('exited')).body.exitCode, 0);
 		await client.event('terminated');
 		assert.strictEqual(client.events('output').filter(m => m.body.category === 'stdout').map(m => m.body.output).join(''), 'r=11\n');
+	});
+
+	const INPUT_SOURCE = [
+		'#include <iostream>',
+		'static int twice(int v) {',
+		'  int r = v * 2;',
+		'  return r;',
+		'}',
+		'int main() {',
+		'  int n = 0;',
+		'  std::cout << "n? " << std::flush;',
+		'  std::cin >> n;',
+		'  std::cout << "got " << twice(n) << std::endl;',
+		'  return 0;',
+		'}',
+		'',
+	].join(String.fromCharCode(10));
+
+	/** Opens the debug terminal as VS Code would, collecting what it shows. */
+	function terminalHost(): { host: DebugHost; screen: () => string; type: (keys: string) => void; waitFor: (needle: string) => Promise<void> } {
+		let pty: ProgramTerminal | undefined;
+		let screen = '';
+		const host: DebugHost = { openTerminal: p => { pty = p; p.onDidWrite(t => { screen += t; }); p.open(); } };
+		const waitFor = async (needle: string) => {
+			for (let i = 0; i < 600 && !screen.includes(needle); i++) { await new Promise(r => setTimeout(r, 50)); }
+			assert.ok(screen.includes(needle), `terminal never showed ${JSON.stringify(needle)}; it shows ${JSON.stringify(screen)}`);
+		};
+		return { host, screen: () => screen, type: keys => pty!.handleInput(keys), waitFor };
+	}
+
+	test('Debug runs the program in a terminal: input typed after its prompt reaches std::cin, with a breakpoint after the read', async () => {
+		await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, 'input.cpp'), new TextEncoder().encode(INPUT_SOURCE));
+		const terminal = terminalHost();
+		const client = newClient('input.cpp', terminal.host);
+		await client.ok('initialize', { adapterID: 'vscwclang' });
+		await client.ok('launch', {});
+		await client.event('initialized');
+		const set = await client.ok('setBreakpoints', { source: { path: vscode.Uri.joinPath(dir, 'input.cpp').toString() }, breakpoints: [{ line: 3 }] });
+		assert.strictEqual(set.breakpoints[0].verified, true, JSON.stringify(set));
+		await client.ok('configurationDone');
+		await terminal.waitFor('n? ');
+		terminal.type('21\r');
+		assert.strictEqual((await client.event('stopped')).body.reason, 'breakpoint');
+		await client.ok('continue', { threadId: 1 });
+		assert.strictEqual((await client.event('exited')).body.exitCode, 0);
+		await terminal.waitFor('got 42');
+		assert.ok(terminal.screen().includes('n? 21\r\n'), `typed text is echoed beside the prompt: ${JSON.stringify(terminal.screen())}`);
+		assert.deepStrictEqual(client.events('output').filter(m => m.body.category === 'stdout'), [], 'program output is in the terminal, not the Debug Console');
+	});
+
+	test('Debug: a line typed while the program is held at startup, and one typed at a breakpoint stop, both reach the program in order', async () => {
+		await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, 'input.cpp'), new TextEncoder().encode(INPUT_SOURCE));
+		const terminal = terminalHost();
+		const client = newClient('input.cpp', terminal.host);
+		await client.ok('initialize', { adapterID: 'vscwclang' });
+		await client.ok('launch', {});
+		await client.event('initialized');
+		terminal.type('5\r'); // before configurationDone: the stub is waiting for its first command and hands this back
+		const set = await client.ok('setBreakpoints', { source: { path: vscode.Uri.joinPath(dir, 'input.cpp').toString() }, breakpoints: [{ line: 7 }] });
+		assert.strictEqual(set.breakpoints[0].verified, true, JSON.stringify(set));
+		await client.ok('configurationDone');
+		assert.strictEqual((await client.event('stopped')).body.reason, 'breakpoint'); // main's first block, before the prompt and the read
+		terminal.type('9\r'); // typed at the stop: waits for the resume, after the 5
+		await client.ok('continue', { threadId: 1 });
+		assert.strictEqual((await client.event('exited')).body.exitCode, 0);
+		await terminal.waitFor('got 10');
 	});
 
 	test('a program that fails to build reports the failure and ends the launch', async () => {

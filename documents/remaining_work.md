@@ -104,8 +104,8 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Done and unit-tested: `intell
 - Open: the Variables pane lists no locals. The reactor cannot enumerate a frame's variables (needs an export in the llvm-project fork), and `formatValue` returns text, so structs, arrays and pointers do not expand either.
 - Open: stops are at block starts (see Milestone 4): an entry-block stop sees parameters before they are spilled, and a line mid-block stops at the block's first line (the response says so). Outer frames show the line of their last block start, not the call line (true call-site pcs need the custom runner's `captureWasmFrames`).
 - Open: C++ function names in the stack are mangled (`_ZL3addii`); demangle them. `launch.json` `program` is ignored (Debug always rebuilds), function and hit-count breakpoints are not implemented, `.debug_line` is parsed for every launch (unmeasured on large programs), and the line index and breakpoint resolution have no cache.
-- Open: the debugged program's stdin is not connected (the stub owns it), so a program that reads input waits forever; a Run-style terminal that forwards typed input only while the program runs is needed. Pause, breakpoint changes while running, and traps as stopped states need the custom runner (guard bits in shared memory, `Atomics.wait`).
-- Open: browser tests of the stub-based adapter (`debugAdapter.test.ts`) cover one program; add a multi-file program and a program with a C++ exception.
+- Open: pause, breakpoint changes while running, and traps as stopped states need the custom runner (guard bits in shared memory, `Atomics.wait`). The debug terminal has no end-of-file key and no Ctrl+C.
+- Open: browser tests of the stub-based adapter (`debugAdapter.test.ts`) cover single-file programs (stdio, and iostream with input); add a multi-file program and one that throws and catches a C++ exception.
 
 ## Milestone 6: full DAP surface
 - Breakpoints: function breakpoints, hit counts, conditions (line breakpoints are done).

@@ -3,9 +3,14 @@
  *
  * The stub pauses the program inside the coverage hook and talks over the program's own stdio: messages to the
  * host are `ESC _ vscw <text> ESC \` frames mixed into stderr, commands from the host are text lines on stdin. Only
- * stderr needs demultiplexing (`FrameDemux`); the host must write to stdin only while the program is stopped, so
- * commands and the program's own input never interleave. Breakpoints and "pause" therefore take effect at stops:
- * a breakpoint cannot be added to a program that is running free.
+ * stderr needs demultiplexing (`FrameDemux`); the host writes commands to stdin only while the program is stopped, and
+ * the program's own input only while it runs. Breakpoints and "pause" therefore take effect at stops: a breakpoint
+ * cannot be added to a program that is running free.
+ *
+ * Program input written just before a stop may still be unread when the stub starts reading commands. A line that does
+ * not start with `vscw ` is therefore handed back as an `input` frame (never an error) for the host to re-send after
+ * the next resume; `sync` makes the stub reply `synced` once every earlier line has been read, so the host knows all
+ * of it has come back.
  *
  * lldb reads the debuggee's memory synchronously but the channel is asynchronous, so `PagedMemory` serves reads from
  * a per-stop page cache and records misses; `evaluateWithMemory` re-runs a lldb call after fetching what it missed.
@@ -25,7 +30,15 @@ export type StubMessage =
 	| { kind: 'stop'; reason: string; frames: StubFrame[] }
 	| { kind: 'mem'; addr: number; data: Uint8Array }
 	| { kind: 'memerr'; addr: number; len: number }
+	| { kind: 'input'; data: Uint8Array }
+	| { kind: 'synced' }
 	| { kind: 'error'; text: string };
+
+function fromHex(hex: string): Uint8Array {
+	const data = new Uint8Array(hex.length / 2);
+	for (let i = 0; i < data.length; i++) { data[i] = parseInt(hex.substr(2 * i, 2), 16); }
+	return data;
+}
 
 export function parseMessage(text: string): StubMessage {
 	const [kind, ...rest] = text.split(' ');
@@ -39,12 +52,11 @@ export function parseMessage(text: string): StubMessage {
 			return { kind, reason, frames };
 		}
 		case 'mem': {
-			const hex = rest[1] ?? '';
-			const data = new Uint8Array(hex.length / 2);
-			for (let i = 0; i < data.length; i++) { data[i] = parseInt(hex.substr(2 * i, 2), 16); }
-			return { kind, addr: Number(rest[0]), data };
+			return { kind, addr: Number(rest[0]), data: fromHex(rest[1] ?? '') };
 		}
 		case 'memerr': return { kind, addr: Number(rest[0]), len: Number(rest[1]) };
+		case 'input': return { kind, data: fromHex(rest[0] ?? '') };
+		case 'synced': return { kind };
 		case 'error': return { kind, text: rest.join(' ') };
 	}
 	throw new Error(`vscwClang: the debug stub sent a message of unknown kind "${kind}" (${text.slice(0, 80)}); did the stub and extension versions drift apart?`);
@@ -53,6 +65,7 @@ export function parseMessage(text: string): StubMessage {
 export const stubCommands = {
 	breakpoints: (guardAddrs: number[]) => `vscw bp ${guardAddrs.join(' ')}\n`,
 	mem: (addr: number, len: number) => `vscw mem ${addr} ${len}\n`,
+	sync: () => 'vscw sync\n',
 	go: () => 'vscw go\n',
 	into: () => 'vscw into\n',
 	over: () => 'vscw over\n',
@@ -135,8 +148,13 @@ export class StubSession {
 	private closed = false;
 	guardRange: { start: number; end: number } | undefined;
 
-	constructor(private readonly send: (text: string) => void | Promise<void>, onProgramStderr: (b: Uint8Array) => void) {
-		this.demux = new FrameDemux(m => { this.inbox.push(m); this.waiter?.(); }, onProgramStderr);
+	/** `onProgramInput` receives bytes meant for the program that the stub read at a stop; they must be re-sent after the next resume. */
+	constructor(private readonly send: (text: string) => void | Promise<void>, onProgramStderr: (b: Uint8Array) => void, private readonly onProgramInput?: (b: Uint8Array) => void) {
+		this.demux = new FrameDemux(m => {
+			if (m.kind === 'input') { this.onProgramInput?.(m.data); return; }
+			this.inbox.push(m);
+			this.waiter?.();
+		}, onProgramStderr);
 	}
 
 	onStderr(chunk: Uint8Array): void { this.demux.push(chunk); }
@@ -166,6 +184,15 @@ export class StubSession {
 
 	async setBreakpoints(guardAddrs: number[]): Promise<void> { await this.send(stubCommands.breakpoints(guardAddrs)); }
 	async resume(how: 'go' | 'into' | 'over' | 'out'): Promise<void> { await this.send(stubCommands[how]()); }
+
+	/**
+	 * Resolves once the stub has processed every line sent before this call, so any program input it was holding has
+	 * been delivered to `onProgramInput` first. Only valid at a stop.
+	 */
+	async sync(timeoutMs = 30_000): Promise<void> {
+		await this.send(stubCommands.sync());
+		await this.take(m => m.kind === 'synced', 'a sync reply', timeoutMs);
+	}
 
 	/** Reads memory from the stopped program; undefined if the stub reports it unreadable. */
 	async readMemory(addr: number, len: number, timeoutMs = 30_000): Promise<Uint8Array | undefined> {

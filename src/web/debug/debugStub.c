@@ -7,7 +7,9 @@
  *
  * Wire format: stub -> host on stderr as ESC _ vscw <text> ESC \ (the program's own stderr passes through around
  * it); host -> stub as text lines on stdin, read ONE byte at a time so no byte meant for the program is swallowed.
- * The host only writes commands while the program is stopped here, so the two uses of stdin never overlap.
+ * The host only writes commands while the program is stopped here, so the two uses of stdin never overlap, except
+ * for program input written just before a stop: such a line (one not starting with "vscw ") is sent back as an
+ * `input` frame instead of being treated as a command.
  */
 #include <stdint.h>
 #include <string.h>
@@ -56,15 +58,20 @@ static void out_num(uintptr_t v) {
 static void out_begin(const char *kind) { out_len = 0; out_str("\x1b_vscw "); out_str(kind); out_str(" "); }
 static void out_end(void) { out_str("\x1b\\"); put_all(out, out_len); }
 
-static int read_line(char *buf, size_t cap) {
+/* Reads up to a newline or until `buf` is full; *complete says whether the newline was seen. -1 when stdin closed. */
+static int read_line(char *buf, size_t cap, int *complete) {
   size_t n = 0;
+  *complete = 0;
   for (;;) {
     char c;
     ssize_t r = read(0, &c, 1);
     if (r <= 0) return -1;
-    if (c == '\n') { buf[n] = 0; return (int)n; }
-    if (c != '\r' && n + 1 < cap) buf[n++] = c;
+    if (c == '\n') { *complete = 1; break; }
+    buf[n++] = c;
+    if (n + 1 >= cap) break;
   }
+  buf[n] = 0;
+  return (int)n;
 }
 
 static const char *next_token(const char *s, uintptr_t *value) {
@@ -106,14 +113,40 @@ static void send_memory(const char *args) {
   out_end();
 }
 
+/* Hands bytes the program was meant to read back to the host, which re-sends them after the next resume. */
+static void send_input(const char *p, size_t n, int newline) {
+  out_begin("input");
+  for (size_t i = 0; i < n; i++) {
+    uint8_t b = (uint8_t)p[i];
+    out[out_len++] = "0123456789abcdef"[b >> 4];
+    out[out_len++] = "0123456789abcdef"[b & 15];
+  }
+  if (newline) { out[out_len++] = '0'; out[out_len++] = 'a'; }
+  out_end();
+}
+
 /* Serves commands until one resumes the program. */
 static void command_loop(void) {
   char line[1100];
+  enum { LINE_NEW, LINE_INPUT, LINE_DISCARD } rest = LINE_NEW; /* what an unfinished line's remainder is */
   for (;;) {
-    if (read_line(line, sizeof line) < 0) { detached = 1; step_mode = STEP_NONE; return; }
-    if (strncmp(line, "vscw ", 5) != 0) { send_error("unrecognized command; every line must start with 'vscw '"); continue; }
+    int complete;
+    int n = read_line(line, sizeof line, &complete);
+    if (n < 0) { detached = 1; step_mode = STEP_NONE; return; }
+    int was = rest;
+    rest = LINE_NEW;
+    /* Program input typed before the program read it (it stopped at a breakpoint first): give it back, in order. */
+    if (was == LINE_INPUT || (was == LINE_NEW && strncmp(line, "vscw ", 5) != 0)) {
+      send_input(line, (size_t)n, complete);
+      if (!complete) rest = LINE_INPUT;
+      continue;
+    }
+    if (was == LINE_DISCARD) { if (!complete) rest = LINE_DISCARD; continue; }
+    if (!complete) { send_error("command line too long; did you mean a shorter 'vscw bp' list?"); rest = LINE_DISCARD; continue; }
+    if (n && line[n - 1] == '\r') line[--n] = 0;
     const char *cmd = line + 5;
-    if (!strncmp(cmd, "bp", 2)) set_breakpoints(cmd + 2);
+    if (!strcmp(cmd, "sync")) { out_begin("synced"); out_end(); }
+    else if (!strncmp(cmd, "bp", 2)) set_breakpoints(cmd + 2);
     else if (!strncmp(cmd, "mem ", 4)) send_memory(cmd + 4);
     else if (!strcmp(cmd, "go")) { step_mode = STEP_NONE; return; }
     else if (!strcmp(cmd, "into")) { step_mode = STEP_INTO; return; }
