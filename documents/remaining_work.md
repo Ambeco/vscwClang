@@ -77,7 +77,7 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 
 Open, most important first (all observed on the local `v24.0.2` toolchain):
 - Build and Run of a debug-mode build (any task with `-g`) leaves a blank terminal forever; release works. Probably the stdin-gated debug stub; Run should not link or wait on it.
-- clangd: first answer after opening a file with libc++ headers takes ~2 min and ~50 s after each edit (preamble); `E VFS: failed to set CWD to /workspace: Link has been severed` on each request; no progress UI while it warms up.
+- clangd: slowness with libc++ headers (~2 min first answer, ~50 s per edit) is expected until V2 multithreading; not a bug. Still open: `E VFS: failed to set CWD to /workspace: Link has been severed` on each request, and no progress UI while it warms up.
 - Go to Definition into `/sysroot` headers: "The editor could not be opened" (no file system provider for the wasi-only `/sysroot`).
 - `Tasks: Run Build Task` / Ctrl+Shift+B / `Tasks: Run Task` run nothing for the `vscwclang` task type (the provider is listed in "Configure Default Build Task").
 - `C_Cpp.*` fallback settings ignored; folder-level `.vscode/settings.json` flags ignored in a multi-root workspace (confirm what a real local folder opens as).
