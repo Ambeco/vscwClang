@@ -83,7 +83,8 @@ async function runPlan(context: vscode.ExtensionContext, log: vscode.OutputChann
 }
 
 async function buildAndRun(context: vscode.ExtensionContext, log: vscode.OutputChannel, diagnostics: vscode.DiagnosticCollection, args: string[], build?: BuildOptions): Promise<void> {
-	const { folder, output, result } = await buildWorkspace(context, log, build, (parsed, f, o) => publishDiagnostics(diagnostics, f, parsed, o));
+	// Release even when the task has -g (which selects debug mode): a debug build links the stub that waits for a debugger host at startup.
+	const { folder, output, result } = await buildWorkspace(context, log, { ...build, mode: 'release' }, (parsed, f, o) => publishDiagnostics(diagnostics, f, parsed, o));
 	publishDiagnostics(diagnostics, folder, result.parsed, output);
 	if (reportBuild(log, output, result.exitCode)) { await runProgram(context, output, args); }
 }
