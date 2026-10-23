@@ -4,7 +4,7 @@ import { processOptions } from '../runProgram';
 import { getToolchainStore } from '../toolchain/toolchain';
 import { describeUnsupportedImports } from '../toolchain/wasiImports';
 import { DebugController, type DebugTarget } from './debugController';
-import { LineEditor, toTerminalNewlines } from './lineEditor';
+import { ProgramTerminal } from '../host/programTerminal';
 import { workspacePathMapper } from './pathMapper';
 import { ReactorHost } from './reactorHost';
 import { StubDebuggee } from './stubDebuggee';
@@ -13,40 +13,11 @@ import { scanProgram } from './wasmScan';
 /** What a debug launch needs from the extension: the freshly built debug program, and the arguments to run it with. */
 export interface DebugLaunchPlan { output: vscode.Uri; args: string[] }
 
+export { ProgramTerminal };
+
 /** Test seam: receives the program's terminal instead of opening a real one for it. */
 export interface DebugHost {
 	openTerminal?: (pty: ProgramTerminal) => void;
-}
-
-/** The debugged program's terminal: echoes and edits typed lines, hands each completed line to `onLine`, shows program output. */
-export class ProgramTerminal implements vscode.Pseudoterminal {
-	private readonly writeEmitter = new vscode.EventEmitter<string>();
-	readonly onDidWrite = this.writeEmitter.event;
-	private readonly editor = new LineEditor();
-	private pending: string[] | undefined = [];
-
-	constructor(private readonly onLine: (line: string) => void) {}
-
-	/** VS Code drops writes made before `open`, so they wait for it. */
-	open(): void {
-		const early = this.pending ?? [];
-		this.pending = undefined;
-		early.forEach(text => this.writeEmitter.fire(text));
-	}
-
-	close(): void { /* the session ends from the debug toolbar, not from closing the terminal */ }
-
-	handleInput(data: string): void {
-		const { echo, lines } = this.editor.feed(data);
-		if (echo) { this.writeRaw(echo); }
-		lines.forEach(this.onLine);
-	}
-
-	write(text: string): void { this.writeRaw(toTerminalNewlines(text)); }
-
-	private writeRaw(text: string): void {
-		if (this.pending) { this.pending.push(text); } else { this.writeEmitter.fire(text); }
-	}
 }
 
 /**

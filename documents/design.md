@@ -13,7 +13,7 @@ src/web/
   runProgram.ts
   tasks.ts
   clangd/                      # language client and index sweep
-  host/                        # ProcessHost seam over wasm-wasi-core (V2 Worker host goes here)
+  host/                        # ProcessHost seam over wasm-wasi-core; V2 Worker host (guest WASI, RPC channel, GuestProcess)
   debug/                       # inline DAP adapter, stub channel, lldb reactor host
   toolchain/                   # vscode-free logic plus the compiler host (toolchain.ts)
   test/suite/                  # *.node.test.ts run in node, the rest under test-web
@@ -46,6 +46,13 @@ V1 uses `wasm-wasi-core` (a separate VS Code extension; it requires `SharedArray
 
 The `wasm-wasi-core` host is deliberately a thin first slice. The extension stays minimal (build, run, clangd, the DAP basics) and the next major step is V2, our own Worker host. V2 is what unlocks threads, the spawn hook, concurrent compiles, trap and uncaught-exception reporting (no `run()` hang) and full debugging (pause and breakpoint changes while the program runs, traps as stopped states). Work that only compensates for `wasm-wasi-core`'s limits (the debug stub's stdio channel, trap-hang workarounds) is therefore kept small.
 
+
+### V2 Worker host (`src/web/host/`, opt-in via `vscwclang.experimental.workerHost`, Run only so far)
+- `wasiGuest.ts` (`GuestWasi`, vscode-free): WASI preview 1 over a synchronous `GuestServices` interface. Regular files are read whole on open and written back when the last descriptor closes, on `fd_sync`, and at exit or trap; a trap or `proc_exit` never escapes, `start` returns the outcome. `..` cannot leave a preopen.
+- `syncChannel.ts`: a Worker posts a request and blocks in `Atomics.wait`; the extension host (`SyncRpcServer`) answers into a 256 KiB shared buffer in as many chunks as needed. Output is fire-and-forget. One channel per Worker.
+- `guestWorker.ts` / `guestWorker.web.ts`: the Worker entry (`RpcGuestServices` forwards to the channel); bundled to `dist/web/host/guestWorker.web.js` and started from a blob URL (`workerHost.ts`).
+- `guestProcess.ts` (`GuestProcess`, vscode-free): owns the Worker, serves its requests from a `GuestFileSystem` and a `StdinQueue`, and resolves `run()` with exit, trap, failed or terminated. `vscodeGuestFs.ts` is the `GuestFileSystem` over `vscode.workspace.fs` and a mount table (`/workspace`, `/tmp`, `/home/user`); `programTerminal.ts` is the line-mode terminal shared with Debug.
+- A trap ends Run with `[prog trapped: <engine message>]` and exit code 139.
 
 ### V2 Worker rules (probed in `workerMechanics.test.ts`)
 - A Worker that creates a child Worker and then blocks in `Atomics.wait` never sees the child start (Chromium). Every Worker the host needs (spawned `cc1`/`wasm-ld`, `thread-spawn` threads) is therefore created by the extension host on a message from the blocked Worker, which then waits on a SharedArrayBuffer; a pre-spawned pool would work too.

@@ -212,6 +212,11 @@
           "minimum": 0,
           "markdownDescription": "Seconds to wait for each clang or wasm-ld invocation before stopping it and reporting an error. Compilers print nothing while working, so a crashed run cannot be told apart from a slow one; raise this for very large sources. `0` disables the timeout."
         },
+        "vscwclang.experimental.workerHost": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Experimental: run programs on vscwClang's own WebAssembly host instead of `wasm-wasi-core`. A crash (out-of-bounds access, division by zero, uncaught exception) then ends the run with a message instead of leaving the terminal waiting. Files a program writes are saved when it closes them or exits."
+        },
         "vscwclang.useCppToolsSettings": {
           "scope": "resource",
           "type": "boolean",

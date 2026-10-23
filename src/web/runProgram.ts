@@ -1,6 +1,11 @@
 import * as vscode from 'vscode';
 import { type Environment, type MountPointDescriptor } from '@vscode/wasm-wasi';
 import { loadProcessHost, type ProcessHost } from './host/processHost';
+import { GuestProcess, StdinQueue } from './host/guestProcess';
+import { ProgramTerminal } from './host/programTerminal';
+import { VscodeGuestFs } from './host/vscodeGuestFs';
+import { createGuestWorker } from './host/workerHost';
+import { GUEST_WORKSPACE } from './toolchain/guestPaths';
 import { runEnvSetting } from './projectConfig';
 import { describeUnsupportedImports } from './toolchain/wasiImports';
 import { defaultRunEnvironment, GUEST_HOME, GUEST_TMP } from './toolchain/runEnvironment';
@@ -73,6 +78,7 @@ export async function processOptions(context: vscode.ExtensionContext, args: str
  * (out-of-bounds access, `__builtin_trap`) hang until Ctrl+C because wasm-wasi-core never reports them (vscode-wasm#303).
  */
 export async function runProgram(context: vscode.ExtensionContext, program: vscode.Uri, args: string[], host: RunHost = {}): Promise<number> {
+	if (vscode.workspace.getConfiguration('vscwclang').get<boolean>('experimental.workerHost', false)) { return runProgramOnWorkerHost(context, program, args, host); }
 	const wasm = await loadProcessHost();
 	const name = program.path.slice(program.path.lastIndexOf('/') + 1);
 	const module = await WebAssembly.compile(await vscode.workspace.fs.readFile(program) as Uint8Array<ArrayBuffer>);
@@ -104,4 +110,56 @@ export async function runProgram(context: vscode.ExtensionContext, program: vsco
 	}
 	await pty.write(`\r\n[${name} exited with code ${exitCode}${exitCode === ABORT_EXIT_CODE ? ' (aborted)' : ''}]\r\n`);
 	return exitCode;
+}
+
+/** Exit code for a program that trapped, as a SIGSEGV would end a native one. */
+const TRAPPED_EXIT_CODE = 139;
+
+/**
+ * Run on the V2 Worker host (`vscwclang.experimental.workerHost`): same terminal, mounts and environment as
+ * `runProgram`, but a trap (out-of-bounds access, divide by zero, `__builtin_trap`, uncaught exception) ends the run
+ * with a message and exit code 139 instead of hanging. Ctrl+C or closing the terminal stops the program.
+ * Files are saved when the program closes them or ends; see `GuestWasi`.
+ */
+async function runProgramOnWorkerHost(context: vscode.ExtensionContext, program: vscode.Uri, args: string[], host: RunHost): Promise<number> {
+	const name = program.path.slice(program.path.lastIndexOf('/') + 1);
+	const module = await WebAssembly.compile(await vscode.workspace.fs.readFile(program) as Uint8Array<ArrayBuffer>);
+	const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
+	if (!folder) { throw new Error('vscwClang: open a workspace folder before running.'); }
+	const [tmp, home] = await prepareScratchDirs(context);
+	const stdin = new StdinQueue();
+	const encoder = new TextEncoder();
+	let guest: GuestProcess | undefined;
+	const terminal = new ProgramTerminal(line => stdin.push(encoder.encode(line)), { onInterrupt: () => guest?.terminate(), onClose: () => guest?.terminate() });
+	if (host.openTerminal) {
+		host.openTerminal(terminal as never);
+	} else {
+		vscode.window.createTerminal({ name: `vscwClang: ${name}`, pty: terminal }).show(false);
+	}
+	const decoders = { 1: new TextDecoder(), 2: new TextDecoder() };
+	const worker = await createGuestWorker(context);
+	guest = new GuestProcess({
+		module, args: [name, ...args], env: defaultRunEnvironment(runEnvSetting()),
+		preopens: [GUEST_WORKSPACE, GUEST_TMP, GUEST_HOME],
+		fs: new VscodeGuestFs([{ guestPath: GUEST_WORKSPACE, uri: folder }, { guestPath: GUEST_TMP, uri: tmp }, { guestPath: GUEST_HOME, uri: home }]),
+		stdin,
+		onOutput: (fd, data) => terminal.write(decoders[fd].decode(data, { stream: true })),
+		createWorker: () => worker,
+	});
+	const outcome = await guest.run();
+	stdin.end();
+	switch (outcome.kind) {
+		case 'exit':
+			terminal.write(`\n[${name} exited with code ${outcome.code}${outcome.code === ABORT_EXIT_CODE ? ' (aborted)' : ''}]\n`);
+			return outcome.code;
+		case 'trap':
+			terminal.write(`\n[${name} trapped: ${outcome.message}]\n`);
+			return TRAPPED_EXIT_CODE;
+		case 'terminated':
+			terminal.write(`\n[${name} terminated]\n`);
+			return TERMINATED_EXIT_CODE;
+		case 'failed':
+			terminal.write(`\n[${name} could not run: ${outcome.message}]\n`);
+			throw new Error(`vscwClang: ${name} could not run: ${outcome.message}`);
+	}
 }

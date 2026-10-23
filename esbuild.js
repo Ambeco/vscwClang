@@ -61,6 +61,7 @@ async function main() {
 	const ctx = await esbuild.context({
 		entryPoints: [
 			'src/web/extension.ts',
+			'src/web/host/guestWorker.web.ts',
 			'src/web/test/suite/extensionTests.ts'
 		],
 		bundle: true,
