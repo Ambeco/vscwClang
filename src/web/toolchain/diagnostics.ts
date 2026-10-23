@@ -89,3 +89,14 @@ export function withFailureFallback(parsed: ParsedDiagnostic[], exitCode: number
 	const message = tail ? `Build failed (exit ${exitCode}); last output: ${tail}` : `Build failed (exit ${exitCode}) with no output; see the vscwclang output channel.`;
 	return [...parsed, { severity: 'error', message, notes: [] }];
 }
+
+/**
+ * Whether a build diagnostic repeats one clangd already shows (same line and severity, same text up to clangd's
+ * capitalized first letter and its trailing "(fix available)"), so one mistake is not listed twice in Problems.
+ *
+ * @helper
+ */
+export function isSameReport(a: { line: number; severity: Severity; message: string }, b: { line: number; severity: Severity; message: string }): boolean {
+	const normalize = (m: string) => m.replace(/ \((?:fix|fixes) available\)$/, '').replace(/^./, c => c.toLowerCase());
+	return a.line === b.line && a.severity === b.severity && normalize(a.message) === normalize(b.message);
+}

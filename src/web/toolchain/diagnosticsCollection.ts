@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { fromGuestPath } from './guestPaths';
-import { workspaceAnchor, type ParsedDiagnostic } from './diagnostics';
+import { isSameReport, workspaceAnchor, type ParsedDiagnostic, type Severity } from './diagnostics';
 
 const SEVERITY: Record<ParsedDiagnostic['severity'], vscode.DiagnosticSeverity> = {
 	error: vscode.DiagnosticSeverity.Error,
@@ -36,10 +36,19 @@ export function publishDiagnostics(collection: vscode.DiagnosticCollection, fold
 			const nc = resolve(n.file) ? Math.max((n.column ?? 1) - 1, 0) : column;
 			return new vscode.DiagnosticRelatedInformation(new vscode.Location(noteUri, new vscode.Position(nl, nc)), n.message);
 		});
+		if (isShownByClangd(uri, diag, p.severity)) { continue; }
 		const entry = byFile.get(uri.toString()) ?? { uri, diags: [] };
 		entry.diags.push(diag);
 		byFile.set(uri.toString(), entry);
 	}
 	collection.clear();
 	collection.set([...byFile.values()].map(e => [e.uri, e.diags] as [vscode.Uri, vscode.Diagnostic[]]));
+}
+
+const BY_SEVERITY = new Map<vscode.DiagnosticSeverity, Severity>([[vscode.DiagnosticSeverity.Error, 'error'], [vscode.DiagnosticSeverity.Warning, 'warning'], [vscode.DiagnosticSeverity.Information, 'note'], [vscode.DiagnosticSeverity.Hint, 'remark']]);
+
+function isShownByClangd(uri: vscode.Uri, diag: vscode.Diagnostic, severity: Severity): boolean {
+	const ours = { line: diag.range.start.line, severity, message: diag.message };
+	return vscode.languages.getDiagnostics(uri).some(other => other.source === 'clangd'
+		&& isSameReport(ours, { line: other.range.start.line, severity: BY_SEVERITY.get(other.severity) ?? 'error', message: other.message }));
 }

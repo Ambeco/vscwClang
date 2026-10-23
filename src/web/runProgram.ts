@@ -82,7 +82,7 @@ export async function runProgram(context: vscode.ExtensionContext, program: vsco
 	if (host.openTerminal) {
 		host.openTerminal(pty);
 	} else {
-		vscode.window.createTerminal({ name: `vscwClang: ${name}`, pty }).show(true);
+		vscode.window.createTerminal({ name: `vscwClang: ${name}`, pty }).show(false);
 	}
 	const process = await wasm.createProcess(name, module, { ...await processOptions(context, args), stdio: pty.stdio });
 	let terminated = false;

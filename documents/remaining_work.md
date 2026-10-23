@@ -77,10 +77,9 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 
 Open, most important first (all observed on the local `v24.0.2` toolchain):
 - clangd: slowness with libc++ headers (~2 min first answer, ~50 s per edit) is expected until V2 multithreading; not a bug. Still open: `E VFS: failed to set CWD to /workspace: Link has been severed` on each request, and no progress UI while it warms up.
-- Go to Definition into `/sysroot` headers: "The editor could not be opened" (no file system provider for the wasi-only `/sysroot`).
-- `Tasks: Run Build Task` / Ctrl+Shift+B / `Tasks: Run Task` run nothing for the `vscwclang` task type (the provider is listed in "Configure Default Build Task").
-- `C_Cpp.*` fallback settings ignored; folder-level `.vscode/settings.json` flags ignored in a multi-root workspace (confirm what a real local folder opens as).
-- `RuntimeError: unreachable` console error from `wasm-wasi-core` on every build; duplicate Problems (build + clangd) for one error; terminal not focused after Run; entry frame named `__original_main`.
+- `Tasks: Run Build Task` / Ctrl+Shift+B / `Tasks: Run Task` do nothing on the web workbench for any task (its task service never leaves "reconnecting" without a terminal backend; `documents/live_testing.md` finding 3). Decide the workaround: a Ctrl+Shift+B keybinding for C/C++ files calling `vscwclang.build` (which honours the default `tasks.json` build task), and/or our own run-task command.
+- Re-verify on real vscode.dev: the `C_Cpp.*` fallbacks and folder-level `.vscode/settings.json` flags (now contributed keys and resource-scoped settings), and read the `[vscwclang] workspace:` log line to learn whether a real local folder opens as multi-root.
+- `RuntimeError: unreachable` console error from `wasm-wasi-core` on every build; entry frame named `__original_main`.
 
 ## cpptools-style settings (see design.md "cpptools settings compatibility")
 

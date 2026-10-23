@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { parseDiagnostics, withFailureFallback, workspaceAnchor } from '../../toolchain/diagnostics';
+import { isSameReport, parseDiagnostics, withFailureFallback, workspaceAnchor } from '../../toolchain/diagnostics';
 
 suite('parseDiagnostics', () => {
 	test('error with column and flag', () => {
@@ -91,5 +91,19 @@ suite('workspaceAnchor', () => {
 		const d = { file: '/sysroot/x.h', line: 1, severity: 'error' as const, message: 'm', notes: [note('/sysroot/y.h', 2)] };
 		assert.strictEqual(workspaceAnchor(d, inWs), undefined);
 		assert.strictEqual(workspaceAnchor({ severity: 'error', message: 'linker', notes: [] }, inWs), undefined);
+	});
+});
+
+suite('isSameReport', () => {
+	const build = { line: 1, severity: 'error' as const, message: "use of undeclared identifier 'missing'" };
+
+	test('matches the capitalized wording and fix suffix clangd adds', () => {
+		assert.ok(isSameReport(build, { ...build, message: "Use of undeclared identifier 'missing' (fix available)" }));
+	});
+
+	test('differs by line, severity or text', () => {
+		assert.ok(!isSameReport(build, { ...build, line: 2 }));
+		assert.ok(!isSameReport(build, { ...build, severity: 'warning' }));
+		assert.ok(!isSameReport(build, { ...build, message: "unknown type name 'missing'" }));
 	});
 });

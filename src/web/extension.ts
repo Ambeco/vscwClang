@@ -14,6 +14,8 @@ export function activate(context: vscode.ExtensionContext) {
 	const log = vscode.window.createOutputChannel('vscwclang');
 	const diagnostics = vscode.languages.createDiagnosticCollection('vscwclang');
 	context.subscriptions.push(log, diagnostics, trackActiveCppFile());
+	const folders = vscode.workspace.workspaceFolders ?? [];
+	log.appendLine(`[vscwclang] workspace: ${vscode.workspace.workspaceFile?.toString() ?? 'single folder (no workspace file)'}; folders: ${folders.map(f => f.uri.toString()).join(', ') || 'none'}`);
 	void startClangdClient(context, log).then(d => { if (d) { context.subscriptions.push(d); } },
 		e => log.appendLine(`[vscwclang] clangd did not start: ${e instanceof Error ? e.message : String(e)}`));
 

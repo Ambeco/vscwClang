@@ -17,6 +17,8 @@ src/web/
       fromGuestPath
       stripWorkspaceFolder
       isToolchainGuestPath     # /sysroot and /resource
+    diagnostics.ts
+      isSameReport             # build vs clangd Problems
     projectModel.ts
       resolveVariables         # ${...} expansion shared by tasks, launch and settings
       programStem
