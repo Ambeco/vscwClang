@@ -77,7 +77,7 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 
 Open, most important first (all observed on the local `v24.0.2` toolchain):
 - clangd: slowness with libc++ headers (~2 min first answer, ~50 s per edit) is expected until V2 multithreading; not a bug. Still open: `E VFS: failed to set CWD to /workspace: Link has been severed` on each request, and no progress UI while it warms up.
-- `Tasks: Run Build Task` / Ctrl+Shift+B / `Tasks: Run Task` do nothing on the web workbench for any task (its task service never leaves "reconnecting" without a terminal backend; `documents/live_testing.md` finding 3). Decide the workaround: a Ctrl+Shift+B keybinding for C/C++ files calling `vscwclang.build` (which honours the default `tasks.json` build task), and/or our own run-task command.
+- `Tasks: Run Build Task` / Ctrl+Shift+B / `Tasks: Run Task` do nothing on the web workbench for any task (its task service never leaves "reconnecting" without a terminal backend; `documents/live_testing.md` finding 3). Decided 2026-10-22: no keybinding override; mirror cpptools' desktop keys only where web leaves them free (cpptools' sole default is Alt+O Switch Header/Source, which we do not have), and let users sort out conflicts. The `Build C++`/`Run C++` palette commands are the way in; a possible web-side fix is upstream.
 - Re-verify on real vscode.dev: the `C_Cpp.*` fallbacks and folder-level `.vscode/settings.json` flags (now contributed keys and resource-scoped settings), and read the `[vscwclang] workspace:` log line to learn whether a real local folder opens as multi-root.
 - `RuntimeError: unreachable` console error from `wasm-wasi-core` on every build; entry frame named `__original_main`.
 
