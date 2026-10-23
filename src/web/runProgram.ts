@@ -78,7 +78,7 @@ export async function processOptions(context: vscode.ExtensionContext, args: str
  * (out-of-bounds access, `__builtin_trap`) hang until Ctrl+C because wasm-wasi-core never reports them (vscode-wasm#303).
  */
 export async function runProgram(context: vscode.ExtensionContext, program: vscode.Uri, args: string[], host: RunHost = {}): Promise<number> {
-	if (vscode.workspace.getConfiguration('vscwclang').get<boolean>('experimental.workerHost', false)) { return runProgramOnWorkerHost(context, program, args, host); }
+	if (vscode.workspace.getConfiguration('vscwclang').get<boolean>('experimental.workerHost', true)) { return runProgramOnWorkerHost(context, program, args, host); }
 	const wasm = await loadProcessHost();
 	const name = program.path.slice(program.path.lastIndexOf('/') + 1);
 	const module = await WebAssembly.compile(await vscode.workspace.fs.readFile(program) as Uint8Array<ArrayBuffer>);

@@ -47,7 +47,7 @@ V1 uses `wasm-wasi-core` (a separate VS Code extension; it requires `SharedArray
 The `wasm-wasi-core` host is deliberately a thin first slice. The extension stays minimal (build, run, clangd, the DAP basics) and the next major step is V2, our own Worker host. V2 is what unlocks threads, the spawn hook, concurrent compiles, trap and uncaught-exception reporting (no `run()` hang) and full debugging (pause and breakpoint changes while the program runs, traps as stopped states). Work that only compensates for `wasm-wasi-core`'s limits (the debug stub's stdio channel, trap-hang workarounds) is therefore kept small.
 
 
-### V2 Worker host (`src/web/host/`, opt-in via `vscwclang.experimental.workerHost`, Run only so far)
+### V2 Worker host (`src/web/host/`, Run uses it by default; `vscwclang.experimental.workerHost` = false falls back to `wasm-wasi-core`; Build, clangd and Debug are not on it yet)
 - `wasiGuest.ts` (`GuestWasi`, vscode-free): WASI preview 1 over a synchronous `GuestServices` interface. Regular files are read whole on open and written back when the last descriptor closes, on `fd_sync`, and at exit or trap; a trap or `proc_exit` never escapes, `start` returns the outcome. `..` cannot leave a preopen.
 - `syncChannel.ts`: a Worker posts a request and blocks in `Atomics.wait`; the extension host (`SyncRpcServer`) answers into a 256 KiB shared buffer in as many chunks as needed. Output is fire-and-forget. One channel per Worker.
 - `guestWorker.ts` / `guestWorker.web.ts`: the Worker entry (`RpcGuestServices` forwards to the channel); bundled to `dist/web/host/guestWorker.web.js` and started from a blob URL (`workerHost.ts`).
