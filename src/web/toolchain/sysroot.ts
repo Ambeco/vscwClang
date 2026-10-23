@@ -1,4 +1,5 @@
-import { Wasm, type MemoryFileSystem } from '@vscode/wasm-wasi';
+import { type MemoryFileSystem } from '@vscode/wasm-wasi';
+import type { ProcessHost } from '../host/processHost';
 import { unzip } from 'fflate';
 import type { ToolchainStore } from './toolchainStore';
 
@@ -15,7 +16,7 @@ export interface CompileFlags {
 }
 
 /** Unzips `sysroot.zip` (entries under `sysroot/` and `resource/`) into two memory file systems. */
-export async function loadSysroot(wasm: Wasm, toolchain: ToolchainStore): Promise<SysrootFs> {
+export async function loadSysroot(wasm: ProcessHost, toolchain: ToolchainStore): Promise<SysrootFs> {
 	const zipBits = await toolchain.getFile('sysroot.zip');
 	const files = await new Promise<Record<string, Uint8Array>>((resolve, reject) =>
 		unzip(zipBits, (err, data) => err ? reject(err) : resolve(data)));

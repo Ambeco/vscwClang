@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import { Wasm, type Environment, type MountPointDescriptor } from '@vscode/wasm-wasi';
+import { type Environment, type MountPointDescriptor } from '@vscode/wasm-wasi';
+import { loadProcessHost, type ProcessHost } from './host/processHost';
 import { runEnvSetting } from './projectConfig';
 import { describeUnsupportedImports } from './toolchain/wasiImports';
 import { defaultRunEnvironment, GUEST_HOME, GUEST_TMP } from './toolchain/runEnvironment';
@@ -16,7 +17,7 @@ const TERMINATED_EXIT_CODE = 130;
 
 /** Test seam: receives the pseudoterminal instead of opening a real terminal for it. */
 export interface RunHost {
-	openTerminal?: (pty: ReturnType<Wasm['createPseudoterminal']>) => void;
+	openTerminal?: (pty: ReturnType<ProcessHost['createPseudoterminal']>) => void;
 }
 
 /**
@@ -72,7 +73,7 @@ export async function processOptions(context: vscode.ExtensionContext, args: str
  * (out-of-bounds access, `__builtin_trap`) hang until Ctrl+C because wasm-wasi-core never reports them (vscode-wasm#303).
  */
 export async function runProgram(context: vscode.ExtensionContext, program: vscode.Uri, args: string[], host: RunHost = {}): Promise<number> {
-	const wasm = await Wasm.load();
+	const wasm = await loadProcessHost();
 	const name = program.path.slice(program.path.lastIndexOf('/') + 1);
 	const module = await WebAssembly.compile(await vscode.workspace.fs.readFile(program) as Uint8Array<ArrayBuffer>);
 	const unsupported = describeUnsupportedImports(WebAssembly.Module.imports(module));

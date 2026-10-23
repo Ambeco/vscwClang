@@ -13,6 +13,7 @@ src/web/
   runProgram.ts
   tasks.ts
   clangd/                      # language client and index sweep
+  host/                        # ProcessHost seam over wasm-wasi-core (V2 Worker host goes here)
   debug/                       # inline DAP adapter, stub channel, lldb reactor host
   toolchain/                   # vscode-free logic plus the compiler host (toolchain.ts)
   test/suite/                  # *.node.test.ts run in node, the rest under test-web

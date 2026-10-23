@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { Wasm } from '@vscode/wasm-wasi';
+import { loadProcessHost } from '../host/processHost';
 import { processOptions } from '../runProgram';
 import { getToolchainStore } from '../toolchain/toolchain';
 import { describeUnsupportedImports } from '../toolchain/wasiImports';
@@ -90,7 +90,7 @@ export class VscwClangDebugAdapter implements vscode.DebugAdapter {
 		const reactor = await ReactorHost.create(reactorModule, undefined, line => this.log.appendLine(line));
 		reactor.createTarget(program);
 
-		const wasm = await Wasm.load();
+		const wasm = await loadProcessHost();
 		const process = await wasm.createProcess(name, module, { ...await processOptions(this.context, plan.args), stdio: { in: { kind: 'pipeIn' }, out: { kind: 'pipeOut' }, err: { kind: 'pipeOut' } } });
 		let debuggee: StubDebuggee | undefined;
 		process.stdout?.onData(chunk => debuggee?.feedStdout(chunk));

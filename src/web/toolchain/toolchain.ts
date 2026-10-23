@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import { Wasm, type MemoryFileSystem } from '@vscode/wasm-wasi';
+import { type MemoryFileSystem } from '@vscode/wasm-wasi';
+import { loadProcessHost, type ProcessHost } from '../host/processHost';
 import { parseDiagnostics, withFailureFallback, type ParsedDiagnostic } from './diagnostics';
 import { checkUserFlags, splitFlags } from './flagPolicy';
 import { GUEST_WORKSPACE, toGuestPath } from './guestPaths';
@@ -78,7 +79,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 	await vscode.workspace.fs.createDirectory(outputDir);
 	const toolchain = getToolchainStore(context, log);
 	await toolchain.ensure();
-	const wasm = await Wasm.load();
+	const wasm = await loadProcessHost();
 	const [flags, sysroot] = await Promise.all([loadCompileFlags(toolchain), getSysroot(wasm, toolchain)]);
 	const sub = (f: string) => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource');
 	const objects = await wasm.createMemoryFileSystem();
@@ -187,7 +188,7 @@ export function getToolchainStore(context: StoreContext, log: vscode.OutputChann
 	return store;
 }
 
-function getSysroot(wasm: Wasm, toolchain: ToolchainStore): Promise<SysrootFs> {
+function getSysroot(wasm: ProcessHost, toolchain: ToolchainStore): Promise<SysrootFs> {
 	sysrootPromise ??= loadSysroot(wasm, toolchain).catch(e => { sysrootPromise = undefined; throw e; });
 	return sysrootPromise;
 }
@@ -220,7 +221,7 @@ interface ToolExtras {
 	outputDir?: vscode.Uri;
 }
 
-async function runTool(wasm: Wasm, toolchain: ToolchainStore, sysroot: SysrootFs, wasmFile: string, args: string[], extra: ToolExtras = {}): Promise<{ exitCode: number; stderr: string; stdout: Uint8Array<ArrayBuffer> }> {
+async function runTool(wasm: ProcessHost, toolchain: ToolchainStore, sysroot: SysrootFs, wasmFile: string, args: string[], extra: ToolExtras = {}): Promise<{ exitCode: number; stderr: string; stdout: Uint8Array<ArrayBuffer> }> {
 	const module = await getModule(toolchain, wasmFile);
 	const process = await wasm.createProcess(args[0], module, {
 		args: args.slice(1),

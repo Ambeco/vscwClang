@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import { Wasm, type WasmProcess } from '@vscode/wasm-wasi';
+import { type WasmProcess } from '@vscode/wasm-wasi';
+import { loadProcessHost } from '../host/processHost';
 import { LanguageClient, ReadableStreamMessageReader, WriteableStreamMessageWriter, type LanguageClientOptions, type MessageTransports } from 'vscode-languageclient/browser';
 import { loadCompileFlags, loadSysroot } from '../toolchain/sysroot';
 import { fallbackFlags } from './fallbackFlags';
@@ -38,7 +39,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	const level = loggingLevel();
 
 	const toolchain = getToolchainStore(context, log);
-	const wasm = await Wasm.load();
+	const wasm = await loadProcessHost();
 	const [bits, sysroot, flags] = await Promise.all([toolchain.getFile('clangd.wasm'), loadSysroot(wasm, toolchain), loadCompileFlags(toolchain)]);
 	const compileFlags = flags.compile['wasm32-wasip1'].map(f => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource'));
 	const module = await WebAssembly.compile(bits);
