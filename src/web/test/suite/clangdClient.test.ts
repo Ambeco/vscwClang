@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { startClangdClient } from '../../clangd/clangdClient';
+import { TOOLCHAIN_SCHEME } from '../../toolchain/guestPaths';
 
 /**
  * Verifies the wired-up client (`src/web/clangd/clangdClient.ts`), as opposed to `clangd.test.ts`, which drives
@@ -69,5 +70,27 @@ suite('vscwClang clangd client (in browser)', function () {
 		}
 		assert.ok(diagnostics.length > 0, 'expected clangd to publish at least one diagnostic for broken.cpp');
 		assert.ok(diagnostics.some(d => /undeclared_name|undeclared identifier/i.test(d.message)), JSON.stringify(diagnostics));
+	});
+
+	test('go-to-definition into a /sysroot header opens it through the read-only toolchain scheme', async () => {
+		const text = ['#include <cstdio>', 'int main() { return std::puts("x"); }', ''].join(String.fromCharCode(10));
+		await write('sysdef.cpp', text);
+		const file = vscode.Uri.joinPath(dir, 'sysdef.cpp');
+		await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(file));
+		const position = new vscode.Position(1, text.split(String.fromCharCode(10))[1].indexOf('puts') + 1);
+		const deadline = Date.now() + 40_000;
+		let found: vscode.Location | undefined;
+		while (Date.now() < deadline && !found) {
+			const defs = await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[]>('vscode.executeDefinitionProvider', file, position) ?? [];
+			const first = defs[0];
+			found = first && 'uri' in first ? first : undefined;
+			if (!found) { await new Promise(r => setTimeout(r, 500)); }
+		}
+		assert.ok(found, 'clangd returned no definition for std::puts');
+		assert.strictEqual(found.uri.scheme, TOOLCHAIN_SCHEME, found.uri.toString());
+		assert.ok(found.uri.path.startsWith('/sysroot/'), found.uri.path);
+		const opened = await vscode.workspace.openTextDocument(found.uri);
+		assert.ok(opened.getText().includes('puts'), `no puts in ${found.uri.toString()} (${opened.getText().length} chars)`);
+		await assert.rejects(Promise.resolve(vscode.workspace.fs.writeFile(found.uri, encoder.encode('x'))), /read-only/);
 	});
 });

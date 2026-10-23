@@ -23,3 +23,11 @@ export function fromGuestPath(folderPath: string, guestPath: string): string | u
 export function stripWorkspaceFolder(path: string): string {
 	return path.replace(/^\$\{(?:workspaceFolder|workspaceRoot)\}[\\/]?/, '');
 }
+
+/** URI scheme under which the toolchain's guest-only `/sysroot` and `/resource` files are shown in editors. */
+export const TOOLCHAIN_SCHEME = 'vscwclang-toolchain';
+
+/** @helper True for `/sysroot` and `/resource` guest paths and what lies under them, which have no host file system. */
+export function isToolchainGuestPath(guestPath: string): boolean {
+	return /^\/(sysroot|resource)(\/|$)/.test(guestPath);
+}

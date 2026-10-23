@@ -5,6 +5,8 @@ import type { ToolchainStore } from './toolchainStore';
 export interface SysrootFs {
 	sysroot: MemoryFileSystem;
 	resource: MemoryFileSystem;
+	/** Every file by zip path (`sysroot/...`, `resource/...`), kept so editors can open headers clangd points into. */
+	files: Record<string, Uint8Array>;
 }
 
 export interface CompileFlags {
@@ -17,7 +19,7 @@ export async function loadSysroot(wasm: Wasm, toolchain: ToolchainStore): Promis
 	const zipBits = await toolchain.getFile('sysroot.zip');
 	const files = await new Promise<Record<string, Uint8Array>>((resolve, reject) =>
 		unzip(zipBits, (err, data) => err ? reject(err) : resolve(data)));
-	const result: SysrootFs = { sysroot: await wasm.createMemoryFileSystem(), resource: await wasm.createMemoryFileSystem() };
+	const result: SysrootFs = { sysroot: await wasm.createMemoryFileSystem(), resource: await wasm.createMemoryFileSystem(), files };
 	const made = { sysroot: new Set<string>(), resource: new Set<string>() };
 	for (const [path, content] of Object.entries(files)) {
 		const root = path.startsWith('sysroot/') ? 'sysroot' : 'resource';

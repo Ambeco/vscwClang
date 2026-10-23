@@ -15,6 +15,7 @@ src/web/
       toGuestPath
       fromGuestPath
       stripWorkspaceFolder
+      isToolchainGuestPath     # /sysroot and /resource
     projectModel.ts
       resolveVariables         # ${...} expansion shared by tasks, launch and settings
       programStem

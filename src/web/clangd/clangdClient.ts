@@ -4,7 +4,8 @@ import { LanguageClient, ReadableStreamMessageReader, WriteableStreamMessageWrit
 import { loadCompileFlags, loadSysroot } from '../toolchain/sysroot';
 import { fallbackFlags } from './fallbackFlags';
 import { getToolchainStore } from '../toolchain/toolchain';
-import { GUEST_WORKSPACE, fromGuestPath, toGuestPath } from '../toolchain/guestPaths';
+import { GUEST_WORKSPACE, TOOLCHAIN_SCHEME, fromGuestPath, isToolchainGuestPath, toGuestPath } from '../toolchain/guestPaths';
+import { ToolchainFileSystem } from '../toolchain/toolchainFileSystem';
 import { configuredSources } from '../toolchain/projectModel';
 import { clangdLogLevel, logsClangdStderr } from '../toolchain/cppToolsSettings';
 import { intelliSenseEnabled, loggingLevel, readLaunches, readTasks, userFlags, variableContext } from '../projectConfig';
@@ -65,9 +66,11 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	const transports = makeMessageTransports(process, exited, log);
 	void exited.then(code => { if (code !== 0) { log.appendLine(`[vscwclang] clangd exited unexpectedly (code ${code}): ${stderrChunks.join('').slice(-800)}`); } });
 
-	const code2Protocol = (uri: vscode.Uri) => `file://${toGuestPath(folder.path, uri.path) ?? GUEST_WORKSPACE}`;
+	const toolchainFs = vscode.workspace.registerFileSystemProvider(TOOLCHAIN_SCHEME, new ToolchainFileSystem(sysroot.files), { isReadonly: true });
+	const code2Protocol = (uri: vscode.Uri) => uri.scheme === TOOLCHAIN_SCHEME ? `file://${uri.path}` : `file://${toGuestPath(folder.path, uri.path) ?? GUEST_WORKSPACE}`;
 	const protocol2Code = (value: string) => {
-		const guestPath = value.replace(/^file:\/\//, '');
+		const guestPath = decodeURIComponent(value.replace(/^file:\/\//, ''));
+		if (isToolchainGuestPath(guestPath)) { return vscode.Uri.from({ scheme: TOOLCHAIN_SCHEME, path: guestPath }); }
 		const hostPath = fromGuestPath(folder.path, guestPath);
 		return hostPath !== undefined ? folder.with({ path: hostPath }) : vscode.Uri.parse(value);
 	};
@@ -109,12 +112,12 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 		if (indexingSetting<boolean>('enabled', true)) { startSweep(); } else { status.hide(); }
 	});
 	const clientOptions: LanguageClientOptions = {
-		documentSelector: [{ language: 'c' }, { language: 'cpp' }],
+		documentSelector: [{ language: 'c' }, { language: 'cpp' }, { scheme: TOOLCHAIN_SCHEME }],
 		uriConverters: { code2Protocol, protocol2Code },
 		initializationOptions: { fallbackFlags: fallbackFlags(compileFlags, userFlags(log, true).flags) },
 		middleware: {
 			// Must run (and close any fake-indexed copy) before `next()` sends the real didOpen; see indexSweep.ts.
-			didOpen: async (document, next) => { await indexSweep.willRealOpen(document); return next(document); },
+			didOpen: async (document, next) => { if (document.uri.scheme !== TOOLCHAIN_SCHEME) { await indexSweep.willRealOpen(document); } return next(document); },
 		},
 	};
 	client = new LanguageClient('vscwclangClangd', 'vscwClang clangd', () => Promise.resolve(transports), clientOptions);

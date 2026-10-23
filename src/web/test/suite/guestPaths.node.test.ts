@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { stripWorkspaceFolder, fromGuestPath, toGuestPath } from '../../toolchain/guestPaths';
+import { isToolchainGuestPath, stripWorkspaceFolder, fromGuestPath, toGuestPath } from '../../toolchain/guestPaths';
 
 suite('guestPaths', () => {
 	test('maps in and out of the workspace', () => {
@@ -26,5 +26,15 @@ suite('stripWorkspaceFolder', () => {
 	test('leaves everything else alone', () => {
 		assert.strictEqual(stripWorkspaceFolder('src/${workspaceFolder}'), 'src/${workspaceFolder}');
 		assert.strictEqual(stripWorkspaceFolder('build/x.json'), 'build/x.json');
+	});
+});
+
+suite('isToolchainGuestPath', () => {
+	test('matches /sysroot and /resource and what is under them only', () => {
+		assert.ok(isToolchainGuestPath('/sysroot/include/c++/v1/vector'));
+		assert.ok(isToolchainGuestPath('/resource'));
+		assert.ok(isToolchainGuestPath('/resource/lib/clang/24/include/stddef.h'));
+		assert.ok(!isToolchainGuestPath('/sysroot2/x.h'));
+		assert.ok(!isToolchainGuestPath('/workspace/sysroot/x.h'));
 	});
 });

@@ -26,10 +26,10 @@ export function registerTaskProvider(context: vscode.ExtensionContext, log: vsco
 
 /** Exposed so tests can resolve a task directly (the workbench offers no way to run a configured task by name). */
 export function createTaskProvider(context: vscode.ExtensionContext, log: vscode.OutputChannel): vscode.TaskProvider {
-	const makeTask = (def: VscwClangTaskDefinition, scope: vscode.WorkspaceFolder | vscode.TaskScope) => {
-		const task = new vscode.Task(def, scope, def.mode === 'debug' ? 'build (debug)' : 'build', 'vscwclang',
+	const makeTask = (def: VscwClangTaskDefinition, scope: vscode.WorkspaceFolder | vscode.TaskScope, name = def.mode === 'debug' ? 'build (debug)' : 'build', group: vscode.TaskGroup | undefined = vscode.TaskGroup.Build) => {
+		const task = new vscode.Task(def, scope, name, 'vscwclang',
 			new vscode.CustomExecution(async () => new BuildPseudoterminal(context, log, async () => ({ sourceGlobs: def.sources, outputName: def.output, flags: def.flags, mode: def.mode }))), '$vscwclang');
-		task.group = vscode.TaskGroup.Build;
+		task.group = group;
 		return task;
 	};
 	const makeCppbuildTask = (original: vscode.Task) => {
@@ -46,7 +46,7 @@ export function createTaskProvider(context: vscode.ExtensionContext, log: vscode
 	};
 	return {
 		provideTasks: () => [makeTask({ type: 'vscwclang', mode: 'release' }, vscode.TaskScope.Workspace), makeTask({ type: 'vscwclang', mode: 'debug' }, vscode.TaskScope.Workspace)],
-		resolveTask: task => task.definition.type === 'vscwclang' ? makeTask(task.definition as VscwClangTaskDefinition, task.scope ?? vscode.TaskScope.Workspace)
+		resolveTask: task => task.definition.type === 'vscwclang' ? makeTask(task.definition as VscwClangTaskDefinition, task.scope ?? vscode.TaskScope.Workspace, task.name, task.group)
 			: task.definition.type === 'cppbuild' ? makeCppbuildTask(task) : undefined,
 	};
 }
