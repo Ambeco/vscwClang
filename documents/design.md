@@ -45,6 +45,10 @@ V1 uses `wasm-wasi-core` (a separate VS Code extension; it requires `SharedArray
 
 The `wasm-wasi-core` host is deliberately a thin first slice. The extension stays minimal (build, run, clangd, the DAP basics) and the next major step is V2, our own Worker host. V2 is what unlocks threads, the spawn hook, concurrent compiles, trap and uncaught-exception reporting (no `run()` hang) and full debugging (pause and breakpoint changes while the program runs, traps as stopped states). Work that only compensates for `wasm-wasi-core`'s limits (the debug stub's stdio channel, trap-hang workarounds) is therefore kept small.
 
+
+### V2 Worker rules (probed in `workerMechanics.test.ts`)
+- A Worker that creates a child Worker and then blocks in `Atomics.wait` never sees the child start (Chromium). Every Worker the host needs (spawned `cc1`/`wasm-ld`, `thread-spawn` threads) is therefore created by the extension host on a message from the blocked Worker, which then waits on a SharedArrayBuffer; a pre-spawned pool would work too.
+- The same channel carries all synchronous host services: a Worker posts a request, blocks on `Atomics.wait`, and the extension host (the only place with `vscode.workspace.fs`) replies into the SharedArrayBuffer and notifies. Verified, ~50 ms round trip including a deliberate delay.
 ## Flags, run and tasks
 `request.flags` is one list; `splitFlags` (flagPolicy.ts) routes `-l`, `-L` (relative dirs resolved under `/workspace`) and `-Wl,a,b` (split into separate args) to wasm-ld, everything else to `clang -c`. `vscwclang.run` (`runProgram.ts`) builds, then runs the .wasm under `wasm-wasi-core` with `createPseudoterminal()` as stdin/stdout/stderr: stdin is the terminal's line mode (echo, line editing, one line per Enter, no EOF key); Ctrl+C or closing the terminal terminates the process. `tasks.ts` provides `vscwclang` build tasks as `CustomExecution` that print clang's text; the `$vscwclang` matcher turns `/workspace/<file>:l:c: error|warning:` lines into Problems (notes and linker lines are not matched).
 
