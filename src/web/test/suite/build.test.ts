@@ -5,6 +5,7 @@ import { build } from '../../toolchain/toolchain';
 import { chooseArtifactDir } from '../../buildWorkspace';
 import { runProgram } from '../../runProgram';
 import { createTaskProvider } from '../../tasks';
+import { userFlags } from '../../projectConfig';
 import { ToolchainStore } from '../../toolchain/toolchainStore';
 
 // Needs a workspace folder, --coi and ms-vscode.wasm-wasi-core (see the `test` script in package.json).
@@ -375,6 +376,17 @@ suite('vscwClang build (in browser)', function () {
 		}
 		assert.strictEqual(found.length, 1, JSON.stringify(vscode.languages.getDiagnostics().map(([u, d]) => [u.toString(), d.length])));
 		assert.strictEqual(found[0].range.start.line, 1);
+	});
+
+	test('C_Cpp.default.* fallbacks are read from a registered, resource-scoped setting', async function () {
+		const folder = vscode.workspace.workspaceFolders![0].uri;
+		const cpp = vscode.workspace.getConfiguration('C_Cpp', folder);
+		await cpp.update('default.defines', ['FROM_CPPTOOLS=3'], vscode.ConfigurationTarget.Workspace);
+		try {
+			assert.ok(userFlags().flags.includes('-DFROM_CPPTOOLS=3'), JSON.stringify(userFlags()));
+		} finally {
+			await cpp.update('default.defines', undefined, vscode.ConfigurationTarget.Workspace);
+		}
 	});
 
 	test('a cppbuild task (as the C/C++ extension writes it) is mapped onto a build', async function () {

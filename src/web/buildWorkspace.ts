@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { sourceExcluder, userFlags, workspaceRelativeGlobs } from './projectConfig';
+import { projectSettings, sourceExcluder, userFlags, workspaceRelativeGlobs } from './projectConfig';
 import { artifactsBelongInFolder, artifactSubdir, storageKeyFor } from './toolchain/artifactPolicy';
 import { build, type BuildResult } from './toolchain/toolchain';
 import type { ParsedDiagnostic } from './toolchain/diagnostics';
@@ -45,7 +45,7 @@ export async function buildWorkspace(context: vscode.ExtensionContext, log: vsco
 	const output = options.outputName !== undefined ? vscode.Uri.joinPath(folder, options.outputName) : vscode.Uri.joinPath(artifactDir, options.artifactName ?? 'a.out.wasm');
 	const found = new Map<string, vscode.Uri>();
 	const explicit = new Map<string, vscode.Uri>();
-	const settings = vscode.workspace.getConfiguration('vscwclang');
+	const settings = projectSettings('vscwclang');
 	const isExcluded = sourceExcluder();
 	for (const relative of options.sourceFiles ?? []) {
 		const uri = vscode.Uri.joinPath(folder, relative);

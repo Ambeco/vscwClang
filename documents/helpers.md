@@ -7,6 +7,7 @@ Tree format: folders end in `/`, files have an extension, names sit below their 
 ```
 src/web/
   projectConfig.ts
+    projectSettings            # settings read per workspace folder
     isUserSet                  # user value vs extension default
   toolchain/
     chunkedFile.ts

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { DidCloseTextDocumentNotification, DidOpenTextDocumentNotification, type DidCloseTextDocumentParams, type DidOpenTextDocumentParams } from 'vscode-languageclient/browser';
-import { sourceExcluder, workspaceRelativeGlobs } from '../projectConfig';
+import { projectSettings, sourceExcluder, workspaceRelativeGlobs } from '../projectConfig';
 
 /** The slice of `LanguageClient` the sweep needs; narrowed so it can be constructed before the real client is. */
 export interface NotificationSender {
@@ -273,7 +273,7 @@ function delay(ms: number): Promise<void> {
  * the sweep indexes what the project actually builds rather than every stray `.cpp` under an excluded directory.
  */
 export async function discoverWorkspaceSources(): Promise<vscode.Uri[]> {
-	const settings = vscode.workspace.getConfiguration('vscwclang');
+	const settings = projectSettings('vscwclang');
 	const isExcluded = sourceExcluder();
 	const globs = workspaceRelativeGlobs('sourceGlobs', ['**/*.{c,cc,cpp,cxx}']);
 	const found = new Map<string, vscode.Uri>();

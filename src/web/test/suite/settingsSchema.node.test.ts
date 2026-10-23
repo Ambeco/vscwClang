@@ -17,3 +17,21 @@ suite('package.json settings', () => {
 		assert.deepStrictEqual(conflicts, []);
 	});
 });
+
+// Folder-level .vscode/settings.json only applies to resource-scoped settings in a multi-root workspace, and
+// unregistered keys (such as cpptools' C_Cpp.*) are dropped from workspace-level settings.
+suite('package.json setting scopes', () => {
+	const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
+	const props = pkg.contributes.configuration.properties as Record<string, { scope?: string }>;
+
+	test('per-project vscwclang settings are resource-scoped', () => {
+		const wrong = ['flags', 'sourceGlobs', 'compileCommands', 'compileCommandsInclude', 'files.exclude', 'run.args', 'run.env', 'useCppToolsSettings']
+			.filter(k => props[`vscwclang.${k}`]?.scope !== 'resource').map(k => `vscwclang.${k} needs "scope": "resource"`);
+		assert.deepStrictEqual(wrong, []);
+	});
+
+	test('every C_Cpp setting the extension reads is registered', () => {
+		const read = ['default.defines', 'default.includePath', 'default.compilerArgs', 'default.cppStandard', 'default.cStandard', 'default.compileCommands', 'files.exclude', 'loggingLevel', 'intelliSenseEngine'];
+		assert.deepStrictEqual(read.filter(k => !props[`C_Cpp.${k}`]).map(k => `C_Cpp.${k} is read but not contributed`), []);
+	});
+});
