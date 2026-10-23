@@ -85,6 +85,7 @@ export class GuestWasi {
 	private memory!: WebAssembly.Memory;
 	private readonly fds = new Map<number, Fd>();
 	private readonly files = new Map<string, FileData>();
+	private readonly inodes = new Map<string, bigint>();
 	private nextFd: number;
 	private readonly services: GuestServices;
 	private readonly encoder = new TextEncoder();
@@ -232,9 +233,9 @@ export class GuestWasi {
 			fd_filestat_get: guard((fd: number, out: number) => {
 				const entry = this.fds.get(fd);
 				if (!entry) { return fail(ERRNO.BADF); }
-				if (entry.kind === 'file') { this.writeFilestat(out, FILETYPE.regular, entry.data.size, Date.now()); }
-				else if (entry.kind === 'dir') { this.writeFilestat(out, FILETYPE.directory, 0, Date.now()); }
-				else { this.writeFilestat(out, FILETYPE.characterDevice, 0, Date.now()); }
+				if (entry.kind === 'file') { this.writeFilestat(out, entry.path, FILETYPE.regular, entry.data.size, Date.now()); }
+				else if (entry.kind === 'dir') { this.writeFilestat(out, entry.path, FILETYPE.directory, 0, Date.now()); }
+				else { this.writeFilestat(out, `<${entry.kind}>`, FILETYPE.characterDevice, 0, Date.now()); }
 			}),
 			fd_filestat_set_size: guard((fd: number, size: bigint) => {
 				const entry = this.fds.get(fd);
@@ -259,7 +260,7 @@ export class GuestWasi {
 				const { path } = this.resolve(dirfd, this.readString(pathPtr, pathLen));
 				const open = this.files.get(path);
 				const stat = this.services.stat(path);
-				this.writeFilestat(out, stat.type === 'dir' ? FILETYPE.directory : FILETYPE.regular, open ? open.size : stat.size, stat.mtimeMs);
+				this.writeFilestat(out, path, stat.type === 'dir' ? FILETYPE.directory : FILETYPE.regular, open ? open.size : stat.size, stat.mtimeMs);
 			}),
 			path_filestat_set_times: guard(() => undefined),
 			path_create_directory: guard((dirfd: number, pathPtr: number, pathLen: number) => this.services.createDirectory(this.resolve(dirfd, this.readString(pathPtr, pathLen)).path)),
@@ -308,9 +309,17 @@ export class GuestWasi {
 		});
 	}
 
-	private writeFilestat(out: number, type: number, size: number, mtimeMs: number): void {
+	// Clang drops include directories whose (device, inode) match an earlier one, so each path needs its own inode.
+	private inodeOf(path: string): bigint {
+		let ino = this.inodes.get(path);
+		if (ino === undefined) { ino = BigInt(this.inodes.size + 1); this.inodes.set(path, ino); }
+		return ino;
+	}
+
+	private writeFilestat(out: number, path: string, type: number, size: number, mtimeMs: number): void {
 		const v = this.view();
 		new Uint8Array(this.memory.buffer, out, 64).fill(0);
+		v.setBigUint64(out + 8, this.inodeOf(path), true);
 		v.setUint8(out + 16, type);
 		v.setBigUint64(out + 24, 1n, true);
 		v.setBigUint64(out + 32, BigInt(size), true);

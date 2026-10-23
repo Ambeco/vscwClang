@@ -1,10 +1,14 @@
 import * as vscode from 'vscode';
 import { type MemoryFileSystem } from '@vscode/wasm-wasi';
+import { GuestProcess, StdinQueue } from '../host/guestProcess';
+import { MemoryGuestFs } from '../host/memoryGuestFs';
 import { loadProcessHost, type ProcessHost } from '../host/processHost';
+import { VscodeGuestFs } from '../host/vscodeGuestFs';
+import { createGuestWorker } from '../host/workerHost';
 import { parseDiagnostics, withFailureFallback, type ParsedDiagnostic } from './diagnostics';
 import { checkUserFlags, splitFlags } from './flagPolicy';
 import { GUEST_WORKSPACE, toGuestPath } from './guestPaths';
-import { loadCompileFlags, loadSysroot, type SysrootFs } from './sysroot';
+import { loadCompileFlags, loadSysroot, loadSysrootGuestFs, type SysrootFs } from './sysroot';
 import { ToolchainStore, type StoreContext } from './toolchainStore';
 import debugStubSource from '../debug/debugStub.c';
 
@@ -36,10 +40,14 @@ export interface BuildResult {
 const SLICE = 'wasm32-wasip1';
 const GUEST_OUT = '/out';
 
+/** What `build` needs from the extension context: toolchain storage, and the extension's files to start the Worker host. */
+export type BuildContext = StoreContext & Pick<vscode.ExtensionContext, 'extensionUri'>;
+
 /**
  * Compiles each source with clang.wasm, then links with lld.wasm.
  *
- * Runs on `wasm-wasi-core`, one single-threaded process at a time (V1, see documents/design.md). Every
+ * Runs each tool as its own process, one at a time, on the V2 Worker host (default) or on `wasm-wasi-core` when
+ * `vscwclang.experimental.workerHost` is off (see documents/design.md). Every
  * source is compiled even after an earlier one fails, so all diagnostics are reported; linking is skipped
  * when any compile fails. clang writes each object to stdout (`-o -`), the host stores it in an in-memory file
  * system, and wasm-ld reads it from there (mounted read-only at `/obj`), so nothing but the final output is
@@ -48,7 +56,7 @@ const GUEST_OUT = '/out';
  *
  * Throws (rather than returning a nonzero result) for problems with the request itself.
  */
-export async function build(request: BuildRequest, log: vscode.OutputChannel, context: StoreContext): Promise<BuildResult> {
+export async function build(request: BuildRequest, log: vscode.OutputChannel, context: BuildContext): Promise<BuildResult> {
 	if (request.sources.length === 0) {
 		throw new Error('vscwClang: no source files to build. Did you mean to add a .c/.cc/.cpp/.cxx file to the workspace?');
 	}
@@ -79,11 +87,22 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 	await vscode.workspace.fs.createDirectory(outputDir);
 	const toolchain = getToolchainStore(context, log);
 	await toolchain.ensure();
-	const wasm = await loadProcessHost();
-	const [flags, sysroot] = await Promise.all([loadCompileFlags(toolchain), getSysroot(wasm, toolchain)]);
+	const onWorkerHost = workerHostEnabled();
+	const flagsPromise = loadCompileFlags(toolchain);
+	let run: (wasmFile: string, args: string[], extra?: ToolExtras) => Promise<ToolResult>;
+	let objects: ObjectFiles;
+	if (onWorkerHost) {
+		const guestSysroot = await loadSysrootGuestFs(toolchain);
+		objects = new ObjectFiles(undefined);
+		run = (wasmFile, args, extra) => runToolOnWorkerHost(context, folder, toolchain, guestSysroot, wasmFile, args, extra);
+	} else {
+		const wasm = await loadProcessHost();
+		const sysroot = await getSysroot(wasm, toolchain);
+		objects = new ObjectFiles(await wasm.createMemoryFileSystem());
+		run = (wasmFile, args, extra) => runTool(wasm, toolchain, sysroot, wasmFile, args, extra);
+	}
+	const flags = await flagsPromise;
 	const sub = (f: string) => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource');
-	const objects = await wasm.createMemoryFileSystem();
-	const run = (wasmFile: string, args: string[], extra?: ToolExtras) => runTool(wasm, toolchain, sysroot, wasmFile, args, extra);
 	const userFlags = splitFlags(request.flags, GUEST_WORKSPACE);
 	// no-prune: by default sancov skips blocks it deems redundant, but a line breakpoint needs a guard at every block start.
 	const modeFlags = request.mode === 'debug' ? ['-O0', '-g', '-fsanitize-coverage=trace-pc-guard,no-prune'] : [];
@@ -155,7 +174,7 @@ const DEBUG_STUB: Shim = { name: 'debugstub', source: debugStubSource, flags: ['
 const shimObjects = new Map<string, Uint8Array<ArrayBuffer>>();
 
 /** Puts the compiled shim in `objects` and returns its guest path; undefined (build goes on) if it cannot be compiled. */
-async function addShim(objects: MemoryFileSystem, clang: (args: string[], extra: ToolExtras) => Promise<{ exitCode: number; stderr: string; stdout: Uint8Array<ArrayBuffer> }>, compileFlags: string[], log: vscode.OutputChannel, shim: Shim): Promise<string | undefined> {
+async function addShim(objects: ObjectFiles, clang: (args: string[], extra: ToolExtras) => Promise<ToolResult>, compileFlags: string[], log: vscode.OutputChannel, shim: Shim): Promise<string | undefined> {
 	let object = shimObjects.get(shim.name);
 	if (!object) {
 		objects.createFile(`vscwclang-${shim.name}.c`, new TextEncoder().encode(shim.source));
@@ -212,16 +231,32 @@ function toolTimeoutMs(): number {
 	return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : DEFAULT_TOOL_TIMEOUT_SECONDS * 1000;
 }
 
+type ToolResult = { exitCode: number; stderr: string; stdout: Uint8Array<ArrayBuffer> };
+
+/** Compiled objects (and shim sources) in memory, mounted read-only at `/obj`; `legacy` is the `wasm-wasi-core` copy, absent on the Worker host. */
+class ObjectFiles {
+	readonly guest = new MemoryGuestFs();
+	constructor(readonly legacy: MemoryFileSystem | undefined) {}
+	createFile(name: string, content: Uint8Array): void {
+		this.legacy?.createFile(name, content);
+		this.guest.setFile(name, content);
+	}
+}
+
+function workerHostEnabled(): boolean {
+	return vscode.workspace.getConfiguration('vscwclang').get<boolean>('experimental.workerHost', true);
+}
+
 interface ToolExtras {
 	/** Keep stdout as bytes (clang `-o -`) instead of merging its text into the diagnostics. */
 	captureStdout?: boolean;
 	/** In-memory objects, mounted read-only at `/obj`. */
-	objects?: MemoryFileSystem;
+	objects?: ObjectFiles;
 	/** A directory outside the workspace, mounted writable at `/out` (the link output). */
 	outputDir?: vscode.Uri;
 }
 
-async function runTool(wasm: ProcessHost, toolchain: ToolchainStore, sysroot: SysrootFs, wasmFile: string, args: string[], extra: ToolExtras = {}): Promise<{ exitCode: number; stderr: string; stdout: Uint8Array<ArrayBuffer> }> {
+async function runTool(wasm: ProcessHost, toolchain: ToolchainStore, sysroot: SysrootFs, wasmFile: string, args: string[], extra: ToolExtras = {}): Promise<ToolResult> {
 	const module = await getModule(toolchain, wasmFile);
 	const process = await wasm.createProcess(args[0], module, {
 		args: args.slice(1),
@@ -230,7 +265,7 @@ async function runTool(wasm: ProcessHost, toolchain: ToolchainStore, sysroot: Sy
 			{ kind: 'workspaceFolder' },
 			{ kind: 'memoryFileSystem', fileSystem: sysroot.sysroot, mountPoint: '/sysroot' },
 			{ kind: 'memoryFileSystem', fileSystem: sysroot.resource, mountPoint: '/resource' },
-			...(extra.objects ? [{ kind: 'memoryFileSystem' as const, fileSystem: extra.objects, mountPoint: '/obj' }] : []),
+			...(extra.objects?.legacy ? [{ kind: 'memoryFileSystem' as const, fileSystem: extra.objects.legacy!, mountPoint: '/obj' }] : []),
 			...(extra.outputDir ? [{ kind: 'vscodeFileSystem' as const, uri: extra.outputDir, mountPoint: GUEST_OUT }] : []),
 		],
 	});
@@ -253,6 +288,55 @@ async function runTool(wasm: ProcessHost, toolchain: ToolchainStore, sysroot: Sy
 	if (timedOut) {
 		return { exitCode: 1, stderr: `${stderr}${args[0]}: error: no result after ${timeoutMs / 1000}s, so it was stopped (it probably crashed inside WebAssembly, or the source is very large). Did you mean to raise 'vscwclang.toolTimeoutSeconds'?
 `, stdout: new Uint8Array(0) };
+	}
+	const stdout = new Uint8Array(stdoutChunks.reduce((n, c) => n + c.byteLength, 0));
+	stdoutChunks.reduce((off, c) => { stdout.set(c, off); return off + c.byteLength; }, 0);
+	return { exitCode, stderr, stdout };
+}
+
+/**
+ * Runs one tool in its own Worker on the V2 host. Traps and timeouts end the tool with exit code 1 and a message
+ * in `stderr`, so unlike `runTool` it needs no workaround for `wasm-wasi-core` never settling.
+ */
+async function runToolOnWorkerHost(context: BuildContext, workspace: vscode.Uri, toolchain: ToolchainStore, sysroot: { sysroot: MemoryGuestFs; resource: MemoryGuestFs }, wasmFile: string, args: string[], extra: ToolExtras = {}): Promise<ToolResult> {
+	const module = await getModule(toolchain, wasmFile);
+	const worker = await createGuestWorker(context as vscode.ExtensionContext);
+	const mounts = [
+		{ guestPath: GUEST_WORKSPACE, uri: workspace },
+		{ guestPath: '/sysroot', fs: sysroot.sysroot },
+		{ guestPath: '/resource', fs: sysroot.resource },
+		...(extra.objects ? [{ guestPath: '/obj', fs: extra.objects.guest }] : []),
+		...(extra.outputDir ? [{ guestPath: GUEST_OUT, uri: extra.outputDir }] : []),
+	];
+	const stdin = new StdinQueue();
+	stdin.end();
+	const decoders = { 1: new TextDecoder(), 2: new TextDecoder() };
+	let stderr = '';
+	const stdoutChunks: Uint8Array[] = [];
+	const guest = new GuestProcess({
+		module, args, env: {}, preopens: mounts.map(m => m.guestPath), fs: new VscodeGuestFs(mounts), stdin,
+		onOutput: (fd, data) => {
+			if (fd === 1 && extra.captureStdout) { stdoutChunks.push(new Uint8Array(data)); } else { stderr += decoders[fd].decode(data, { stream: true }); }
+		},
+		createWorker: () => worker,
+	});
+	const timeoutMs = toolTimeoutMs();
+	const timer = timeoutMs === 0 ? undefined : setTimeout(() => guest.terminate(), timeoutMs);
+	let outcome;
+	try {
+		outcome = await guest.run();
+	} finally {
+		clearTimeout(timer);
+	}
+	let exitCode: number;
+	switch (outcome.kind) {
+		case 'exit': exitCode = outcome.code; break;
+		case 'trap': exitCode = 1; stderr += `${args[0]}: error: crashed inside WebAssembly: ${outcome.message}
+`; break;
+		case 'terminated': exitCode = 1; stderr += `${args[0]}: error: no result after ${timeoutMs / 1000}s, so it was stopped (the source may be very large). Did you mean to raise 'vscwclang.toolTimeoutSeconds'?
+`; break;
+		case 'failed': exitCode = 1; stderr += `${args[0]}: error: could not run: ${outcome.message}
+`; break;
 	}
 	const stdout = new Uint8Array(stdoutChunks.reduce((n, c) => n + c.byteLength, 0));
 	stdoutChunks.reduce((off, c) => { stdout.set(c, off); return off + c.byteLength; }, 0);
