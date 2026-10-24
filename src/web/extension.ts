@@ -17,7 +17,11 @@ export function activate(context: vscode.ExtensionContext) {
 	const folders = vscode.workspace.workspaceFolders ?? [];
 	log.appendLine(`[vscwclang] workspace: ${vscode.workspace.workspaceFile?.toString() ?? 'single folder (no workspace file)'}; folders: ${folders.map(f => f.uri.toString()).join(', ') || 'none'}`);
 	void startClangdClient(context, log).then(d => { if (d) { context.subscriptions.push(d); } },
-		e => log.appendLine(`[vscwclang] clangd did not start: ${e instanceof Error ? e.message : String(e)}`));
+		e => {
+			const message = e instanceof Error ? e.message : String(e);
+			log.appendLine(`[vscwclang] clangd did not start: ${message}`);
+			void vscode.window.showWarningMessage('vscwClang: IntelliSense (clangd) did not start, so completion and hover are unavailable; Build and Run still work.', 'Show Log').then(choice => { if (choice) { log.show(true); } });
+		});
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscwclang.build', async () => {

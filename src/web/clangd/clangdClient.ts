@@ -83,7 +83,10 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	});
 	const exited = process.run();
 	const transports = makeMessageTransports(process, exited, log);
-	void exited.then(code => { if (code !== 0) { log.appendLine(`[vscwclang] clangd exited unexpectedly (code ${code}): ${stderrChunks.join('').slice(-800)}`); } });
+	const stderrTail = () => stderrChunks.join('').slice(-800);
+	void exited.then(
+		code => { if (code !== 0) { log.appendLine(`[vscwclang] clangd exited unexpectedly (code ${code}): ${stderrTail()}`); } },
+		e => log.appendLine(`[vscwclang] clangd could not run: ${e instanceof Error ? e.message : String(e)} ${stderrTail()}`));
 
 	const toolchainFs = vscode.workspace.registerFileSystemProvider(TOOLCHAIN_SCHEME, new ToolchainFileSystem(sysrootFiles), { isReadonly: true });
 	const code2Protocol = (uri: vscode.Uri) => uri.scheme === TOOLCHAIN_SCHEME ? `file://${uri.path}` : `file://${toGuestPath(folder.path, uri.path) ?? GUEST_WORKSPACE}`;
@@ -140,7 +143,18 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 		},
 	};
 	client = new LanguageClient('vscwclangClangd', 'vscwClang clangd', () => Promise.resolve(transports), clientOptions);
-	await client.start();
+	try {
+		await client.start();
+	} catch (e) {
+		// A process that died during startup rejects start(); stop everything started so far so nothing leaks.
+		indexSweep.dispose();
+		progressSub.dispose();
+		configSub.dispose();
+		status.dispose();
+		toolchainFs.dispose();
+		void process.terminate();
+		throw new Error(`clangd failed to start: ${e instanceof Error ? e.message : String(e)}. ${stderrTail() || 'It wrote nothing to stderr.'} Did you mean to try 'vscwclang.experimental.workerHost' = false, or to reload the window?`);
+	}
 
 	startSweep();
 
@@ -152,7 +166,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 			status.dispose();
 			const stopped = client.stop().catch(e => log.appendLine(`[vscwclang] stopping clangd: ${e instanceof Error ? e.message : String(e)}`));
 			const timer = setTimeout(() => void process.terminate(), 5_000);
-			try { await Promise.race([stopped, exited]); } finally { clearTimeout(timer); }
+			try { await Promise.race([stopped, exited.catch(() => undefined)]); } finally { clearTimeout(timer); }
 		})();
 	});
 }
