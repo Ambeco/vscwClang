@@ -350,4 +350,18 @@ suiteIfFixtures('DebugController with a scripted host', function () {
 		const output = await client.event('output');
 		assert.deepStrictEqual(output.body, { category: 'console', output: 'output is in the terminal\n' });
 	});
+
+	test('a host error after launch is an important (notification) message, then the session ends', async () => {
+		const program = new Uint8Array(readFileSync(PROG));
+		const scan = scanProgram(program);
+		const reactor = await ReactorHost.create(await WebAssembly.compile(readFileSync(REACTOR)));
+		reactor.createTarget(program);
+		const fake = new FakeSession();
+		const client = makeClient(async () => ({ session: fake, reactor, program, scan, paths: identity }));
+		await client.ok('initialize'); await client.ok('launch', {}); await client.ok('configurationDone');
+		fake.listener!({ kind: 'error', message: 'the worker died' });
+		const output = await client.event('output');
+		assert.deepStrictEqual(output.body, { category: 'important', output: 'vscwClang: the worker died\n' });
+		await client.event('terminated');
+	});
 });

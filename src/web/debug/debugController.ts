@@ -282,7 +282,8 @@ export class DebugController {
 		const message = error instanceof Error ? error.message : String(error);
 		this.onStart?.reject(new Error(message));
 		this.onStart = undefined;
-		this.send({ type: 'event', event: 'output', body: { category: 'stderr', output: `vscwClang: ${message}\n` } });
+		// 'important' becomes a notification: in terminal mode the Debug Console is not opened, so stderr would go unseen.
+		this.send({ type: 'event', event: 'output', body: { category: 'important', output: `vscwClang: ${message}\n` } });
 		this.finish();
 	}
 
