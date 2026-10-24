@@ -41,3 +41,12 @@ Multi-file Build, Build and Run, stdin echo in the terminal, quoted `Build and R
 ## Not yet tested
 
 Virtual / read-only folders (the `.vscwclang` artifact fallback to extension storage; needs a GitHub sign-in or another virtual provider), Marketplace install, a real "Open Folder" click (see finding 5), clangd on a bigger project, the lldb reactor first-run download timing (it worked from the local dist), non-Chrome browsers.
+
+## Live pass on the Worker host (2026-10-23, `vscwclang.experimental.workerHost` default on, local toolchain dist)
+
+Passed on vscode.dev: Build and Run (puts, cout, try/catch), divide-by-zero trap (`[a.out.wasm trapped: RuntimeError: divide by zero]`, terminal no longer hangs), assert (exit 134), stdin echo, file write+read under `/workspace` (appears in Explorer), `Build and Run C++ with Arguments...` (quoted arg kept), compile errors in Problems, Debug (F5 pauses on a breakpoint, `__original_main` frame), clangd hover 3.9 s with inlay hints (`<vector>`, `<cstdio>`).
+
+New findings:
+1. Uncaught `throw` prints `[a.out.wasm could not run: [object WebAssembly.Exception]]` and also pops a modal "Command ... resulted in an error" dialog; should be a trap-style message (`terminated by uncaught C++ exception`) with no modal.
+2. Debug run printed nothing to the Debug Console (program `printf` output, both with a breakpoint and without) although the notes say it appeared before; check stdout flush/forwarding on the host path (`debugController.ts` `output` events).
+3. Harness: Ctrl+G does not reach VS Code (use the palette "Go to Line"), and the command label is `Build and Run C++ with Arguments...`.
