@@ -3,8 +3,8 @@ import { type Environment, type MountPointDescriptor } from '@vscode/wasm-wasi';
 import { loadProcessHost, type ProcessHost } from './host/processHost';
 import { GuestProcess, StdinQueue } from './host/guestProcess';
 import { ProgramTerminal } from './host/programTerminal';
-import { VscodeGuestFs } from './host/vscodeGuestFs';
-import { createGuestWorker } from './host/workerHost';
+import { VscodeGuestFs, type GuestMount } from './host/vscodeGuestFs';
+import { createGuestWorker, workerHostEnabled } from './host/workerHost';
 import { GUEST_WORKSPACE } from './toolchain/guestPaths';
 import { runEnvSetting } from './projectConfig';
 import { describeUnsupportedImports } from './toolchain/wasiImports';
@@ -63,6 +63,17 @@ export async function processOptions(context: vscode.ExtensionContext, args: str
 	};
 }
 
+/** The user-program environment on the Worker host: `/workspace`, `/tmp` and `/home/user` mounts plus `HOME`, `TMPDIR`, `USER`, `LANG`. Shared by Run and Debug. */
+export async function workerProgramEnvironment(context: vscode.ExtensionContext): Promise<{ env: Record<string, string>; mounts: GuestMount[] }> {
+	const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
+	if (!folder) { throw new Error('vscwClang: open a workspace folder before running or debugging.'); }
+	const [tmp, home] = await prepareScratchDirs(context);
+	return {
+		env: defaultRunEnvironment(runEnvSetting()),
+		mounts: [{ guestPath: GUEST_WORKSPACE, uri: folder }, { guestPath: GUEST_TMP, uri: tmp }, { guestPath: GUEST_HOME, uri: home }],
+	};
+}
+
 /**
  * Runs a built .wasm under wasm-wasi-core with stdio wired to a new terminal.
  *
@@ -78,7 +89,7 @@ export async function processOptions(context: vscode.ExtensionContext, args: str
  * (out-of-bounds access, `__builtin_trap`) hang until Ctrl+C because wasm-wasi-core never reports them (vscode-wasm#303).
  */
 export async function runProgram(context: vscode.ExtensionContext, program: vscode.Uri, args: string[], host: RunHost = {}): Promise<number> {
-	if (vscode.workspace.getConfiguration('vscwclang').get<boolean>('experimental.workerHost', true)) { return runProgramOnWorkerHost(context, program, args, host); }
+	if (workerHostEnabled()) { return runProgramOnWorkerHost(context, program, args, host); }
 	const wasm = await loadProcessHost();
 	const name = program.path.slice(program.path.lastIndexOf('/') + 1);
 	const module = await WebAssembly.compile(await vscode.workspace.fs.readFile(program) as Uint8Array<ArrayBuffer>);
@@ -124,9 +135,7 @@ const TRAPPED_EXIT_CODE = 139;
 async function runProgramOnWorkerHost(context: vscode.ExtensionContext, program: vscode.Uri, args: string[], host: RunHost): Promise<number> {
 	const name = program.path.slice(program.path.lastIndexOf('/') + 1);
 	const module = await WebAssembly.compile(await vscode.workspace.fs.readFile(program) as Uint8Array<ArrayBuffer>);
-	const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
-	if (!folder) { throw new Error('vscwClang: open a workspace folder before running.'); }
-	const [tmp, home] = await prepareScratchDirs(context);
+	const { env, mounts } = await workerProgramEnvironment(context);
 	const stdin = new StdinQueue();
 	const encoder = new TextEncoder();
 	let guest: GuestProcess | undefined;
@@ -139,9 +148,9 @@ async function runProgramOnWorkerHost(context: vscode.ExtensionContext, program:
 	const decoders = { 1: new TextDecoder(), 2: new TextDecoder() };
 	const worker = await createGuestWorker(context);
 	guest = new GuestProcess({
-		module, args: [name, ...args], env: defaultRunEnvironment(runEnvSetting()),
-		preopens: [GUEST_WORKSPACE, GUEST_TMP, GUEST_HOME],
-		fs: new VscodeGuestFs([{ guestPath: GUEST_WORKSPACE, uri: folder }, { guestPath: GUEST_TMP, uri: tmp }, { guestPath: GUEST_HOME, uri: home }]),
+		module, args: [name, ...args], env,
+		preopens: mounts.map(m => m.guestPath),
+		fs: new VscodeGuestFs(mounts),
 		stdin,
 		onOutput: (fd, data) => terminal.write(decoders[fd].decode(data, { stream: true })),
 		createWorker: () => worker,

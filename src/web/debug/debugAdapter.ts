@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { loadProcessHost } from '../host/processHost';
-import { processOptions } from '../runProgram';
+import { processOptions, workerProgramEnvironment } from '../runProgram';
+import { createWorkerProcess, type PipedProcess } from '../host/workerProcess';
+import { workerHostEnabled } from '../host/workerHost';
 import { getToolchainStore } from '../toolchain/toolchain';
 import { describeUnsupportedImports } from '../toolchain/wasiImports';
 import { DebugController, type DebugTarget } from './debugController';
@@ -25,13 +27,13 @@ export interface DebugHost {
  *
  * A thin shell over `DebugController`, which holds the protocol logic. This class does the parts that need VS Code:
  * `plan` builds the program in debug mode (returning undefined after reporting a failed build), then the program
- * runs under `wasm-wasi-core` with the debug stub's channel on its stdio, and lldb's reactor decodes its DWARF.
+ * runs on the Worker host (`wasm-wasi-core` when `vscwclang.experimental.workerHost` is off) with the debug stub's channel on its stdio, and lldb's reactor decodes its DWARF.
  *
  * By default (`console` is `integratedTerminal`) the program's stdin, stdout and stderr are a terminal: typed lines
  * reach the program while it runs and wait for the next resume while it is stopped (see `StubDebuggee`). There is no
  * end-of-file key. With `"console": "internalConsole"` its output goes to the Debug Console and its stdin is not
- * connected, so a program that reads input waits forever. A program that traps (out-of-bounds, `__builtin_trap`)
- * hangs the session until Stop, as in Run (vscode-wasm#303).
+ * connected, so a program that reads input waits forever.On the `wasm-wasi-core` fallback, a program that traps
+ * (out-of-bounds, `__builtin_trap`) hangs the session until Stop (vscode-wasm#303); on the Worker host it exits 139 with a message.
  */
 export class VscwClangDebugAdapter implements vscode.DebugAdapter {
 	private readonly emitter = new vscode.EventEmitter<vscode.DebugProtocolMessage>();
@@ -61,8 +63,14 @@ export class VscwClangDebugAdapter implements vscode.DebugAdapter {
 		const reactor = await ReactorHost.create(reactorModule, undefined, line => this.log.appendLine(line));
 		reactor.createTarget(program);
 
-		const wasm = await loadProcessHost();
-		const process = await wasm.createProcess(name, module, { ...await processOptions(this.context, plan.args), stdio: { in: { kind: 'pipeIn' }, out: { kind: 'pipeOut' }, err: { kind: 'pipeOut' } } });
+		let process: PipedProcess;
+		if (workerHostEnabled()) {
+			const environment = await workerProgramEnvironment(this.context);
+			process = await createWorkerProcess(this.context, { name, module, args: plan.args, ...environment });
+		} else {
+			const wasm = await loadProcessHost();
+			process = await wasm.createProcess(name, module, { ...await processOptions(this.context, plan.args), stdio: { in: { kind: 'pipeIn' }, out: { kind: 'pipeOut' }, err: { kind: 'pipeOut' } } });
+		}
 		let debuggee: StubDebuggee | undefined;
 		process.stdout?.onData(chunk => debuggee?.feedStdout(chunk));
 		process.stderr?.onData(chunk => debuggee?.feedStderr(chunk));

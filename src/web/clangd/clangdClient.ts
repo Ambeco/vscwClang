@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
-import { type WasmProcess } from '@vscode/wasm-wasi';
 import { loadProcessHost } from '../host/processHost';
+import { createWorkerProcess, type PipedProcess } from '../host/workerProcess';
+import { workerHostEnabled } from '../host/workerHost';
 import { LanguageClient, ReadableStreamMessageReader, WriteableStreamMessageWriter, type LanguageClientOptions, type MessageTransports } from 'vscode-languageclient/browser';
-import { loadCompileFlags, loadSysroot } from '../toolchain/sysroot';
+import { loadCompileFlags, loadSysroot, loadSysrootFiles, loadSysrootGuestFs } from '../toolchain/sysroot';
 import { fallbackFlags } from './fallbackFlags';
 import { getToolchainStore } from '../toolchain/toolchain';
 import { GUEST_WORKSPACE, TOOLCHAIN_SCHEME, fromGuestPath, isToolchainGuestPath, toGuestPath } from '../toolchain/guestPaths';
@@ -16,7 +17,7 @@ const CLANGD_ARGS = ['-sync', '-background-index=false', '-resource-dir=/resourc
 const CLANGD_TMP = 'clangd-tmp';
 
 /**
- * Starts clangd.wasm as a long-lived `wasm-wasi-core` process and wires it to VS Code's language-client
+ * Starts clangd.wasm as a long-lived process on the Worker host (or `wasm-wasi-core` when `vscwclang.experimental.workerHost` is off) and wires it to VS Code's language-client
  * machinery, so completion/hover/go-to-definition/diagnostics come from clangd instead of nothing.
  *
  * clangd.wasm is a normal toolchain-manifest entry (`llvm-artifacts/dist/manifest.json`, published at the pinned
@@ -39,24 +40,41 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	const level = loggingLevel();
 
 	const toolchain = getToolchainStore(context, log);
-	const wasm = await loadProcessHost();
-	const [bits, sysroot, flags] = await Promise.all([toolchain.getFile('clangd.wasm'), loadSysroot(wasm, toolchain), loadCompileFlags(toolchain)]);
+	const onWorkerHost = workerHostEnabled();
+	const wasm = onWorkerHost ? undefined : await loadProcessHost();
+	const [bits, sysrootFiles, flags] = await Promise.all([toolchain.getFile('clangd.wasm'), loadSysrootFiles(toolchain), loadCompileFlags(toolchain)]);
 	const compileFlags = flags.compile['wasm32-wasip1'].map(f => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource'));
 	const module = await WebAssembly.compile(bits);
 
 	const tmpDir = vscode.Uri.joinPath(context.globalStorageUri, CLANGD_TMP);
 	await vscode.workspace.fs.createDirectory(tmpDir);
 
-	const process = await wasm.createProcess('clangd', module, {
-		args: [...CLANGD_ARGS, `-log=${clangdLogLevel(level)}`],
-		stdio: { in: { kind: 'pipeIn' }, out: { kind: 'pipeOut' }, err: { kind: 'pipeOut' } },
-		mountPoints: [
-			{ kind: 'workspaceFolder' },
-			{ kind: 'memoryFileSystem', fileSystem: sysroot.sysroot, mountPoint: '/sysroot' },
-			{ kind: 'memoryFileSystem', fileSystem: sysroot.resource, mountPoint: '/resource' },
-			{ kind: 'vscodeFileSystem', uri: tmpDir, mountPoint: '/tmp' },
-		],
-	});
+	const args = [...CLANGD_ARGS, `-log=${clangdLogLevel(level)}`];
+	let process: PipedProcess;
+	if (onWorkerHost) {
+		const sysroot = await loadSysrootGuestFs(toolchain);
+		process = await createWorkerProcess(context, {
+			name: 'clangd', module, args, env: {},
+			mounts: [
+				{ guestPath: GUEST_WORKSPACE, uri: folder },
+				{ guestPath: '/sysroot', fs: sysroot.sysroot },
+				{ guestPath: '/resource', fs: sysroot.resource },
+				{ guestPath: '/tmp', uri: tmpDir },
+			],
+		});
+	} else {
+		const sysroot = await loadSysroot(wasm!, toolchain);
+		process = await wasm!.createProcess('clangd', module, {
+			args,
+			stdio: { in: { kind: 'pipeIn' }, out: { kind: 'pipeOut' }, err: { kind: 'pipeOut' } },
+			mountPoints: [
+				{ kind: 'workspaceFolder' },
+				{ kind: 'memoryFileSystem', fileSystem: sysroot.sysroot, mountPoint: '/sysroot' },
+				{ kind: 'memoryFileSystem', fileSystem: sysroot.resource, mountPoint: '/resource' },
+				{ kind: 'vscodeFileSystem', uri: tmpDir, mountPoint: '/tmp' },
+			],
+		});
+	}
 	const stderrChunks: string[] = [];
 	process.stderr?.onData(d => {
 		const text = new TextDecoder().decode(d);
@@ -67,7 +85,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	const transports = makeMessageTransports(process, exited, log);
 	void exited.then(code => { if (code !== 0) { log.appendLine(`[vscwclang] clangd exited unexpectedly (code ${code}): ${stderrChunks.join('').slice(-800)}`); } });
 
-	const toolchainFs = vscode.workspace.registerFileSystemProvider(TOOLCHAIN_SCHEME, new ToolchainFileSystem(sysroot.files), { isReadonly: true });
+	const toolchainFs = vscode.workspace.registerFileSystemProvider(TOOLCHAIN_SCHEME, new ToolchainFileSystem(sysrootFiles), { isReadonly: true });
 	const code2Protocol = (uri: vscode.Uri) => uri.scheme === TOOLCHAIN_SCHEME ? `file://${uri.path}` : `file://${toGuestPath(folder.path, uri.path) ?? GUEST_WORKSPACE}`;
 	const protocol2Code = (value: string) => {
 		const guestPath = decodeURIComponent(value.replace(/^file:\/\//, ''));
@@ -140,7 +158,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 }
 
 /** Adapts a `WasmProcess`'s pipe stdio to the duplex-stream shape `vscode-jsonrpc`'s stream reader/writer expect. */
-function makeMessageTransports(process: WasmProcess, exited: Promise<number>, log: vscode.OutputChannel): MessageTransports {
+function makeMessageTransports(process: PipedProcess, exited: Promise<number>, log: vscode.OutputChannel): MessageTransports {
 	const closeListeners = new Set<() => void>();
 	void exited.then(() => { for (const l of closeListeners) { l(); } }).catch(() => { for (const l of closeListeners) { l(); } });
 	const onClose = (listener: () => void) => { closeListeners.add(listener); return new vscode.Disposable(() => closeListeners.delete(listener)); };
@@ -152,7 +170,7 @@ function makeMessageTransports(process: WasmProcess, exited: Promise<number>, lo
 		onEnd: onClose,
 	});
 	const writer = new WriteableStreamMessageWriter({
-		write: (chunk: Uint8Array | string) => process.stdin!.write(chunk as Uint8Array),
+		write: (chunk: Uint8Array | string) => process.stdin!.write(chunk),
 		end: () => undefined,
 		onClose,
 		onError: noError,

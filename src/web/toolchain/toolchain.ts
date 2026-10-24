@@ -4,7 +4,7 @@ import { GuestProcess, StdinQueue } from '../host/guestProcess';
 import { MemoryGuestFs } from '../host/memoryGuestFs';
 import { loadProcessHost, type ProcessHost } from '../host/processHost';
 import { VscodeGuestFs } from '../host/vscodeGuestFs';
-import { createGuestWorker } from '../host/workerHost';
+import { createGuestWorker, workerHostEnabled } from '../host/workerHost';
 import { parseDiagnostics, withFailureFallback, type ParsedDiagnostic } from './diagnostics';
 import { checkUserFlags, splitFlags } from './flagPolicy';
 import { GUEST_WORKSPACE, toGuestPath } from './guestPaths';
@@ -241,10 +241,6 @@ class ObjectFiles {
 		this.legacy?.createFile(name, content);
 		this.guest.setFile(name, content);
 	}
-}
-
-function workerHostEnabled(): boolean {
-	return vscode.workspace.getConfiguration('vscwclang').get<boolean>('experimental.workerHost', true);
 }
 
 interface ToolExtras {

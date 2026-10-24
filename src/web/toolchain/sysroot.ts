@@ -30,6 +30,9 @@ function unzipSysroot(toolchain: ToolchainStore): Promise<Record<string, Uint8Ar
 	return files;
 }
 
+/** Every sysroot file by zip path, for editors that open headers clangd points into. */
+export const loadSysrootFiles = unzipSysroot;
+
 /** The sysroot and clang resource dir as read-only in-memory file systems for the Worker host (mounted at `/sysroot` and `/resource`). */
 export async function loadSysrootGuestFs(toolchain: ToolchainStore): Promise<{ sysroot: MemoryGuestFs; resource: MemoryGuestFs }> {
 	const files = await unzipSysroot(toolchain);
