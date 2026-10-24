@@ -64,6 +64,8 @@ export interface GuestProcessOptions {
 	args: string[];
 	env: Record<string, string>;
 	preopens: string[];
+	/** See `GuestOptions.terminal`. */
+	terminal?: boolean;
 	fs: GuestFileSystem;
 	stdin: StdinQueue;
 	onOutput: (fd: 1 | 2, data: Uint8Array) => void;
@@ -102,7 +104,7 @@ export class GuestProcess {
 				if (done.type === 'done') { finish(done.result); } else if (done.type === 'failed') { finish({ kind: 'failed', message: done.message }); } else { void server.handle(message as RpcRequest); }
 			});
 			worker.onError(message => finish({ kind: 'failed', message }));
-			worker.postMessage({ type: 'start', module: options.module, args: options.args, env: options.env, preopens: options.preopens, channel } satisfies StartMessage);
+			worker.postMessage({ type: 'start', module: options.module, args: options.args, env: options.env, preopens: options.preopens, terminal: options.terminal, channel } satisfies StartMessage);
 		});
 	}
 

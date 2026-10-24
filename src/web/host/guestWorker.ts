@@ -8,6 +8,7 @@ export interface StartMessage {
 	args: string[];
 	env: Record<string, string>;
 	preopens: string[];
+	terminal?: boolean;
 	channel: SharedArrayBuffer;
 }
 
@@ -39,7 +40,7 @@ export function runGuestWorker(endpoint: Endpoint): void {
 		if (start.type !== 'start') { return; }
 		try {
 			const client = new SyncRpcClient(endpoint, start.channel);
-			const guest = new GuestWasi({ args: start.args, env: start.env, preopens: start.preopens, services: new RpcGuestServices(client) });
+			const guest = new GuestWasi({ args: start.args, env: start.env, preopens: start.preopens, terminal: start.terminal, services: new RpcGuestServices(client) });
 			const instance = new WebAssembly.Instance(start.module, { wasi_snapshot_preview1: guest.imports });
 			const result = guest.start(instance);
 			endpoint.postMessage({ type: 'done', result } satisfies DoneMessage);

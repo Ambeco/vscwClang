@@ -73,14 +73,14 @@ class MemoryFs implements GuestFileSystem {
 
 interface Session { process: GuestProcess; stdin: StdinQueue; out: () => string; err: () => string; fs: MemoryFs; outcome: Promise<ProcessOutcome> }
 
-function start(name: string, args: string[] = [], env: Record<string, string> = {}): Session {
+function start(name: string, args: string[] = [], env: Record<string, string> = {}, terminal = false): Session {
 	const module = new WebAssembly.Module(readFileSync(join(FIXTURES, `${name}.wasm`)));
 	const stdin = new StdinQueue();
 	const fs = new MemoryFs();
 	let out = '';
 	let err = '';
 	const process = new GuestProcess({
-		module, args: [name, ...args], env, preopens: ['/workspace', '/tmp'], fs, stdin,
+		module, args: [name, ...args], env, preopens: ['/workspace', '/tmp'], terminal, fs, stdin,
 		onOutput: (fd, data) => { if (fd === 1) { out += decoder.decode(data); } else { err += decoder.decode(data); } },
 		createWorker: () => nodeWorker(GUEST_WORKER),
 	});
@@ -122,6 +122,25 @@ suite('GuestProcess over a real Worker', function () {
 		s.stdin.end();
 		assert.deepStrictEqual(await s.outcome, { kind: 'exit', code: 0 });
 		assert.strictEqual(s.out(), 'bye\n');
+	});
+
+	test('a terminal guest sees isatty and gets line-buffered stdout, so lines arrive before it blocks on input', async () => {
+		const s = start('buffered', [], {}, true);
+		await until(() => s.out().includes('isatty'), 'the second line before any input');
+		assert.strictEqual(s.out(), 'first\nisatty=1,1,1\n');
+		s.stdin.push(new TextEncoder().encode('x\n'));
+		assert.deepStrictEqual(await s.outcome, { kind: 'exit', code: 0 });
+		assert.strictEqual(s.out(), 'first\nisatty=1,1,1\nread\n');
+	});
+
+	test('a non-terminal guest (tools, clangd) sees no tty, so libc fully buffers stdout after its first line', async () => {
+		const s = start('buffered');
+		await until(() => s.out() !== '', 'the first line');
+		await new Promise(resolve => setTimeout(resolve, 100));
+		assert.strictEqual(s.out(), 'first\n');
+		s.stdin.end();
+		assert.deepStrictEqual(await s.outcome, { kind: 'exit', code: 0 });
+		assert.strictEqual(s.out(), 'first\nisatty=0,0,0\n');
 	});
 
 	test('file I/O reaches the host file system', async () => {

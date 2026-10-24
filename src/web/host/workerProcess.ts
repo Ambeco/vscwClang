@@ -42,6 +42,8 @@ export interface WorkerProcessOptions {
 	args: string[];
 	env: Record<string, string>;
 	mounts: GuestMount[];
+	/** See `GuestOptions.terminal`. */
+	terminal?: boolean;
 }
 
 export async function createWorkerProcess(context: vscode.ExtensionContext, options: WorkerProcessOptions): Promise<PipedProcess> {
@@ -51,7 +53,7 @@ export async function createWorkerProcess(context: vscode.ExtensionContext, opti
 	const worker = await createGuestWorker(context);
 	const guest = new GuestProcess({
 		module: options.module, args: [options.name, ...options.args], env: options.env,
-		preopens: options.mounts.map(m => m.guestPath), fs: new VscodeGuestFs(options.mounts), stdin,
+		preopens: options.mounts.map(m => m.guestPath), terminal: options.terminal, fs: new VscodeGuestFs(options.mounts), stdin,
 		onOutput: (fd, data) => (fd === 1 ? stdout : stderr).emit(data),
 		createWorker: () => worker,
 	});

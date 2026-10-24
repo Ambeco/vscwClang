@@ -63,14 +63,15 @@ export async function processOptions(context: vscode.ExtensionContext, args: str
 	};
 }
 
-/** The user-program environment on the Worker host: `/workspace`, `/tmp` and `/home/user` mounts plus `HOME`, `TMPDIR`, `USER`, `LANG`. Shared by Run and Debug. */
-export async function workerProgramEnvironment(context: vscode.ExtensionContext): Promise<{ env: Record<string, string>; mounts: GuestMount[] }> {
+/** The user-program environment on the Worker host: `/workspace`, `/tmp` and `/home/user` mounts, `HOME`, `TMPDIR`, `USER`, `LANG`, and stdio as a terminal. Shared by Run and Debug. */
+export async function workerProgramEnvironment(context: vscode.ExtensionContext): Promise<{ env: Record<string, string>; mounts: GuestMount[]; terminal: true }> {
 	const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
 	if (!folder) { throw new Error('vscwClang: open a workspace folder before running or debugging.'); }
 	const [tmp, home] = await prepareScratchDirs(context);
 	return {
 		env: defaultRunEnvironment(runEnvSetting()),
 		mounts: [{ guestPath: GUEST_WORKSPACE, uri: folder }, { guestPath: GUEST_TMP, uri: tmp }, { guestPath: GUEST_HOME, uri: home }],
+		terminal: true,
 	};
 }
 
@@ -135,7 +136,7 @@ const TRAPPED_EXIT_CODE = 139;
 async function runProgramOnWorkerHost(context: vscode.ExtensionContext, program: vscode.Uri, args: string[], host: RunHost): Promise<number> {
 	const name = program.path.slice(program.path.lastIndexOf('/') + 1);
 	const module = await WebAssembly.compile(await vscode.workspace.fs.readFile(program) as Uint8Array<ArrayBuffer>);
-	const { env, mounts } = await workerProgramEnvironment(context);
+	const { env, mounts, terminal: isTerminal } = await workerProgramEnvironment(context);
 	const stdin = new StdinQueue();
 	const encoder = new TextEncoder();
 	let guest: GuestProcess | undefined;
@@ -150,6 +151,7 @@ async function runProgramOnWorkerHost(context: vscode.ExtensionContext, program:
 	guest = new GuestProcess({
 		module, args: [name, ...args], env,
 		preopens: mounts.map(m => m.guestPath),
+		terminal: isTerminal,
 		fs: new VscodeGuestFs(mounts),
 		stdin,
 		onOutput: (fd, data) => terminal.write(decoders[fd].decode(data, { stream: true })),

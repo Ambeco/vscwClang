@@ -17,6 +17,8 @@ export interface DebugLaunchPlan { output: vscode.Uri; args: string[] }
 
 export { ProgramTerminal };
 
+const terminalName = (program: string) => `vscwClang debug: ${program}`;
+
 /** Test seam: receives the program's terminal instead of opening a real one for it. */
 export interface DebugHost {
 	openTerminal?: (pty: ProgramTerminal) => void;
@@ -87,13 +89,14 @@ export class VscwClangDebugAdapter implements vscode.DebugAdapter {
 
 		const folder = this.session.workspaceFolder?.uri ?? vscode.workspace.workspaceFolders?.[0]?.uri;
 		if (!folder) { throw new Error('vscwClang: open a workspace folder before debugging.'); }
-		this.target = { session: debuggee, reactor, program, scan, paths: workspacePathMapper({ uri: folder.toString(), scheme: folder.scheme, path: folder.path, fsPath: folder.fsPath }) };
+		const notice = terminal ? `vscwClang: ${name}'s input and output are in the terminal "${terminalName(name)}". To see output here instead, set "console": "internalConsole" in launch.json (the program then gets no input).` : undefined;
+		this.target = { session: debuggee, reactor, program, scan, paths: workspacePathMapper({ uri: folder.toString(), scheme: folder.scheme, path: folder.path, fsPath: folder.fsPath }), notice };
 		return this.target;
 	}
 
 	private openProgramTerminal(name: string, onLine: (line: string) => void): ProgramTerminal {
 		const pty = new ProgramTerminal(onLine);
-		if (this.host.openTerminal) { this.host.openTerminal(pty); } else { vscode.window.createTerminal({ name: `vscwClang debug: ${name}`, pty }).show(true); }
+		if (this.host.openTerminal) { this.host.openTerminal(pty); } else { vscode.window.createTerminal({ name: terminalName(name), pty }).show(true); }
 		return pty;
 	}
 

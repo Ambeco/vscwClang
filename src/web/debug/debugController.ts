@@ -18,6 +18,8 @@ export interface DebugTarget {
 	program: Uint8Array;
 	scan: ScanResult;
 	paths: PathMapper;
+	/** Shown in the Debug Console once launched, e.g. where the program's output went instead. */
+	notice?: string;
 }
 
 export interface DebugControllerOptions {
@@ -127,6 +129,7 @@ export class DebugController {
 		const started = new Promise<void>((resolve, reject) => { this.onStart = { resolve, reject }; });
 		const target = await this.options.launch(args);
 		this.target = target;
+		if (target.notice) { this.send({ type: 'event', event: 'output', body: { category: 'console', output: `${target.notice}\n` } }); }
 		target.session.listener = event => { this.events = this.events.then(() => this.onEvent(event)).catch(e => this.fail(e)); };
 		this.breakpoints = new BreakpointIndex(parseLineTable(target.program, target.scan.module.customSections), target.scan.guardSites, target.scan.module);
 		await target.session.start();

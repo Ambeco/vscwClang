@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { VscwClangDebugAdapter, type DebugLaunchPlan } from './debug/debugAdapter';
+import { DEFAULT_LAUNCH, resolveLaunchConfiguration } from './debug/launchConfiguration';
 import { buildWorkspace, type BuildOptions } from './buildWorkspace';
 import { chooseCompileDatabase, chooseRun, defaultBuildOptions, runArgsSetting, trackActiveCppFile } from './projectConfig';
 import { runProgram } from './runProgram';
@@ -60,7 +61,8 @@ export function activate(context: vscode.ExtensionContext) {
 		registerTaskProvider(context, log),
 		vscode.commands.registerCommand('vscwclang.probe', () => runProbe(context, log)),
 		vscode.debug.registerDebugConfigurationProvider('vscwclang', {
-			provideDebugConfigurations: () => [{ type: 'vscwclang', request: 'launch', name: 'Debug C++ (vscwClang)', program: '.vscwclang/debug/a.out.wasm' }],
+			provideDebugConfigurations: () => [{ ...DEFAULT_LAUNCH }],
+			resolveDebugConfiguration: (_folder, config) => resolveLaunchConfiguration(config) as vscode.DebugConfiguration,
 		}),
 		vscode.debug.registerDebugAdapterDescriptorFactory('vscwclang', {
 			createDebugAdapterDescriptor: session => new vscode.DebugAdapterInlineImplementation(new VscwClangDebugAdapter(session, log, context, () => debugPlan(context, log, diagnostics))),

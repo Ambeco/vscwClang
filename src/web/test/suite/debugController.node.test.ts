@@ -339,4 +339,15 @@ suiteIfFixtures('DebugController with a scripted host', function () {
 		await client.event('stopped');
 		assert.deepStrictEqual(fake.armed, [[add[0]]]);
 	});
+
+	test("the target's notice is shown in the Debug Console when the launch succeeds", async () => {
+		const program = new Uint8Array(readFileSync(PROG));
+		const scan = scanProgram(program);
+		const reactor = await ReactorHost.create(await WebAssembly.compile(readFileSync(REACTOR)));
+		reactor.createTarget(program);
+		const client = makeClient(async () => ({ session: new FakeSession(), reactor, program, scan, paths: identity, notice: 'output is in the terminal' }));
+		await client.ok('initialize'); await client.ok('launch', {});
+		const output = await client.event('output');
+		assert.deepStrictEqual(output.body, { category: 'console', output: 'output is in the terminal\n' });
+	});
 });

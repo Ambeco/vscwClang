@@ -34,6 +34,8 @@ export interface GuestOptions {
 	/** Guest directories handed to the program as preopens, in fd order starting at 3. */
 	preopens: string[];
 	services: GuestServices;
+	/** stdio reports as a terminal, so `isatty` is true and libc line-buffers stdout. Only for user programs. */
+	terminal?: boolean;
 }
 
 export type GuestResult =
@@ -57,6 +59,8 @@ const FILETYPE = { characterDevice: 2, directory: 3, regular: 4 } as const;
 const OFLAGS = { creat: 1, directory: 2, excl: 4, trunc: 8 } as const;
 const FDFLAGS_APPEND = 1;
 const ALL_RIGHTS = 0x1fffffffn;
+// wasi-libc's isatty() wants a character device without FD_SEEK (1 << 2) or FD_TELL (1 << 5).
+const TERMINAL_RIGHTS = ALL_RIGHTS & ~(1n << 2n | 1n << 5n);
 
 /** File contents shared by every descriptor open on one path; written back when the last one closes. */
 interface FileData { bytes: Uint8Array; size: number; dirty: boolean; refs: number }
@@ -221,7 +225,8 @@ export class GuestWasi {
 				const v = this.view();
 				v.setUint8(out, entry.kind === 'dir' ? FILETYPE.directory : entry.kind === 'file' ? FILETYPE.regular : FILETYPE.characterDevice);
 				v.setUint16(out + 2, entry.kind === 'file' && entry.append ? FDFLAGS_APPEND : 0, true);
-				v.setBigUint64(out + 8, ALL_RIGHTS, true);
+				const stdio = entry.kind === 'stdin' || entry.kind === 'stdout' || entry.kind === 'stderr';
+				v.setBigUint64(out + 8, stdio && this.options.terminal ? TERMINAL_RIGHTS : ALL_RIGHTS, true);
 				v.setBigUint64(out + 16, ALL_RIGHTS, true);
 			}),
 			fd_fdstat_set_flags: guard((fd: number, flags: number) => {
