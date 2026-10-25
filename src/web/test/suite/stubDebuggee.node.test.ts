@@ -39,6 +39,13 @@ suite('LineEditor', () => {
 		assert.deepStrictEqual(e.feed('\r'), { echo: '\r\n', lines: ['abc\n'] });
 	});
 
+	test('with eofKey, Ctrl+D flushes a pending line without a newline, or on an empty line reports eof and drops the rest', () => {
+		const e = new LineEditor(true);
+		assert.deepStrictEqual(e.feed('ab\x04'), { echo: 'ab', lines: ['ab'] });
+		assert.deepStrictEqual(e.feed('\x04'), { echo: '', lines: [], eof: true });
+		assert.deepStrictEqual(e.feed('x\r\x04y'), { echo: 'x\r\n', lines: ['x\n'], eof: true });
+	});
+
 	test('a character outside the BMP is one Backspace', () => {
 		assert.deepStrictEqual(new LineEditor().feed('a😀\x7f\r'), { echo: 'a😀\b \b\r\n', lines: ['a\n'] });
 	});

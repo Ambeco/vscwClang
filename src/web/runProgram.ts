@@ -140,7 +140,7 @@ async function runProgramOnWorkerHost(context: vscode.ExtensionContext, program:
 	const stdin = new StdinQueue();
 	const encoder = new TextEncoder();
 	let guest: GuestProcess | undefined;
-	const terminal = new ProgramTerminal(line => stdin.push(encoder.encode(line)), { onInterrupt: () => guest?.terminate(), onClose: () => guest?.terminate() });
+	const terminal = new ProgramTerminal(line => stdin.push(encoder.encode(line)), { onInterrupt: () => guest?.terminate(), onClose: () => guest?.terminate(), onEof: () => stdin.end() });
 	if (host.openTerminal) {
 		host.openTerminal(terminal as never);
 	} else {

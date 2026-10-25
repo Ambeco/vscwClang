@@ -2,14 +2,18 @@
  * Minimal line editor for a pseudoterminal that feeds a program's stdin; vscode-free.
  *
  * `feed` takes what the terminal's `handleInput` received and returns the text to echo plus the lines completed
- * by Enter (each ending in a newline). Backspace edits the pending line; Ctrl+C, Ctrl+D, arrow keys and other
- * escape sequences are ignored, because the program's terminal has no signals or end-of-file key (as in Run).
+ * by Enter (each ending in a newline). Backspace edits the pending line; Ctrl+C, arrow keys and other escape
+ * sequences are ignored, because the program's terminal has no signals. Ctrl+D is ignored too unless `eofKey` is set:
+ * then, as in a Unix tty, it hands over the pending line without a newline, or on an empty line sets `eof`
+ * (input after it is dropped).
  */
 export class LineEditor {
 	private line = '';
 	private escape: 'start' | 'body' | undefined;
 
-	feed(data: string): { echo: string; lines: string[] } {
+	constructor(private readonly eofKey = false) {}
+
+	feed(data: string): { echo: string; lines: string[]; eof?: true } {
 		let echo = '';
 		const lines: string[] = [];
 		for (const ch of data) {
@@ -23,6 +27,12 @@ export class LineEditor {
 				continue;
 			}
 			if (ch === '\x1b') { this.escape = 'start'; continue; }
+			if (ch === '\x04' && this.eofKey) {
+				if (this.line === '') { return { echo, lines, eof: true }; }
+				lines.push(this.line);
+				this.line = '';
+				continue;
+			}
 			if (ch === '\r' || ch === '\n') {
 				echo += '\r\n';
 				lines.push(this.line + '\n');
