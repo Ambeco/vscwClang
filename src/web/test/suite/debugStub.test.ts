@@ -1,46 +1,41 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
-import { Wasm, type WasmProcess } from '@vscode/wasm-wasi';
+import { createWorkerProcess, type PipedProcess } from '../../host/workerProcess';
 import { PAGE_SIZE } from '../../debug/pagedMemory';
 import { StubSession } from '../../debug/stubChannel';
 import { scanProgram } from '../../debug/wasmScan';
-import { describeUnsupportedImports } from '../../toolchain/wasiImports';
 
 /**
- * Spike: does the in-process debug stub (`debug/debugStub.c`) work over `wasm-wasi-core`'s real pipe stdio?
+ * Spike: does the in-process debug stub (`debug/debugStub.c`) work over the Worker host's pipe stdio?
  * The stub blocks in `fd_read` on stdin while stopped, writes frames to stderr, and shares both with the program.
  * Fixtures are `src/web/test/fixtures/debug/{chatty,prog}stub.wasm`, prebuilt with wasi-sdk (see stubChannel.node.test.ts).
  *
- * Needs a workspace folder, --coi and ms-vscode.wasm-wasi-core (see the `test` script in package.json).
+ * Needs a workspace folder and --coi (see the `test` script in package.json).
  */
-suite('vscwClang debug stub over wasm-wasi-core pipes (in browser)', function () {
+suite('vscwClang debug stub over Worker host pipes (in browser)', function () {
 	this.timeout(120_000);
 	const encoder = new TextEncoder();
 	const decoder = new TextDecoder();
-	let wasm: Wasm;
 	let extension: vscode.Extension<unknown>;
 
 	suiteSetup(async () => {
 		extension = (vscode.extensions.getExtension('undefined_publisher.vscwclang') ?? vscode.extensions.all.find(e => e.id.endsWith('.vscwclang')))!;
 		assert.ok(extension, 'vscwclang extension is not loaded');
-		wasm = await Wasm.load();
 	});
 
 	const fixture = async (name: string) =>
 		await vscode.workspace.fs.readFile(vscode.Uri.joinPath(extension.extensionUri, 'src', 'web', 'test', 'fixtures', 'debug', name)) as Uint8Array<ArrayBuffer>;
 
-	interface Debuggee { process: WasmProcess; session: StubSession; stdout: () => string; stderr: () => string; exited: Promise<number> }
+	interface Debuggee { process: PipedProcess; session: StubSession; stdout: () => string; stderr: () => string; exited: Promise<number> }
 
 	async function launch(name: string): Promise<{ bytes: Uint8Array<ArrayBuffer>; dbg: Debuggee }> {
 		const bytes = await fixture(name);
-		const unsupported = describeUnsupportedImports(WebAssembly.Module.imports(await WebAssembly.compile(bytes)));
-		assert.strictEqual(unsupported, undefined, unsupported);
-		const process = await wasm.createProcess(name, await WebAssembly.compile(bytes), { stdio: { in: { kind: 'pipeIn' }, out: { kind: 'pipeOut' }, err: { kind: 'pipeOut' } } });
+		const process = await createWorkerProcess({ extensionUri: extension.extensionUri } as vscode.ExtensionContext, { name, module: await WebAssembly.compile(bytes), args: [], env: {}, mounts: [] });
 		let stdout = '', stderr = '';
 		const session = new StubSession(text => process.stdin!.write(encoder.encode(text)), b => { stderr += decoder.decode(b, { stream: true }); });
 		process.stdout!.onData(d => { stdout += decoder.decode(d, { stream: true }); });
 		process.stderr!.onData(d => session.onStderr(d));
-		// Not wasm-wasi-core's own timeout: a hung run() never settles on a trap (vscode-wasm#303), so tests bound every wait themselves.
+		// Tests bound every wait themselves (`finish` terminates after 20 s).
 		const exited = process.run();
 		return { bytes, dbg: { process, session, stdout: () => stdout, stderr: () => { session.endStderr(); return stderr; }, exited } };
 	}

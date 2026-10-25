@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { runProgram } from '../../runProgram';
 
 /**
- * Run on the V2 Worker host (`vscwclang.experimental.workerHost`) with prebuilt fixtures (src/web/test/fixtures/host,
+ * Run on the Worker host with prebuilt fixtures (src/web/test/fixtures/host,
  * rebuilt by scripts/build-host-fixtures.mjs). Needs a workspace folder and --coi (see the `test` script in package.json).
  */
 suite('vscwClang Run on the Worker host (in browser)', function () {
@@ -19,11 +19,6 @@ suite('vscwClang Run on the Worker host (in browser)', function () {
 		extension = (vscode.extensions.getExtension('undefined_publisher.vscwclang') ?? vscode.extensions.all.find(e => e.id.endsWith('.vscwclang')))!;
 		assert.ok(extension, 'vscwclang extension is not loaded');
 		context = { extensionUri: extension.extensionUri, globalStorageUri: vscode.Uri.joinPath(dir, 'storage') } as vscode.ExtensionContext;
-		await vscode.workspace.getConfiguration('vscwclang').update('experimental.workerHost', true, vscode.ConfigurationTarget.Global);
-	});
-
-	suiteTeardown(async () => {
-		await vscode.workspace.getConfiguration('vscwclang').update('experimental.workerHost', undefined, vscode.ConfigurationTarget.Global);
 	});
 
 	async function install(fixture: string): Promise<vscode.Uri> {
@@ -43,7 +38,7 @@ suite('vscwClang Run on the Worker host (in browser)', function () {
 			runProgram(context, wasmFile, args, {
 				openTerminal: pty => {
 					pty.onDidWrite(d => { text += d; hooks.onOutput?.(text, pty); });
-					pty.open(undefined);
+					pty.open();
 					hooks.onOpen?.(pty);
 				},
 			}),

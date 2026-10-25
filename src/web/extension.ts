@@ -7,7 +7,6 @@ import { runProgram } from './runProgram';
 import { joinArgs, splitArgs } from './toolchain/runEnvironment';
 import { registerTaskProvider } from './tasks';
 import { publishDiagnostics } from './toolchain/diagnosticsCollection';
-import { runProbe } from './probe';
 import { getToolchainStore } from './toolchain/toolchain';
 import { startClangdClient } from './clangd/clangdClient';
 
@@ -59,7 +58,6 @@ export function activate(context: vscode.ExtensionContext) {
 			void vscode.window.showInformationMessage('vscwClang: downloaded toolchain removed; it will be downloaded again on next use.');
 		}),
 		registerTaskProvider(context, log),
-		vscode.commands.registerCommand('vscwclang.probe', () => runProbe(context, log)),
 		vscode.debug.registerDebugConfigurationProvider('vscwclang', {
 			provideDebugConfigurations: () => [{ ...DEFAULT_LAUNCH }],
 			resolveDebugConfiguration: (_folder, config) => resolveLaunchConfiguration(config) as vscode.DebugConfiguration,

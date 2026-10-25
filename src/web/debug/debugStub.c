@@ -3,7 +3,7 @@
  *
  * Compile this file WITHOUT -fsanitize-coverage and link it into a program built with
  * `-O0 -g -fsanitize-coverage=trace-pc-guard`. The compiler calls __sanitizer_cov_trace_pc_guard on every basic
- * block; this file is that hook, so wasm-wasi-core (which accepts no custom imports) can still pause the program.
+ * block; this file is that hook, so the program pauses without any custom host import.
  *
  * Wire format: stub -> host on stderr as ESC _ vscw <text> ESC \ (the program's own stderr passes through around
  * it); host -> stub as text lines on stdin, read ONE byte at a time so no byte meant for the program is swallowed.

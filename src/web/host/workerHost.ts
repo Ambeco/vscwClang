@@ -4,18 +4,13 @@ import type { WorkerLike } from './guestProcess';
 /** Where esbuild puts the bundled Worker entry (`guestWorker.web.ts`). */
 const WORKER_SCRIPT = ['dist', 'web', 'host', 'guestWorker.web.js'];
 
-/** Whether tools and programs run on the V2 Worker host (`vscwclang.experimental.workerHost`, default on) instead of `wasm-wasi-core`. */
-export function workerHostEnabled(): boolean {
-	return vscode.workspace.getConfiguration('vscwclang').get<boolean>('experimental.workerHost', true);
-}
-
 let scriptUrl: Promise<string> | undefined;
 
 /**
  * Makes a Worker running the guest entry.
  *
  * The extension host cannot start a Worker from an extension URI (different origin), so the bundled script is read
- * and started from a blob URL, as `wasm-wasi-core` does.
+ * and started from a blob URL.
  */
 export async function createGuestWorker(context: vscode.ExtensionContext): Promise<WorkerLike> {
 	scriptUrl ??= (async () => {

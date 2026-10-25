@@ -1,14 +1,12 @@
 import * as vscode from 'vscode';
-import { type MemoryFileSystem } from '@vscode/wasm-wasi';
 import { GuestProcess, StdinQueue } from '../host/guestProcess';
 import { MemoryGuestFs } from '../host/memoryGuestFs';
-import { loadProcessHost, type ProcessHost } from '../host/processHost';
 import { VscodeGuestFs } from '../host/vscodeGuestFs';
-import { createGuestWorker, workerHostEnabled } from '../host/workerHost';
+import { createGuestWorker } from '../host/workerHost';
 import { parseDiagnostics, withFailureFallback, type ParsedDiagnostic } from './diagnostics';
 import { checkUserFlags, splitFlags } from './flagPolicy';
 import { GUEST_WORKSPACE, toGuestPath } from './guestPaths';
-import { loadCompileFlags, loadSysroot, loadSysrootGuestFs, type SysrootFs } from './sysroot';
+import { loadCompileFlags, loadSysrootGuestFs } from './sysroot';
 import { ToolchainStore, type StoreContext } from './toolchainStore';
 import debugStubSource from '../debug/debugStub.c';
 
@@ -46,8 +44,7 @@ export type BuildContext = StoreContext & Pick<vscode.ExtensionContext, 'extensi
 /**
  * Compiles each source with clang.wasm, then links with lld.wasm.
  *
- * Runs each tool as its own process, one at a time, on the V2 Worker host (default) or on `wasm-wasi-core` when
- * `vscwclang.experimental.workerHost` is off (see documents/design.md). Every
+ * Runs each tool as its own process, one at a time, on the Worker host (documents/design.md "Host"). Every
  * source is compiled even after an earlier one fails, so all diagnostics are reported; linking is skipped
  * when any compile fails. clang writes each object to stdout (`-o -`), the host stores it in an in-memory file
  * system, and wasm-ld reads it from there (mounted read-only at `/obj`), so nothing but the final output is
@@ -87,20 +84,10 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 	await vscode.workspace.fs.createDirectory(outputDir);
 	const toolchain = getToolchainStore(context, log);
 	await toolchain.ensure();
-	const onWorkerHost = workerHostEnabled();
 	const flagsPromise = loadCompileFlags(toolchain);
-	let run: (wasmFile: string, args: string[], extra?: ToolExtras) => Promise<ToolResult>;
-	let objects: ObjectFiles;
-	if (onWorkerHost) {
-		const guestSysroot = await loadSysrootGuestFs(toolchain);
-		objects = new ObjectFiles(undefined);
-		run = (wasmFile, args, extra) => runToolOnWorkerHost(context, folder, toolchain, guestSysroot, wasmFile, args, extra);
-	} else {
-		const wasm = await loadProcessHost();
-		const sysroot = await getSysroot(wasm, toolchain);
-		objects = new ObjectFiles(await wasm.createMemoryFileSystem());
-		run = (wasmFile, args, extra) => runTool(wasm, toolchain, sysroot, wasmFile, args, extra);
-	}
+	const guestSysroot = await loadSysrootGuestFs(toolchain);
+	const objects = new MemoryGuestFs();
+	const run = (wasmFile: string, args: string[], extra?: ToolExtras) => runTool(context, folder, toolchain, guestSysroot, wasmFile, args, extra);
 	const flags = await flagsPromise;
 	const sub = (f: string) => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource');
 	const userFlags = splitFlags(request.flags, GUEST_WORKSPACE);
@@ -124,7 +111,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 		diagnostics += cc.stderr;
 		if (cc.stderr !== '') { request.onDiagnostics?.(parseDiagnostics(diagnostics)); }
 		if (cc.exitCode === 0) {
-			objects.createFile(objectName, cc.stdout);
+			objects.setFile(objectName, cc.stdout);
 			objectPaths.push(`/obj/${objectName}`);
 		} else if (exitCode === 0) {
 			exitCode = cc.exitCode;
@@ -145,14 +132,14 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 const NL = String.fromCharCode(10);
 
 /**
- * Source of a weak `abort()` that exits with code 134 instead of trapping.
+ * Source of a weak `abort()` that exits with code 134 (SIGABRT) instead of trapping.
  *
- * wasm-wasi-core never settles `run()` when a program traps (vscode-wasm#303), and wasi-libc's `abort()`, so
- * `assert`, `std::terminate` and `abort` itself, is a trap. Weak, so a program's own `abort` still wins, and
- * linked ahead of libc so libc's copy is never pulled in. The same object holds a startup `chdir("/workspace")`,
- * since WASI has no working directory and relative paths otherwise fail. Direct traps (out-of-bounds, `__builtin_trap`) are not covered.
+ * wasi-libc's `abort()`, so `assert`, `std::terminate` and `abort` itself, is a trap, which the host reports as a
+ * crash (exit 139). Weak, so a program's own `abort` still wins, and linked ahead of libc so libc's copy is never
+ * pulled in. The same object holds a startup `chdir("/workspace")`, since WASI has no working directory and
+ * relative paths otherwise fail.
  */
-export const ABORT_SHIM_SOURCE = [
+const ABORT_SHIM_SOURCE = [
 	'#include <stdio.h>',
 	'#include <wasi/api.h>',
 	'#include <unistd.h>',
@@ -167,17 +154,17 @@ export const ABORT_SHIM_SOURCE = [
 
 interface Shim { name: string; source: string; flags: string[]; failure: string }
 
-const ABORT_SHIM: Shim = { name: 'abort', source: ABORT_SHIM_SOURCE, flags: [], failure: 'a failed assert will leave the program hanging until Ctrl+C' };
+const ABORT_SHIM: Shim = { name: 'abort', source: ABORT_SHIM_SOURCE, flags: [], failure: 'a failed assert will end as a crash instead of exit code 134' };
 // Compiled without sancov (the stub is the hook), at -O2 because it runs on every basic block.
 const DEBUG_STUB: Shim = { name: 'debugstub', source: debugStubSource, flags: ['-O2'], failure: 'breakpoints will not work' };
 
 const shimObjects = new Map<string, Uint8Array<ArrayBuffer>>();
 
 /** Puts the compiled shim in `objects` and returns its guest path; undefined (build goes on) if it cannot be compiled. */
-async function addShim(objects: ObjectFiles, clang: (args: string[], extra: ToolExtras) => Promise<ToolResult>, compileFlags: string[], log: vscode.OutputChannel, shim: Shim): Promise<string | undefined> {
+async function addShim(objects: MemoryGuestFs, clang: (args: string[], extra: ToolExtras) => Promise<ToolResult>, compileFlags: string[], log: vscode.OutputChannel, shim: Shim): Promise<string | undefined> {
 	let object = shimObjects.get(shim.name);
 	if (!object) {
-		objects.createFile(`vscwclang-${shim.name}.c`, new TextEncoder().encode(shim.source));
+		objects.setFile(`vscwclang-${shim.name}.c`, new TextEncoder().encode(shim.source));
 		const cc = await clang(['clang', ...compileFlags, ...shim.flags, '-fno-color-diagnostics', '-fno-caret-diagnostics', '-c', `/obj/vscwclang-${shim.name}.c`, '-o', '-'], { captureStdout: true, objects });
 		if (cc.exitCode !== 0) {
 			log.appendLine(`[vscwclang] warning: could not build the ${shim.name} helper (exit ${cc.exitCode}); ${shim.failure}. ${cc.stderr.trim()}`);
@@ -186,12 +173,11 @@ async function addShim(objects: ObjectFiles, clang: (args: string[], extra: Tool
 		object = cc.stdout;
 		shimObjects.set(shim.name, object);
 	}
-	objects.createFile(`vscwclang-${shim.name}.o`, object);
+	objects.setFile(`vscwclang-${shim.name}.o`, object);
 	return `/obj/vscwclang-${shim.name}.o`;
 }
 
-// Caches survive across builds: unzipping the sysroot (~2 s) and compiling clang.wasm (~1 s) dominate small builds.
-let sysrootPromise: Promise<SysrootFs> | undefined;
+// Compiling clang.wasm (~1 s) dominates small builds, so compiled modules survive across builds.
 const modules = new Map<string, Promise<WebAssembly.Module>>();
 
 const stores = new Map<string, ToolchainStore>();
@@ -205,11 +191,6 @@ export function getToolchainStore(context: StoreContext, log: vscode.OutputChann
 		stores.set(key, store);
 	}
 	return store;
-}
-
-function getSysroot(wasm: ProcessHost, toolchain: ToolchainStore): Promise<SysrootFs> {
-	sysrootPromise ??= loadSysroot(wasm, toolchain).catch(e => { sysrootPromise = undefined; throw e; });
-	return sysrootPromise;
 }
 
 function getModule(toolchain: ToolchainStore, wasmFile: string): Promise<WebAssembly.Module> {
@@ -233,75 +214,26 @@ function toolTimeoutMs(): number {
 
 type ToolResult = { exitCode: number; stderr: string; stdout: Uint8Array<ArrayBuffer> };
 
-/** Compiled objects (and shim sources) in memory, mounted read-only at `/obj`; `legacy` is the `wasm-wasi-core` copy, absent on the Worker host. */
-class ObjectFiles {
-	readonly guest = new MemoryGuestFs();
-	constructor(readonly legacy: MemoryFileSystem | undefined) {}
-	createFile(name: string, content: Uint8Array): void {
-		this.legacy?.createFile(name, content);
-		this.guest.setFile(name, content);
-	}
-}
-
 interface ToolExtras {
 	/** Keep stdout as bytes (clang `-o -`) instead of merging its text into the diagnostics. */
 	captureStdout?: boolean;
-	/** In-memory objects, mounted read-only at `/obj`. */
-	objects?: ObjectFiles;
+	/** Compiled objects (and shim sources) in memory, mounted read-only at `/obj`. */
+	objects?: MemoryGuestFs;
 	/** A directory outside the workspace, mounted writable at `/out` (the link output). */
 	outputDir?: vscode.Uri;
 }
 
-async function runTool(wasm: ProcessHost, toolchain: ToolchainStore, sysroot: SysrootFs, wasmFile: string, args: string[], extra: ToolExtras = {}): Promise<ToolResult> {
-	const module = await getModule(toolchain, wasmFile);
-	const process = await wasm.createProcess(args[0], module, {
-		args: args.slice(1),
-		stdio: { out: { kind: 'pipeOut' }, err: { kind: 'pipeOut' } },
-		mountPoints: [
-			{ kind: 'workspaceFolder' },
-			{ kind: 'memoryFileSystem', fileSystem: sysroot.sysroot, mountPoint: '/sysroot' },
-			{ kind: 'memoryFileSystem', fileSystem: sysroot.resource, mountPoint: '/resource' },
-			...(extra.objects?.legacy ? [{ kind: 'memoryFileSystem' as const, fileSystem: extra.objects.legacy!, mountPoint: '/obj' }] : []),
-			...(extra.outputDir ? [{ kind: 'vscodeFileSystem' as const, uri: extra.outputDir, mountPoint: GUEST_OUT }] : []),
-		],
-	});
-	const errDecoder = new TextDecoder();
-	const outDecoder = new TextDecoder();
-	let stderr = '';
-	process.stderr?.onData(d => { stderr += errDecoder.decode(d, { stream: true }); });
-	const stdoutChunks: Uint8Array[] = [];
-	process.stdout?.onData(d => { if (extra.captureStdout) { stdoutChunks.push(new Uint8Array(d)); } else { stderr += outDecoder.decode(d, { stream: true }); } });
-	// wasm-wasi-core's run() never settles if the tool traps (vscode-wasm#303); terminate() resolves it.
-	let timedOut = false;
-	const timeoutMs = toolTimeoutMs();
-	const timer = timeoutMs === 0 ? undefined : setTimeout(() => { timedOut = true; void process.terminate(); }, timeoutMs);
-	let exitCode: number;
-	try {
-		exitCode = await process.run();
-	} finally {
-		clearTimeout(timer);
-	}
-	if (timedOut) {
-		return { exitCode: 1, stderr: `${stderr}${args[0]}: error: no result after ${timeoutMs / 1000}s, so it was stopped (it probably crashed inside WebAssembly, or the source is very large). Did you mean to raise 'vscwclang.toolTimeoutSeconds'?
-`, stdout: new Uint8Array(0) };
-	}
-	const stdout = new Uint8Array(stdoutChunks.reduce((n, c) => n + c.byteLength, 0));
-	stdoutChunks.reduce((off, c) => { stdout.set(c, off); return off + c.byteLength; }, 0);
-	return { exitCode, stderr, stdout };
-}
-
 /**
- * Runs one tool in its own Worker on the V2 host. Traps and timeouts end the tool with exit code 1 and a message
- * in `stderr`, so unlike `runTool` it needs no workaround for `wasm-wasi-core` never settling.
+ * Runs one tool in its own Worker. Traps and timeouts end the tool with exit code 1 and a message in `stderr`.
  */
-async function runToolOnWorkerHost(context: BuildContext, workspace: vscode.Uri, toolchain: ToolchainStore, sysroot: { sysroot: MemoryGuestFs; resource: MemoryGuestFs }, wasmFile: string, args: string[], extra: ToolExtras = {}): Promise<ToolResult> {
+async function runTool(context: BuildContext, workspace: vscode.Uri, toolchain: ToolchainStore, sysroot: { sysroot: MemoryGuestFs; resource: MemoryGuestFs }, wasmFile: string, args: string[], extra: ToolExtras = {}): Promise<ToolResult> {
 	const module = await getModule(toolchain, wasmFile);
 	const worker = await createGuestWorker(context as vscode.ExtensionContext);
 	const mounts = [
 		{ guestPath: GUEST_WORKSPACE, uri: workspace },
 		{ guestPath: '/sysroot', fs: sysroot.sysroot },
 		{ guestPath: '/resource', fs: sysroot.resource },
-		...(extra.objects ? [{ guestPath: '/obj', fs: extra.objects.guest }] : []),
+		...(extra.objects ? [{ guestPath: '/obj', fs: extra.objects }] : []),
 		...(extra.outputDir ? [{ guestPath: GUEST_OUT, uri: extra.outputDir }] : []),
 	];
 	const stdin = new StdinQueue();

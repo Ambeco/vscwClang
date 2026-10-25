@@ -1,4 +1,4 @@
-/** Where `wasm-wasi-core` mounts the first workspace folder inside the guest. */
+/** Where the first workspace folder is mounted inside the guest. */
 export const GUEST_WORKSPACE = '/workspace';
 
 /** @helper Maps a path under `folderPath` to its guest path; undefined if `filePath` is outside the folder. */

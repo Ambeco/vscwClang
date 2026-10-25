@@ -76,8 +76,7 @@ export interface GuestProcessOptions {
  * One guest program running in its own Worker, served from the extension host.
  *
  * `run` resolves when the program exits, traps (the engine's message is in the outcome), fails to start, or
- * `terminate` is called. Because the Worker is ours, a trap or a blocked read can always be ended, unlike
- * under `wasm-wasi-core`.
+ * `terminate` is called. Because the Worker is ours, a trap or a blocked read can always be ended.
  */
 export class GuestProcess {
 	private worker: WorkerLike | undefined;

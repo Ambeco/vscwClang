@@ -21,20 +21,16 @@ Open the Command Palette (`F1`) and type `vscwClang` to find the commands. You n
 
 The first build downloads the compiler and the C++ standard library (about 98 MB, from a CDN) and caches them in the extension's storage. After that it works offline. The first build in a session also takes several seconds while the compiler loads.
 
-The extension requires the [WebAssembly Execution Engine](https://marketplace.visualstudio.com/items?itemName=ms-vscode.wasm-wasi-core) extension, which VS Code installs automatically.
-
 ## Limitations
 
 This is an early release.
 
 - **WebAssembly only.** Programs are built for `wasm32-wasip1` (WASI) and run in the browser. They can use the C and C++ standard libraries, but not operating-system APIs such as sockets, processes or graphics, and not native libraries.
-- **Restricted compiler flags.** Flags that would break the sandbox are rejected with a suggestion, for example `--target`, `-march`, `-o`, `-c`, `-fplugin`, `-fuse-ld`, `--sysroot`, `-B`, and include or library paths outside your workspace. `-I`, `-D`, `-std`, `-O`, `-W...`, `-l`, `-L` and `-Wl,...` work. `--no-gc-sections` is rejected too, because it makes programs hang in the current runtime.
+- **Restricted compiler flags.** Flags that would break the sandbox are rejected with a suggestion, for example `--target`, `-march`, `-o`, `-c`, `-fplugin`, `-fuse-ld`, `--sysroot`, `-B`, and include or library paths outside your workspace. `-I`, `-D`, `-std`, `-O`, `-W...`, `-l`, `-L` and `-Wl,...` work.
 - **No threads yet.** Programs are single-threaded, and the compiler runs one file at a time.
-- **Uncaught C++ exceptions are not reported.** `throw`, `try` and `catch` work, but an exception that nothing catches leaves the terminal waiting with no message until you press Ctrl+C.
 - **32-bit target.** WebAssembly here is `wasm32`: pointers, `size_t` and `uintptr_t` are 32 bits. Code that assumes 64-bit pointers (size assertions, pointer-tagging) needs changes.
 - **No Windows APIs.** `windows.h`, `winsock2.h` and MSVC-only functions such as `_stricmp` and `strcpy_s` are not available.
-- **Ctrl+D (end of input) works only on the Worker host.** Under the `wasm-wasi-core` fallback a program that reads until EOF waits until you press Ctrl+C.
-- **Crashes.** A failed `assert`, `abort()` or `std::terminate` ends the program with `exited with code 134 (aborted)`. Other crashes (out-of-bounds memory access, division by zero, stack overflow) leave the terminal waiting with no message until you press Ctrl+C, because the WebAssembly runtime doesn't report them.
+- **Crashes.** A failed `assert`, `abort()` or `std::terminate` ends the program with `exited with code 134 (aborted)`. Other crashes (out-of-bounds memory access, division by zero, stack overflow, an uncaught C++ exception) end the program with `trapped: <reason>` and exit code 139.
 - **Debugging is early.** F5 builds in debug mode and stops at line breakpoints, with step in/over/out, the call stack, and hover, Watch and Debug Console evaluation of variables. The program's input and output are in a `vscwClang debug` terminal (set `"console": "internalConsole"` in `launch.json` for output in the Debug Console instead). Breakpoints stop at the start of the code block containing the line, stepping moves block by block, the Variables pane does not list locals, and Pause is not supported.
 - **IntelliSense is early.** A clangd language server (WebAssembly, single-threaded) provides completion, hover and go-to-definition. Because it has no background indexing thread, the extension indexes your workspace sources one file at a time after startup (progress shows in the status bar), starting with files named by your `tasks.json`/`launch.json`, then files near the ones you have open. Until it finishes, cross-file results can be incomplete, and editing may feel slower. The `vscwclang.indexing.enabled`, `vscwclang.indexing.pauseMs` and `vscwclang.indexing.holdOpenMs` settings turn indexing off or tune its pacing. Opening a C/C++ file downloads clangd on first use.
 

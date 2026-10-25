@@ -1,15 +1,6 @@
-import { type MemoryFileSystem } from '@vscode/wasm-wasi';
-import type { ProcessHost } from '../host/processHost';
 import { unzip } from 'fflate';
 import { MemoryGuestFs } from '../host/memoryGuestFs';
 import type { ToolchainStore } from './toolchainStore';
-
-export interface SysrootFs {
-	sysroot: MemoryFileSystem;
-	resource: MemoryFileSystem;
-	/** Every file by zip path (`sysroot/...`, `resource/...`), kept so editors can open headers clangd points into. */
-	files: Record<string, Uint8Array>;
-}
 
 export interface CompileFlags {
 	compile: Record<string, string[]>;
@@ -18,7 +9,7 @@ export interface CompileFlags {
 
 const unzipped = new WeakMap<ToolchainStore, Promise<Record<string, Uint8Array>>>();
 
-/** Unzips `sysroot.zip` once per store, so the wasm-wasi-core file systems and the Worker host's share the bytes. */
+/** Unzips `sysroot.zip` once per store, so the Worker host's file systems and the header viewer share the bytes. */
 function unzipSysroot(toolchain: ToolchainStore): Promise<Record<string, Uint8Array>> {
 	let files = unzipped.get(toolchain);
 	if (!files) {
@@ -41,28 +32,6 @@ export async function loadSysrootGuestFs(toolchain: ToolchainStore): Promise<{ s
 		if (path.endsWith('/')) { continue; }
 		const root = path.startsWith('sysroot/') ? 'sysroot' : 'resource';
 		result[root].setFile(path.slice(root.length), content);
-	}
-	return result;
-}
-
-/** Unzips `sysroot.zip` (entries under `sysroot/` and `resource/`) into two memory file systems. */
-export async function loadSysroot(wasm: ProcessHost, toolchain: ToolchainStore): Promise<SysrootFs> {
-	const files = await unzipSysroot(toolchain);
-	const result: SysrootFs = { sysroot: await wasm.createMemoryFileSystem(), resource: await wasm.createMemoryFileSystem(), files };
-	const made = { sysroot: new Set<string>(), resource: new Set<string>() };
-	for (const [path, content] of Object.entries(files)) {
-		const root = path.startsWith('sysroot/') ? 'sysroot' : 'resource';
-		const rel = path.slice(root.length);
-		const parts = rel.split('/').slice(1, -1);
-		let dir = '';
-		for (const part of parts) {
-			dir = dir ? `${dir}/${part}` : part;
-			if (!made[root].has(dir)) {
-				result[root].createDirectory(dir);
-				made[root].add(dir);
-			}
-		}
-		result[root].createFile(rel.slice(1), content);
 	}
 	return result;
 }

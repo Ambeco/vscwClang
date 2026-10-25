@@ -4,7 +4,7 @@ import { VscwClangDebugAdapter, type DebugHost, type ProgramTerminal } from '../
 import { build } from '../../toolchain/toolchain';
 import { DapClient, type DapMessage } from './dapClient';
 
-// Needs a workspace folder, --coi and ms-vscode.wasm-wasi-core (see the `test` script in package.json), and the
+// Needs a workspace folder, --coi (see the `test` script in package.json), and the
 // local toolchain dist with the lldb reactor (`npm run pretest` builds it from llvm-artifacts/).
 suite('vscwClang debug adapter (in browser)', function () {
 	this.timeout(240_000);

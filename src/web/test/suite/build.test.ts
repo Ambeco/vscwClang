@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
-import { Wasm } from '@vscode/wasm-wasi';
+import { createWorkerProcess } from '../../host/workerProcess';
 import { build } from '../../toolchain/toolchain';
 import { chooseArtifactDir } from '../../buildWorkspace';
 import { runProgram } from '../../runProgram';
@@ -8,7 +8,7 @@ import { createTaskProvider } from '../../tasks';
 import { userFlags } from '../../projectConfig';
 import { ToolchainStore } from '../../toolchain/toolchainStore';
 
-// Needs a workspace folder, --coi and ms-vscode.wasm-wasi-core (see the `test` script in package.json).
+// Needs a workspace folder and --coi (see the `test` script in package.json).
 suite('vscwClang build (in browser)', function () {
 	this.timeout(180_000);
 	const encoder = new TextEncoder();
@@ -23,9 +23,8 @@ suite('vscwClang build (in browser)', function () {
 	const uri = (name: string) => vscode.Uri.joinPath(dir, name);
 
 	async function runWasm(output: vscode.Uri): Promise<{ exitCode: number; stdout: string }> {
-		const wasm = await Wasm.load();
 		const module = await WebAssembly.compile(await vscode.workspace.fs.readFile(output) as Uint8Array<ArrayBuffer>);
-		const process = await wasm.createProcess('prog', module, { stdio: { out: { kind: 'pipeOut' }, err: { kind: 'pipeOut' } } });
+		const process = await createWorkerProcess(context, { name: 'prog', module, args: [], env: {}, mounts: [] });
 		let stdout = '';
 		const decoder = new TextDecoder();
 		process.stdout?.onData(d => { stdout += decoder.decode(d, { stream: true }); });
@@ -121,7 +120,7 @@ suite('vscwClang build (in browser)', function () {
 			runProgram(context, wasmFile, args, {
 				openTerminal: pty => {
 					pty.onDidWrite(d => { text += d; onOutput?.(text, pty); });
-					pty.open(undefined);
+					pty.open();
 				},
 			}),
 			new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`run hung; output so far: ${JSON.stringify(text)}`)), 20000)),
@@ -186,7 +185,7 @@ suite('vscwClang build (in browser)', function () {
 	});
 	}
 
-	test('a failed assert exits with 134 instead of trapping (which would hang run())', async () => {
+	test('a failed assert exits with 134 instead of trapping', async () => {
 		const nl = String.fromCharCode(10);
 		await write('aborting.cpp', ['#include <cassert>', '#include <cstdio>', 'int main(int argc, char**) { std::puts("before"); assert(argc == 99); std::puts("after"); return 0; }', ''].join(nl));
 		const built = await build({ sources: [uri('aborting.cpp')], output: uri('aborting.wasm'), flags: [], mode: 'release' }, log, context);
@@ -288,14 +287,12 @@ suite('vscwClang build (in browser)', function () {
 		assert.match(bad.built.diagnostics, /exceptions/i);
 	});
 
-	// Known bug (documents/remaining_work.md "Uncaught C++ exception escapes the program"): run() never settles, and even the
-	// Promise.race below did not fire (the test hit the 180 s suite timeout), so it is skipped until the host fix lands. Un-skip then.
-	test.skip('C++ exceptions: an uncaught exception exits 134 instead of hanging', async function () {
+	test('C++ exceptions: an uncaught exception ends as a crash (139) instead of hanging', async function () {
 		const { built } = await buildAndRun('eh-uncaught', { 'eh-uncaught.cpp': '#include <cstdio>\nint main() { std::puts("before"); throw 1; }\n' });
 		assert.strictEqual(built.exitCode, 0, built.diagnostics);
 		const outcome = await Promise.race([runWasm(uri('eh-uncaught.wasm')), new Promise<'hung'>(resolve => setTimeout(() => resolve('hung'), 8000))]);
 		assert.notStrictEqual(outcome, 'hung', 'run() never settled');
-		assert.strictEqual((outcome as { exitCode: number }).exitCode, 134);
+		assert.strictEqual((outcome as { exitCode: number }).exitCode, 139);
 	});
 
 	test('a program that defines its own abort() keeps it', async () => {

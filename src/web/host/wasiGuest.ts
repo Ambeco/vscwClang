@@ -81,8 +81,7 @@ class ErrnoSignal {
  * `fd_sync`, and when the program ends or traps), so a program that never closes a file still saves it at exit, but
  * another process sees its writes only then. Symlinks, hard links and sockets are not supported.
  *
- * A trap in the guest does not escape: `start` returns `{ kind: 'trap' }` with the engine's message, which is what
- * `wasm-wasi-core` could never report (vscode-wasm#303).
+ * A trap in the guest does not escape: `start` returns `{ kind: 'trap' }` with the engine's message.
  */
 export class GuestWasi {
 	readonly imports: WebAssembly.ModuleImports;
@@ -95,6 +94,7 @@ export class GuestWasi {
 	private readonly encoder = new TextEncoder();
 	private readonly decoder = new TextDecoder();
 	private readonly start0 = performance.now();
+	private exitCode: number | undefined;
 
 	constructor(private readonly options: GuestOptions) {
 		this.services = options.services;
@@ -113,7 +113,8 @@ export class GuestWasi {
 			entry();
 			return { kind: 'exit', code: 0 };
 		} catch (e) {
-			if (e instanceof GuestExit) { return { kind: 'exit', code: e.code }; }
+			// A C++ `catch (...)` (or a cleanup `catch_all`, as in `std::terminate`) can swallow the unwinding exception, so the first `proc_exit` code wins whatever ends `_start`.
+			if (this.exitCode !== undefined) { return { kind: 'exit', code: this.exitCode }; }
 			if (e instanceof WebAssembly.RuntimeError) { return { kind: 'trap', message: `RuntimeError: ${e.message}` }; }
 			// A stack overflow surfaces as a plain RangeError in V8.
 			if (e instanceof RangeError) { return { kind: 'trap', message: `RangeError: ${e.message}` }; }
@@ -176,7 +177,7 @@ export class GuestWasi {
 				for (let off = 0; off < len; off += 65536) { crypto.getRandomValues(target.subarray(off, Math.min(len, off + 65536)) as Uint8Array<ArrayBuffer>); }
 			}),
 			sched_yield: guard(() => undefined),
-			proc_exit: (code: number) => { throw new GuestExit(code); },
+			proc_exit: (code: number) => { this.exitCode ??= code; throw new GuestExit(code); },
 			proc_raise: enosys,
 			poll_oneoff: guard((input: number, output: number, count: number, eventsOut: number) => this.pollOneoff(input, output, count, eventsOut)),
 

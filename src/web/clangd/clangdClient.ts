@@ -1,9 +1,7 @@
 import * as vscode from 'vscode';
-import { loadProcessHost } from '../host/processHost';
 import { createWorkerProcess, type PipedProcess } from '../host/workerProcess';
-import { workerHostEnabled } from '../host/workerHost';
 import { LanguageClient, ReadableStreamMessageReader, WriteableStreamMessageWriter, type LanguageClientOptions, type MessageTransports } from 'vscode-languageclient/browser';
-import { loadCompileFlags, loadSysroot, loadSysrootFiles, loadSysrootGuestFs } from '../toolchain/sysroot';
+import { loadCompileFlags, loadSysrootFiles, loadSysrootGuestFs } from '../toolchain/sysroot';
 import { fallbackFlags } from './fallbackFlags';
 import { getToolchainStore } from '../toolchain/toolchain';
 import { GUEST_WORKSPACE, TOOLCHAIN_SCHEME, fromGuestPath, isToolchainGuestPath, toGuestPath } from '../toolchain/guestPaths';
@@ -17,7 +15,7 @@ const CLANGD_ARGS = ['-sync', '-background-index=false', '-resource-dir=/resourc
 const CLANGD_TMP = 'clangd-tmp';
 
 /**
- * Starts clangd.wasm as a long-lived process on the Worker host (or `wasm-wasi-core` when `vscwclang.experimental.workerHost` is off) and wires it to VS Code's language-client
+ * Starts clangd.wasm as a long-lived process on the Worker host and wires it to VS Code's language-client
  * machinery, so completion/hover/go-to-definition/diagnostics come from clangd instead of nothing.
  *
  * clangd.wasm is a normal toolchain-manifest entry (`llvm-artifacts/dist/manifest.json`, published at the pinned
@@ -40,8 +38,6 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	const level = loggingLevel();
 
 	const toolchain = getToolchainStore(context, log);
-	const onWorkerHost = workerHostEnabled();
-	const wasm = onWorkerHost ? undefined : await loadProcessHost();
 	const [bits, sysrootFiles, flags] = await Promise.all([toolchain.getFile('clangd.wasm'), loadSysrootFiles(toolchain), loadCompileFlags(toolchain)]);
 	const compileFlags = flags.compile['wasm32-wasip1'].map(f => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource'));
 	const module = await WebAssembly.compile(bits);
@@ -50,31 +46,16 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	await vscode.workspace.fs.createDirectory(tmpDir);
 
 	const args = [...CLANGD_ARGS, `-log=${clangdLogLevel(level)}`];
-	let process: PipedProcess;
-	if (onWorkerHost) {
-		const sysroot = await loadSysrootGuestFs(toolchain);
-		process = await createWorkerProcess(context, {
-			name: 'clangd', module, args, env: {},
-			mounts: [
-				{ guestPath: GUEST_WORKSPACE, uri: folder },
-				{ guestPath: '/sysroot', fs: sysroot.sysroot },
-				{ guestPath: '/resource', fs: sysroot.resource },
-				{ guestPath: '/tmp', uri: tmpDir },
-			],
-		});
-	} else {
-		const sysroot = await loadSysroot(wasm!, toolchain);
-		process = await wasm!.createProcess('clangd', module, {
-			args,
-			stdio: { in: { kind: 'pipeIn' }, out: { kind: 'pipeOut' }, err: { kind: 'pipeOut' } },
-			mountPoints: [
-				{ kind: 'workspaceFolder' },
-				{ kind: 'memoryFileSystem', fileSystem: sysroot.sysroot, mountPoint: '/sysroot' },
-				{ kind: 'memoryFileSystem', fileSystem: sysroot.resource, mountPoint: '/resource' },
-				{ kind: 'vscodeFileSystem', uri: tmpDir, mountPoint: '/tmp' },
-			],
-		});
-	}
+	const sysroot = await loadSysrootGuestFs(toolchain);
+	const process = await createWorkerProcess(context, {
+		name: 'clangd', module, args, env: {},
+		mounts: [
+			{ guestPath: GUEST_WORKSPACE, uri: folder },
+			{ guestPath: '/sysroot', fs: sysroot.sysroot },
+			{ guestPath: '/resource', fs: sysroot.resource },
+			{ guestPath: '/tmp', uri: tmpDir },
+		],
+	});
 	const stderrChunks: string[] = [];
 	process.stderr?.onData(d => {
 		const text = new TextDecoder().decode(d);
@@ -153,7 +134,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 		status.dispose();
 		toolchainFs.dispose();
 		void process.terminate();
-		throw new Error(`clangd failed to start: ${e instanceof Error ? e.message : String(e)}. ${stderrTail() || 'It wrote nothing to stderr.'} Did you mean to try 'vscwclang.experimental.workerHost' = false, or to reload the window?`);
+		throw new Error(`clangd failed to start: ${e instanceof Error ? e.message : String(e)}. ${stderrTail() || 'It wrote nothing to stderr.'} Did you mean to reload the window?`);
 	}
 
 	startSweep();

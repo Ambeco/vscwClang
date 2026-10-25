@@ -23,7 +23,7 @@ class OutputPipe {
 }
 
 /**
- * The slice of `wasm-wasi-core`'s `WasmProcess` that clangd and Debug use, over a `GuestProcess` on the Worker host.
+ * The process surface clangd and Debug use (piped stdio, run, terminate), over a `GuestProcess` on the Worker host.
  *
  * `run()` resolves with the exit code: 139 after a trap (the engine's message is appended to stderr) and 130 after
  * `terminate()`. It rejects only if the guest cannot start at all.

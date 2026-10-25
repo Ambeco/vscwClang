@@ -1,7 +1,7 @@
 /**
  * What the DAP controller (`debugController.ts`) needs from a running debuggee, whatever hosts it; vscode-free.
  *
- * Two hosts are planned: the in-process stub over `wasm-wasi-core` stdio (`stubDebuggee.ts`) and, later, the custom
+ * Two hosts are planned: the in-process stub over the program's stdio (`stubDebuggee.ts`) and, later, the custom
  * Worker runner (guard bits in shared memory, `Atomics.wait` pauses). The controller must not know which one it has,
  * so everything the stub cannot do is a flag in `capabilities` that the controller turns into a clear DAP error.
  *

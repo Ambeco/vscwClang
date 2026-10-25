@@ -1,15 +1,14 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
-import { Wasm, type WasmProcess } from '@vscode/wasm-wasi';
-import { loadSysroot, type SysrootFs } from '../../toolchain/sysroot';
+import { createWorkerProcess, type PipedProcess } from '../../host/workerProcess';
+import { loadSysrootGuestFs } from '../../toolchain/sysroot';
 import { getToolchainStore } from '../../toolchain/toolchain';
-import { describeUnsupportedImports } from '../../toolchain/wasiImports';
 import { GUEST_WORKSPACE } from '../../toolchain/guestPaths';
 import { fallbackFlags } from '../../clangd/fallbackFlags';
 import { GUEST_TMP } from '../../toolchain/runEnvironment';
 
 /**
- * Host-integration tests for clangd.wasm: does `wasm-wasi-core`'s bidirectional pipe stdio (not the
+ * Host-integration tests for clangd.wasm: does the Worker host's bidirectional pipe stdio (not the
  * one-shot `run-to-completion` model `build()`/`runProgram()` use) actually carry a real LSP session,
  * and does the chosen no-background-thread indexing mitigation (didOpen/didClose sweep, see
  * documents/remaining_work.md) produce usable cross-file results through this host.
@@ -18,7 +17,7 @@ import { GUEST_TMP } from '../../toolchain/runEnvironment';
  * fork (`build-single-threaded.bat`) and copy `build-single-threaded/bin/clangd.wasm` to
  * `llvm-artifacts/bin/clangd.wasm` (gitignored) before running this suite; it skips otherwise.
  *
- * Needs a workspace folder, --coi and ms-vscode.wasm-wasi-core (see the `test` script in package.json).
+ * Needs a workspace folder and --coi (see the `test` script in package.json).
  */
 suite('vscwClang clangd (in browser)', function () {
 	this.timeout(180_000);
@@ -26,8 +25,8 @@ suite('vscwClang clangd (in browser)', function () {
 	let dir: vscode.Uri;
 	let tmpDir: vscode.Uri;
 	let module: WebAssembly.Module;
-	let sysroot: SysrootFs;
-	let wasm: Wasm;
+	let sysroot: Awaited<ReturnType<typeof loadSysrootGuestFs>>;
+	let context: vscode.ExtensionContext;
 	const log = vscode.window.createOutputChannel('vscwclang-clangd-test');
 	const encoder = new TextEncoder();
 	const GUEST_PROJECT = `${GUEST_WORKSPACE}/clangd-test`;
@@ -52,17 +51,11 @@ suite('vscwClang clangd (in browser)', function () {
 		}
 		const toolchainUrl = `${extension.extensionUri.toString().replace(/\/$/, '')}/llvm-artifacts/dist`;
 		await vscode.workspace.getConfiguration('vscwclang').update('toolchainUrl', toolchainUrl, vscode.ConfigurationTarget.Global);
-		const context = { extensionUri: extension.extensionUri, globalStorageUri: vscode.Uri.joinPath(dir, 'storage') } as vscode.ExtensionContext;
+		context = { extensionUri: extension.extensionUri, globalStorageUri: vscode.Uri.joinPath(dir, 'storage') } as vscode.ExtensionContext;
 		const toolchain = getToolchainStore(context, log);
 		await toolchain.ensure();
-		wasm = await Wasm.load();
-		sysroot = await loadSysroot(wasm, toolchain);
+		sysroot = await loadSysrootGuestFs(toolchain);
 		module = await WebAssembly.compile(bits as Uint8Array<ArrayBuffer>);
-	});
-
-	test('clangd.wasm does not import anything wasm-wasi-core refuses to run', () => {
-		const unsupported = describeUnsupportedImports(WebAssembly.Module.imports(module));
-		assert.strictEqual(unsupported, undefined, unsupported);
 	});
 
 	const NL = String.fromCharCode(13) + String.fromCharCode(10);
@@ -101,7 +94,7 @@ suite('vscwClang clangd (in browser)', function () {
 		private readonly waiters: { check: () => boolean; resolve: () => void }[] = [];
 		readonly exited: Promise<number>;
 
-		constructor(private readonly process: WasmProcess) {
+		constructor(private readonly process: PipedProcess) {
 			process.stdout!.onData(d => { this.buf = concat(this.buf, d); this.drain(); });
 			process.stderr!.onData(d => { this.stderr += new TextDecoder().decode(d); });
 			this.exited = process.run().then(code => { this.exitCode = code; this.closed = true; this.wake(); return code; });
@@ -179,7 +172,7 @@ suite('vscwClang clangd (in browser)', function () {
 			return this.notify('textDocument/didClose', { textDocument: { uri: uri(name) } });
 		}
 
-		/** Asks clangd to stop, falling back to terminate() if it does not exit (mirrors vscode-wasm#303: a hung process never settles `run()` on its own). */
+		/** Asks clangd to stop, falling back to terminate() if it does not exit (a hung process never exits on its own). */
 		async shutdown(): Promise<number> {
 			await this.request('shutdown', null);
 			await this.notify('exit', null);
@@ -190,14 +183,14 @@ suite('vscwClang clangd (in browser)', function () {
 
 	async function start(extraFiles: Record<string, string> = {}): Promise<LspClient> {
 		for (const [name, text] of Object.entries(extraFiles)) { await write(name, text); }
-		const process = await wasm.createProcess('clangd', module, {
+		const process = await createWorkerProcess(context, {
+			name: 'clangd', module, env: {},
 			args: ['-sync', '-background-index=false', '-resource-dir=/resource', '-log=error'],
-			stdio: { in: { kind: 'pipeIn' }, out: { kind: 'pipeOut' }, err: { kind: 'pipeOut' } },
-			mountPoints: [
-				{ kind: 'workspaceFolder' },
-				{ kind: 'memoryFileSystem', fileSystem: sysroot.sysroot, mountPoint: '/sysroot' },
-				{ kind: 'memoryFileSystem', fileSystem: sysroot.resource, mountPoint: '/resource' },
-				{ kind: 'vscodeFileSystem', uri: tmpDir, mountPoint: GUEST_TMP },
+			mounts: [
+				{ guestPath: GUEST_WORKSPACE, uri: vscode.workspace.workspaceFolders![0].uri },
+				{ guestPath: '/sysroot', fs: sysroot.sysroot },
+				{ guestPath: '/resource', fs: sysroot.resource },
+				{ guestPath: GUEST_TMP, uri: tmpDir },
 			],
 		});
 		return new LspClient(process);
@@ -225,7 +218,7 @@ suite('vscwClang clangd (in browser)', function () {
 		await client.shutdown();
 	});
 
-	test('starts, initializes, and shuts down cleanly over wasm-wasi-core pipes', async () => {
+	test('starts, initializes, and shuts down cleanly over Worker host pipes', async () => {
 		const client = await start();
 		await client.init();
 		const exitCode = await client.shutdown();

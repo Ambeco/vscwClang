@@ -6,7 +6,7 @@ import { Worker } from 'worker_threads';
 const ROOT = process.cwd();
 const bytes = (s: string) => new TextEncoder().encode(s);
 
-/** Runs a wasm program in a worker whose stdin blocks on a shared ring buffer, as wasm-wasi-core's does. */
+/** Runs a wasm program in a worker whose stdin blocks on a shared ring buffer. */
 export class Debuggee {
 	private readonly worker: Worker;
 	private readonly ring: Int32Array;
