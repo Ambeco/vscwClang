@@ -23,7 +23,6 @@ Open design questions, none decided. Analyze each answer against the extension h
 - Re-check the CPython/Make list in design.md whenever a layout decision lands: prefer the option that moves toward compatibility, and if one proves infeasible, record the abandonment (and why) in design.md.
 
 ## Milestone 1: compile in the browser
-- Worker host: each tool is a fresh Worker, so consider a warm pool, and measure Build time (the old `wasm-wasi-core` numbers are in `documents/notes.md`).
 - Own Worker-hosted `clang.wasm` driver (spawn hook for `cc1`/`wasm-ld`, `$COLUMNS`) and concurrent per-file compiles; `toolchain.build()` compiles sequentially today.
 - Persistent build cache (V1, not necessarily Milestone 1): keep object files across page reloads and days, so a returning user only recompiles changed sources. Needs durable storage (extension `globalStorageUri`, or IndexedDB if that is not durable on vscode.dev; verify), a cache key per object (source content hash, flags, mode, toolchain version, plus the headers it included, e.g. via `-MD` dependency output), and eviction. Today objects are deleted after each build and `build()` always recompiles everything.
 - Threaded slice (`wasm32-wasip1-threads`) is not selectable yet; `build()` always uses `wasm32-wasip1`.
