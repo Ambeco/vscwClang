@@ -98,6 +98,8 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 	const objectPaths: string[] = [];
 	const clang = (args: string[], extra: ToolExtras) => run('clang.wasm', args, extra);
 	const abortShim = await addShim(objects, clang, flags.compile[SLICE].map(sub), log, ABORT_SHIM);
+	const usesCpp = sources.some(s => !s.guest.endsWith('.c'));
+	const uncaughtShim = usesCpp ? await addShim(objects, clang, flags.compile[SLICE].map(sub), log, UNCAUGHT_SHIM) : undefined;
 	const debugStub = request.mode === 'debug' ? await addShim(objects, clang, flags.compile[SLICE].map(sub), log, DEBUG_STUB) : undefined;
 	for (const [i, source] of sources.entries()) {
 		const base = source.guest.slice(source.guest.lastIndexOf('/') + 1);
@@ -121,7 +123,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 		log.appendLine(`[vscwclang] linking ${output}`);
 		const link = flags.link[SLICE].map(sub);
 		const linkStarted = Date.now();
-		const ld = await run('lld.wasm', ['wasm-ld', link[0], ...objectPaths, ...(abortShim ? [abortShim] : []), ...(debugStub ? [debugStub, '--export=__sanitizer_cov_trace_pc_guard'] : []), ...linkFlags, ...link.slice(1), '-o', output], { objects, outputDir: outputInWorkspace ? undefined : outputDir });
+		const ld = await run('lld.wasm', ['wasm-ld', link[0], ...objectPaths, ...(abortShim ? [abortShim] : []), ...(uncaughtShim ? [uncaughtShim, '--wrap=__main_void'] : []), ...(debugStub ? [debugStub, '--export=__sanitizer_cov_trace_pc_guard'] : []), ...linkFlags, ...link.slice(1), '-o', output], { objects, outputDir: outputInWorkspace ? undefined : outputDir });
 		log.appendLine(`[vscwclang] linked in ${Date.now() - linkStarted} ms (exit ${ld.exitCode})`);
 		diagnostics += ld.stderr;
 		exitCode = ld.exitCode;
@@ -152,8 +154,27 @@ const ABORT_SHIM_SOURCE = [
 	'',
 ].join(NL);
 
-interface Shim { name: string; source: string; flags: string[]; failure: string }
+interface Shim { name: string; source: string; flags: string[]; failure: string; cxx?: boolean }
 
+/**
+ * Source of a wrapper around `main` that sends an uncaught C++ exception to `std::terminate` from inside a `catch`.
+ *
+ * With `-fwasm-exceptions` a `throw` nothing catches leaves `_start` as a raw wasm exception instead of reaching
+ * `std::terminate`. libc++abi's terminate handler, called inside the catch, prints the exception's type and
+ * `what()`, then `abort()` exits 134. Linked with `--wrap=__main_void`: `crt1`'s `_start` calls `__main_void`, which libc
+ * defines for `main(argc, argv)` and the compiler defines in the program's own object for `main()`.
+ * Throws outside `main` (static constructors) still escape; the host reports those without a type.
+ */
+const UNCAUGHT_SHIM_SOURCE = [
+	'#include <exception>',
+	'extern "C" int __real___main_void(void);',
+	'extern "C" int __wrap___main_void(void) {',
+	'	try { return __real___main_void(); } catch (...) { std::terminate(); }',
+	'}',
+	'',
+].join(NL);
+
+const UNCAUGHT_SHIM: Shim = { name: 'uncaught', source: UNCAUGHT_SHIM_SOURCE, flags: [], failure: 'an uncaught C++ exception will end as a crash without its type and message', cxx: true };
 const ABORT_SHIM: Shim = { name: 'abort', source: ABORT_SHIM_SOURCE, flags: [], failure: 'a failed assert will end as a crash instead of exit code 134' };
 // Compiled without sancov (the stub is the hook), at -O2 because it runs on every basic block.
 const DEBUG_STUB: Shim = { name: 'debugstub', source: debugStubSource, flags: ['-O2'], failure: 'breakpoints will not work' };
@@ -164,8 +185,9 @@ const shimObjects = new Map<string, Uint8Array<ArrayBuffer>>();
 async function addShim(objects: MemoryGuestFs, clang: (args: string[], extra: ToolExtras) => Promise<ToolResult>, compileFlags: string[], log: vscode.OutputChannel, shim: Shim): Promise<string | undefined> {
 	let object = shimObjects.get(shim.name);
 	if (!object) {
-		objects.setFile(`vscwclang-${shim.name}.c`, new TextEncoder().encode(shim.source));
-		const cc = await clang(['clang', ...compileFlags, ...shim.flags, '-fno-color-diagnostics', '-fno-caret-diagnostics', '-c', `/obj/vscwclang-${shim.name}.c`, '-o', '-'], { captureStdout: true, objects });
+		const sourceName = `vscwclang-${shim.name}.${shim.cxx ? 'cpp' : 'c'}`;
+		objects.setFile(sourceName, new TextEncoder().encode(shim.source));
+		const cc = await clang([shim.cxx ? 'clang++' : 'clang', ...compileFlags, ...shim.flags, '-fno-color-diagnostics', '-fno-caret-diagnostics', '-c', `/obj/${sourceName}`, '-o', '-'], { captureStdout: true, objects });
 		if (cc.exitCode !== 0) {
 			log.appendLine(`[vscwclang] warning: could not build the ${shim.name} helper (exit ${cc.exitCode}); ${shim.failure}. ${cc.stderr.trim()}`);
 			return undefined;

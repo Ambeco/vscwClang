@@ -22,13 +22,14 @@ suite('vscwClang build (in browser)', function () {
 	const write = (name: string, text: string) => vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, name), encoder.encode(text));
 	const uri = (name: string) => vscode.Uri.joinPath(dir, name);
 
-	async function runWasm(output: vscode.Uri): Promise<{ exitCode: number; stdout: string }> {
+	async function runWasm(output: vscode.Uri): Promise<{ exitCode: number; stdout: string; stderr: string }> {
 		const module = await WebAssembly.compile(await vscode.workspace.fs.readFile(output) as Uint8Array<ArrayBuffer>);
 		const process = await createWorkerProcess(context, { name: 'prog', module, args: [], env: {}, mounts: [] });
-		let stdout = '';
+		let stdout = '', stderr = '';
 		const decoder = new TextDecoder();
 		process.stdout?.onData(d => { stdout += decoder.decode(d, { stream: true }); });
-		return { exitCode: await process.run(), stdout };
+		process.stderr?.onData(d => { stderr += decoder.decode(d, { stream: true }); });
+		return { exitCode: await process.run(), stdout, stderr };
 	}
 
 	suiteSetup(async () => {
@@ -71,7 +72,8 @@ suite('vscwClang build (in browser)', function () {
 		const output = uri('out.wasm');
 		const result = await build({ sources: [uri('main.cpp'), uri('util.cpp')], output, flags: ['-std=c++20', '-Wall'], mode: 'release' }, log, context);
 		assert.strictEqual(result.exitCode, 0, result.diagnostics);
-		assert.deepStrictEqual(await runWasm(output), { exitCode: 0, stdout: 'hello 42\n' });
+		const ran = await runWasm(output);
+		assert.deepStrictEqual([ran.exitCode, ran.stdout], [0, 'hello 42\n']);
 	});
 
 	test('objects stay in memory: no scratch folder is written to the workspace', async () => {
@@ -287,12 +289,33 @@ suite('vscwClang build (in browser)', function () {
 		assert.match(bad.built.diagnostics, /exceptions/i);
 	});
 
-	test('C++ exceptions: an uncaught exception ends as a crash (139) instead of hanging', async function () {
-		const { built } = await buildAndRun('eh-uncaught', { 'eh-uncaught.cpp': '#include <cstdio>\nint main() { std::puts("before"); throw 1; }\n' });
+	for (const [label, body] of [
+		['main()', 'int main() { std::puts("before"); throw 1; }'],
+		['main(argc, argv)', 'int main(int, char**) { std::puts("before"); throw std::runtime_error("boom"); }'],
+		['a std::exception from a nested call', 'void f() { throw std::logic_error("deep"); }\nint main() { std::puts("before"); f(); }'],
+	] as const) {
+		test(`C++ exceptions: an uncaught throw from ${label} prints its type and message, exit 134`, async function () {
+			const name = `eh-uncaught-${label.replace(/\W+/g, '')}`;
+			const { built } = await buildAndRun(name, { [`${name}.cpp`]: `#include <cstdio>
+#include <stdexcept>
+${body}
+` });
+			assert.strictEqual(built.exitCode, 0, built.diagnostics);
+			const outcome = await Promise.race([runWasm(uri(`${name}.wasm`)), new Promise<'hung'>(resolve => setTimeout(() => resolve('hung'), 8000))]);
+			assert.notStrictEqual(outcome, 'hung', 'run() never settled');
+			const ran = outcome as { exitCode: number; stderr: string };
+			assert.strictEqual(ran.exitCode, 134, ran.stderr);
+			assert.match(ran.stderr, label === 'main()' ? /uncaught exception of type int/ : /uncaught exception of type std::(runtime|logic)_error: (boom|deep)/);
+		});
+	}
+
+	test('C++ exceptions: a throw in a static constructor ends as a crash (139) naming where it came from', async function () {
+		const { built } = await buildAndRun('eh-static', { 'eh-static.cpp': '#include <cstdio>\nstruct S { S() { throw 1; } } s;\nint main() { std::puts("never"); }\n' });
 		assert.strictEqual(built.exitCode, 0, built.diagnostics);
-		const outcome = await Promise.race([runWasm(uri('eh-uncaught.wasm')), new Promise<'hung'>(resolve => setTimeout(() => resolve('hung'), 8000))]);
-		assert.notStrictEqual(outcome, 'hung', 'run() never settled');
-		assert.strictEqual((outcome as { exitCode: number }).exitCode, 139);
+		const ran = await runWasm(uri('eh-static.wasm'));
+		assert.strictEqual(ran.exitCode, 139, ran.stderr);
+		assert.match(ran.stderr, /thrown outside main\(\)/);
+		assert.doesNotMatch(ran.stdout, /never/);
 	});
 
 	test('a program that defines its own abort() keeps it', async () => {

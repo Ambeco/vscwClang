@@ -119,7 +119,7 @@ export class GuestWasi {
 			// A stack overflow surfaces as a plain RangeError in V8.
 			if (e instanceof RangeError) { return { kind: 'trap', message: `RangeError: ${e.message}` }; }
 			// An uncaught C++ `throw` escapes _start as a wasm exception, not a RuntimeError.
-			if (typeof WebAssembly.Exception === 'function' && e instanceof WebAssembly.Exception) { return { kind: 'trap', message: 'terminated by uncaught C++ exception' }; }
+			if (typeof WebAssembly.Exception === 'function' && e instanceof WebAssembly.Exception) { return { kind: 'trap', message: 'uncaught C++ exception (type and message unavailable: it was thrown outside main(), e.g. in a static constructor)' }; }
 			throw e;
 		} finally {
 			this.flushAll();
