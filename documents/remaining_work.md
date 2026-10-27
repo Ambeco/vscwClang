@@ -14,6 +14,17 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 - Code intelligence via clangd: completion, IntelliSense, go to definition, go to declaration and similar. Mostly wired (Milestone 3); open: slow first answer with libc++ headers, the `Link has been severed` CWD error, no progress UI, duplicate results with Anycode, go to declaration and other providers not yet checked.
 - Other core cpptools functionality: the settings and features mapped from `C_Cpp.*` (formatting, header insertion, clang-tidy, etc.; see Milestone 3 items) and whatever else the user names; inventory it before calling this journey complete.
 
+**Secondary user journeys (draft 2026-10-27; to extend; "?" = built but never checked end to end):**
+- Open a GitHub repository on vscode.dev/github.dev (`vscode-vfs://github/...`), edit files, build, run and debug. Edits are an uncommitted working copy until committed from Source Control (to a branch, which is VS Code's job, not ours). Built: artifacts go to extension storage for virtual folders. Open: DWARF source paths (`/workspace/...`) mapping back to `vscode-vfs` URIs for breakpoints and stack frames?; `findFiles` and clangd indexing on a large repo?; a repo with no `compile_commands.json` (sources come from `sourceGlobs`); includes that live outside the folder.
+- Open a project in a folder that Dropbox syncs, on vscode.dev via the browser's local-folder access, edit, build, run, debug. Built: the permission-prompt ordering note in `toolchain.build`; artifacts go to `.vscwclang/<mode>/` in the folder, which Dropbox will sync (`.gitignore` advice is in the README; consider a Dropbox-ignore hint). Open: whether the user means this or a Dropbox-backed file-system provider (none known); read-write performance on a large folder?; the folder permission expiring mid-session.
+- Reopen a project later: toolchain already downloaded (extension storage), build outputs and any object cache still valid, breakpoints and launch settings restored.
+- Work offline after the first toolchain download.
+- Use a project's own tests: build a test binary, run it, see failures; a Testing-view integration is not planned (cpptools has none).
+- Switch between debug and release builds and between several programs in one folder (`compile_commands.json` target picker exists).
+- Multi-root workspaces: only the first folder is used today; decide whether that is acceptable.
+- Open a single file with no folder: today an error ("open a workspace folder first"); decide whether a scratch mode is wanted.
+- Share a program: the built `.wasm` runs elsewhere; no feature planned.
+
 ## Milestone 0: decisions to make before writing host code
 - **Cross-origin isolation / SharedArrayBuffer:** vscode.dev is isolated (verified 2026-10-03). Unverified: that the web *extension host worker* is isolated on real vscode.dev, `@vscode/test-web` without `--coi`, and self-hosted VS Code web. COEP means every cross-origin resource needs CORS/CORP.
 - **Distribution fallback (only if CDN download stops working): tooling extensions.** Open checks: a core extension programmatically installing a tooling extension on vscode.dev (`workbench.extensions.installExtension`), and the Marketplace per-vsix size limit vs. zipped `clang.wasm`/`lld.wasm`/`lldb.wasm` (gzipped clang is 24 MB; a search snippet claims 20 MB, unconfirmed; vsmarketplace#1541 says undocumented). Chunking (`scripts/split-wasm.mjs`, `chunkedFile.ts`) is verified.
