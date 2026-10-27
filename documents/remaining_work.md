@@ -140,3 +140,10 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Remaining gaps:
 
 - Re-run the live pass from `documents/live_testing.md` against the pinned `v24.0.2`, and update README Limitations "No debugger yet" once Debug is released.
 - Ship a prebuilt libc++ PCH in the toolchain (built by the pinned `clang.wasm`, one per `-std` and exception mode, e.g. c++17/20, keyed in the manifest) and pass `-include-pch` when the flags match; measured 2.5 -> 1.06 s on a header-only file. Open: which headers to include, behaviour when the user's flags differ, whether a user `#include` order or `-D` change needs a fallback, and a modules route (needs a wasi-libc module map in the sysroot).
+
+## Found by the compatibility survey (2026-10-27), details in `documents/compat_survey.md`
+- `compile_commands.json` target picker: a CMake test target (fmt `format-test`) selects only its own sources, not the library/gtest targets it links, so it cannot link; "all targets" collides on `main`. Needs link-dependency awareness (CMake File API or `link.txt`).
+- Default wasm stack is too small for Eigen/json tests (trap `memory access out of bounds`, no stack-overflow hint). Raise the default or explain the trap; users can pass `-Wl,-z,stack-size=N`.
+- Consider default-on `_WASI_EMULATED_SIGNAL`/`-lwasi-emulated-signal` and `-mllvm -wasm-enable-sjlj`/`-lsetjmp` for C sources (Lua, SQLite, Catch2, gtest, doctest all need them), or a "porting hints" quick-fix that suggests them from the diagnostic.
+- `std::thread`/`std::mutex` are absent until the threads milestone; they block Catch2 `Sleep` tests and fmt `std.h` users (compile-test, std-test, xchar-test, format-test).
+- Re-run `scripts/compat-survey.mjs` after the object cache/PCH/threads land to compare with the baselines; investigate fmt `chrono-test` (weekday, year_month_day fail) and the Eigen `PART_ALL` clang OOM (2 GiB cap).
