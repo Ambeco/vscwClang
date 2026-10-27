@@ -28,6 +28,10 @@ const flags = JSON.parse(readFileSync(join(artifacts, 'compile-flags.json'), 'ut
 const sub = f => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource');
 const COMPILE = flags.compile['wasm32-wasip1'].map(sub);
 const LINK = flags.link['wasm32-wasip1'].map(sub);
+// Mirror of DEFAULT_*_FLAGS in src/web/toolchain/toolchain.ts (that file imports vscode, so it cannot be loaded here).
+const DEFAULT_COMPILE = ['-D_WASI_EMULATED_SIGNAL', '-D_WASI_EMULATED_GETPID', '-D_WASI_EMULATED_PROCESS_CLOCKS'];
+const DEFAULT_C = ['-mllvm', '-wasm-enable-sjlj'];
+const DEFAULT_LINK = ['-lwasi-emulated-signal', '-lwasi-emulated-getpid', '-lwasi-emulated-process-clocks', '-lsetjmp', '-z', 'stack-size=8388608'];
 const { checkUserFlags } = await import('../src/web/toolchain/flagPolicy.ts');
 
 const argv = process.argv.slice(2);
@@ -91,7 +95,7 @@ async function survey(project, projectsDir) {
 			const u = units[i];
 			const driver = u.file.endsWith('.c') ? 'clang' : 'clang++';
 			const objPath = join(objDir, `${i}.o`);
-			const r = await runTool('clang.wasm', [driver, ...COMPILE, '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics', ...project.flags, ...(u.flags ?? []), '-c', u.abs ?? `/workspace/${u.file}`, '-o', '-'], { preopens });
+			const r = await runTool('clang.wasm', [driver, ...COMPILE, '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics', ...DEFAULT_COMPILE, ...(driver === 'clang' ? DEFAULT_C : []), ...project.flags, ...(u.flags ?? []), '-c', u.abs ?? `/workspace/${u.file}`, '-o', '-'], { preopens });
 			if (r.code === 0) { writeFileSync(objPath, r.stdout); objects[i] = `/obj/${i}.o`; }
 			const rec = { file: u.file, ok: r.code === 0, ms: Math.round(r.ms), exit: r.code, timedOut: r.timedOut, error: r.code === 0 ? '' : firstError(r.stderr + (r.trap ?? '')), warnings: (r.stderr.match(/warning:/g) ?? []).length, stderr: r.code === 0 ? '' : tail(r.stderr) };
 			report.units.push(rec);
@@ -109,7 +113,7 @@ async function survey(project, projectsDir) {
 		const selected = link.select ? objects.map((o, i) => o && link.select(units[i].file) ? o : undefined).filter(Boolean) : okObjects;
 		const outDir = join(objDir, 'out'); mkdirSync(outDir, { recursive: true });
 		const lpre = { ...preopens, '/obj': objDir, '/out': outDir };
-		const r = await runTool('lld.wasm', ['wasm-ld', LINK[0], ...selected, ...(link.extraObjects ?? []), ...(project.linkFlags ?? []), ...LINK.slice(1), '-o', `/out/${link.output}`], { preopens: lpre });
+		const r = await runTool('lld.wasm', ['wasm-ld', LINK[0], ...selected, ...(link.extraObjects ?? []), ...DEFAULT_LINK, ...(project.linkFlags ?? []), ...LINK.slice(1), '-o', `/out/${link.output}`], { preopens: lpre });
 		const size = r.code === 0 && existsSync(join(outDir, link.output)) ? statSync(join(outDir, link.output)).size : 0;
 		report.link.push({ name: link.name, ok: r.code === 0, ms: Math.round(r.ms), size, objects: selected.length, error: r.code === 0 ? '' : firstError(r.stderr), undefinedSymbols: undef(r.stderr), stderr: r.code === 0 ? '' : tail(r.stderr, 3000) });
 		console.log(`  link ${link.name}: ${r.code === 0 ? 'ok' : 'FAIL'} ${Math.round(r.ms)} ms, ${size} bytes${r.code === 0 ? '' : '  -> ' + (undef(r.stderr).length ? 'undefined: ' + undef(r.stderr).join(', ') : firstError(r.stderr))}`);

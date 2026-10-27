@@ -108,7 +108,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 		log.appendLine(`[vscwclang] compiling ${source.guest}`);
 		const started = Date.now();
 		const cc = await run('clang.wasm', [driver, ...flags.compile[SLICE].map(sub), '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics',
-			...modeFlags, ...(request.languageFlags?.[driver === 'clang' ? 'c' : 'cpp'] ?? []), ...userFlags.compile, ...ownFlags.get(source.guest)!.compile, '-c', source.guest, '-o', '-'], { captureStdout: true });
+			...DEFAULT_COMPILE_FLAGS, ...(driver === 'clang' ? DEFAULT_C_COMPILE_FLAGS : []), ...modeFlags, ...(request.languageFlags?.[driver === 'clang' ? 'c' : 'cpp'] ?? []), ...userFlags.compile, ...ownFlags.get(source.guest)!.compile, '-c', source.guest, '-o', '-'], { captureStdout: true });
 		log.appendLine(`[vscwclang] compiled ${source.guest} in ${Date.now() - started} ms (exit ${cc.exitCode})`);
 		diagnostics += cc.stderr;
 		if (cc.stderr !== '') { request.onDiagnostics?.(parseDiagnostics(diagnostics)); }
@@ -123,13 +123,24 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 		log.appendLine(`[vscwclang] linking ${output}`);
 		const link = flags.link[SLICE].map(sub);
 		const linkStarted = Date.now();
-		const ld = await run('lld.wasm', ['wasm-ld', link[0], ...objectPaths, ...(abortShim ? [abortShim] : []), ...(uncaughtShim ? [uncaughtShim, '--wrap=__main_void'] : []), ...(debugStub ? [debugStub, '--export=__sanitizer_cov_trace_pc_guard'] : []), ...linkFlags, ...link.slice(1), '-o', output], { objects, outputDir: outputInWorkspace ? undefined : outputDir });
+		const ld = await run('lld.wasm', ['wasm-ld', link[0], ...objectPaths, ...(abortShim ? [abortShim] : []), ...(uncaughtShim ? [uncaughtShim, '--wrap=__main_void'] : []), ...(debugStub ? [debugStub, '--export=__sanitizer_cov_trace_pc_guard'] : []), ...DEFAULT_LINK_FLAGS, ...linkFlags, ...link.slice(1), '-o', output], { objects, outputDir: outputInWorkspace ? undefined : outputDir });
 		log.appendLine(`[vscwclang] linked in ${Date.now() - linkStarted} ms (exit ${ld.exitCode})`);
 		diagnostics += ld.stderr;
 		exitCode = ld.exitCode;
 	}
 	return { exitCode, diagnostics, parsed: withFailureFallback(parseDiagnostics(diagnostics), exitCode, diagnostics) };
 }
+
+/**
+ * Flags every build gets before the user's, so porting common C/C++ needs no flags (user flags still win, being later).
+ *
+ * Signal, getpid and process-clock emulation headers are opt-in in wasi-libc (mmap is left out on purpose: its emulation
+ * silently drops writes). setjmp/longjmp needs the sjlj lowering, applied to C only (tested with C; C++ keeps wasm EH).
+ * The stack is 8 MiB because the default overflows in template-heavy code and reports only an out-of-bounds trap.
+ */
+export const DEFAULT_COMPILE_FLAGS = ['-D_WASI_EMULATED_SIGNAL', '-D_WASI_EMULATED_GETPID', '-D_WASI_EMULATED_PROCESS_CLOCKS'];
+export const DEFAULT_C_COMPILE_FLAGS = ['-mllvm', '-wasm-enable-sjlj'];
+export const DEFAULT_LINK_FLAGS = ['-lwasi-emulated-signal', '-lwasi-emulated-getpid', '-lwasi-emulated-process-clocks', '-lsetjmp', '-z', 'stack-size=8388608'];
 
 const NL = String.fromCharCode(10);
 

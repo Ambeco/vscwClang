@@ -24,12 +24,12 @@ Whole-suite builds: json = 118 TUs, ~38 min sequential-equivalent; Catch2 ~5 min
 Blocker buckets: (a) works with flags the extension already accepts; (b) needs a project source patch or stub; (c) needs an extension/toolchain change; (d) fundamental to wasm/web.
 
 ### (a) Flags/defines only (all pass `checkUserFlags`)
-- `-D_WASI_EMULATED_SIGNAL` + `-lwasi-emulated-signal` for anything including `<signal.h>` (Lua, SQLite shell, Catch2, fmt/gtest, doctest). Also `_WASI_EMULATED_{MMAN,GETPID,PROCESS_CLOCKS}` for SQLite/Lua. Without them: `error: "wasm lacks signal support..."`. Suggest: a "wasm porting hints" doc/quick-fix, or enabling these emulations by default (they are small and harmless).
-- Lua: `-mllvm -wasm-enable-sjlj` + `-lsetjmp` makes `setjmp/longjmp` (error handling) work. Without: `undefined symbol: longjmp`. Worth defaulting for C sources (effort: small, toolchain flag + sysroot already has `libsetjmp.a`).
+- `-D_WASI_EMULATED_SIGNAL` + `-lwasi-emulated-signal` for anything including `<signal.h>` (Lua, SQLite shell, Catch2, fmt/gtest, doctest). Also `_WASI_EMULATED_{MMAN,GETPID,PROCESS_CLOCKS}` for SQLite/Lua. Without them: `error: "wasm lacks signal support..."`. Now on by default (see `DEFAULT_*_FLAGS` in `toolchain.ts`; `scripts/compat-survey.mjs` mirrors them).
+- Lua: `-mllvm -wasm-enable-sjlj` + `-lsetjmp` makes `setjmp/longjmp` (error handling) work. Without: `undefined symbol: longjmp`. Now on by default for C sources (C++ untested, left on wasm EH).
 - SQLite: `-DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_NOHAVE_SYSTEM`.
 - Catch2: `-DCATCH_CONFIG_NO_POSIX_SIGNALS` (else `stack_t` undeclared); needs the CMake-generated `catch_user_config.hpp` (we copied one; a user needs a CMake step or a hand-written file).
 - fmt: `-DGTEST_HAS_PTHREAD=0`, `-DFMT_HEADER_ONLY` for header-only tests.
-- Eigen: link `-Wl,-z,stack-size=8388608`. The default wasm stack is too small: `cholesky` and `sparse_product` trap with `memory access out of bounds` and json `class_parser` the same, with no hint of "stack overflow". (c) candidate: raise the default stack (1 MiB+) or detect and say so in the trap message.
+- Eigen: link `-Wl,-z,stack-size=8388608`. The default wasm stack is too small: `cholesky` and `sparse_product` trap with `memory access out of bounds` and json `class_parser` the same, with no hint of "stack overflow". Now 8 MiB by default (user `-Wl,-z,stack-size=N` still wins).
 
 ### (b) Source patch or stub
 - Lua: `tmpnam`/`L_tmpnam` missing (override via `-Dlua_tmpnam(b,e)=(e=1)`), `tmpfile` and `system` are link errors (stub file, ~2 lines). Effort: minutes.

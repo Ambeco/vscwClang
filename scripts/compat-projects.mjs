@@ -18,8 +18,7 @@ const list = (root, dir, re, skip) => walk(root, dir, re, skip).map(file => ({ f
 export const PROJECTS = {
 	lua: {
 		dir: 'lua',
-		flags: ['-D_WASI_EMULATED_SIGNAL', '-D_WASI_EMULATED_PROCESS_CLOCKS', '-DLUA_TMPNAMBUFSIZE=32', '-Dlua_tmpnam(b,e)=(e=1)', '-mllvm', '-wasm-enable-sjlj'],
-		linkFlags: ['-lsetjmp', '-lwasi-emulated-signal', '-lwasi-emulated-process-clocks'],
+		flags: ['-DLUA_TMPNAMBUFSIZE=32', '-Dlua_tmpnam(b,e)=(e=1)'],
 		units: root => list(root, '', /\.c$/, p => p.includes('/') || ['lua.c', 'luac.c', 'ltests.c', 'onelua.c'].includes(p)).concat([{ file: 'lua.c' }]),
 		stubs: { 'vscw_stubs.c': ['#include <stdio.h>', '#include <stdlib.h>', 'FILE *tmpfile(void) { return NULL; }', 'int system(const char *c) { return c ? -1 : 0; }', ''].join('\n') },
 		links: [{ name: 'lua', output: 'lua.wasm' }],

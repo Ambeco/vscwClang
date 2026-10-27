@@ -326,6 +326,19 @@ ${body}
 		assert.strictEqual((await runWasm(uri('ownabort.wasm'))).exitCode, 7);
 	});
 
+	test('default flags: signal emulation, C setjmp/longjmp and an 8 MiB stack need no user flags', async function () {
+		this.timeout(60_000);
+		const nl = String.fromCharCode(10);
+		await write('defaults.c', ['#include <setjmp.h>', '#include <signal.h>', '#include <stdio.h>', 'static jmp_buf env;',
+			'static int depth(int n) { volatile char pad[1024]; pad[0] = (char)n; return n == 0 ? 0 : pad[0] - pad[0] + 1 + depth(n - 1); }',
+			'int main() { signal(SIGINT, SIG_IGN); if (setjmp(env) == 0) { longjmp(env, 1); } printf("%d", depth(4000)); return 0; }', ''].join(nl));
+		const built = await build({ sources: [uri('defaults.c')], output: uri('defaults.wasm'), flags: [], mode: 'release' }, log, context);
+		assert.strictEqual(built.exitCode, 0, built.diagnostics);
+		const ran = await runWasm(uri('defaults.wasm'));
+		assert.strictEqual(ran.exitCode, 0);
+		assert.strictEqual(ran.stdout, '4000');
+	});
+
 	test('link flags reach wasm-ld, compile flags reach clang', async function () {
 		this.timeout(30_000);
 		await write('flags.cpp', FLAGS_SOURCE);

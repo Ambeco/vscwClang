@@ -24,6 +24,8 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 - Multi-root workspaces: only the first folder is used today; decide whether that is acceptable.
 - Open a single file with no folder: today an error ("open a workspace folder first"); decide whether a scratch mode is wanted.
 - Share a program: the built `.wasm` runs elsewhere; no feature planned.
+- Build a project that uses Make (pseudo-Make: interpret the common subset of GNU make), including multi-target projects where a test executable links a library built by another target (the survey's fmt `format-test` case; the CMake target picker cannot do this today). Near-term plan item 5.
+- Run Python scripts (partial CPython/WASI support), e.g. as build and test helpers for projects whose tests are driven by Python. Near-term plan item 6; see design.md "Three environments" for the filesystem and process gaps it must close.
 
 ## Milestone 0: decisions to make before writing host code
 - **Cross-origin isolation / SharedArrayBuffer:** vscode.dev is isolated (verified 2026-10-03). Unverified: that the web *extension host worker* is isolated on real vscode.dev, `@vscode/test-web` without `--coi`, and self-hosted VS Code web. COEP means every cross-origin resource needs CORS/CORP.
@@ -142,8 +144,6 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Remaining gaps:
 - Ship a prebuilt libc++ PCH in the toolchain (built by the pinned `clang.wasm`, one per `-std` and exception mode, e.g. c++17/20, keyed in the manifest) and pass `-include-pch` when the flags match; measured 2.5 -> 1.06 s on a header-only file. Open: which headers to include, behaviour when the user's flags differ, whether a user `#include` order or `-D` change needs a fallback, and a modules route (needs a wasi-libc module map in the sysroot).
 
 ## Found by the compatibility survey (2026-10-27), details in `documents/compat_survey.md`
-- `compile_commands.json` target picker: a CMake test target (fmt `format-test`) selects only its own sources, not the library/gtest targets it links, so it cannot link; "all targets" collides on `main`. Needs link-dependency awareness (CMake File API or `link.txt`).
-- Default wasm stack is too small for Eigen/json tests (trap `memory access out of bounds`, no stack-overflow hint). Raise the default or explain the trap; users can pass `-Wl,-z,stack-size=N`.
-- Consider default-on `_WASI_EMULATED_SIGNAL`/`-lwasi-emulated-signal` and `-mllvm -wasm-enable-sjlj`/`-lsetjmp` for C sources (Lua, SQLite, Catch2, gtest, doctest all need them), or a "porting hints" quick-fix that suggests them from the diagnostic.
+- `compile_commands.json` target picker: a CMake test target (fmt `format-test`) selects only its own sources, not the library/gtest targets it links, so it cannot link. Deferred (decided 2026-10-27): the Make and Python secondary journeys are expected to cover building such projects; revisit only if they do not.
 - `std::thread`/`std::mutex` are absent until the threads milestone; they block Catch2 `Sleep` tests and fmt `std.h` users (compile-test, std-test, xchar-test, format-test).
 - Re-run `scripts/compat-survey.mjs` after the object cache/PCH/threads land to compare with the baselines; investigate fmt `chrono-test` (weekday, year_month_day fail) and the Eigen `PART_ALL` clang OOM (2 GiB cap).
