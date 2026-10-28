@@ -111,8 +111,9 @@ suiteIfReactor('ReactorHost.variables (real lldb-wasm-reactor.wasm, locals.c)', 
 		host.createTarget(bytes);
 	});
 
-	/** Runs the program and calls `inspect` at the `which`th hook (0-based, negative from the end) of the named function. */
-	function stopIn<T>(fn: string, which: number, inspect: () => T): T {
+	/** Runs the program and calls `inspect` at the `which`th hook (0-based, negative from the end) of the named function.
+	 * `frameBaseShift` moves the named function's frame-base local, to emulate a host that takes it from DWARF. */
+	function stopIn<T>(fn: string, which: number, inspect: () => T, frameBaseShift = 0): T {
 		const funcIndex = [...scan.module.names].find(([, n]) => n === fn)?.[0];
 		assert.ok(funcIndex !== undefined, `name section has ${fn}`);
 		const guards = [...scan.guardSites].filter(([, s]) => s.funcIndex === funcIndex).map(([g]) => g).sort((a, b) => a - b);
@@ -126,7 +127,7 @@ suiteIfReactor('ReactorHost.variables (real lldb-wasm-reactor.wasm, locals.c)', 
 			if (guard !== target || result) { return; }
 			const frames = mergeFrames(captureWasmFrames(scan.module.codeStart), shadow)
 				.filter(f => f.sp !== null && scan.frameBaseLocals.has(f.funcIndex))
-				.map(f => ({ pc: f.pc, sp: f.sp!, frameBaseLocal: scan.frameBaseLocals.get(f.funcIndex)! }));
+				.map(f => ({ pc: f.pc, sp: f.sp!, frameBaseLocal: scan.frameBaseLocals.get(f.funcIndex)! + (f.funcIndex === funcIndex ? frameBaseShift : 0) }));
 			host.setMemory({ read: (addr, size) => new Uint8Array((instance.exports.memory as WebAssembly.Memory).buffer).slice(addr, addr + size) });
 			host.setStop(frames);
 			result = { value: inspect() };
@@ -190,5 +191,33 @@ suiteIfReactor('ReactorHost.variables (real lldb-wasm-reactor.wasm, locals.c)', 
 		assert.match(pv?.value ?? '', /not available: stored in a WebAssembly local/);
 		assert.throws(() => stopIn('mixed', -1, () => host.variables(0, '99')), /no value|none at index/);
 		assert.throws(() => stopIn('mixed', -1, () => host.variables(0, 'x/y')), /not a variable path/);
+	});
+
+	test('a function with no branches shows its parameter at its last line guard', () => {
+		assert.deepStrictEqual(stopIn('leaf', -1, () => host.variables(0).map(v => `${v.name}=${v.value}`)), ['q=1']);
+	});
+
+	// scanProgram picks local 1 for vla(), DWARF names local 2; the shift stands in for a host that reads DWARF.
+	test('a VLA function lists its ordinary variables when the frame base comes from DWARF', () => {
+		const vars = stopIn('vla', -1, () => host.variables(0), 1);
+		const byName = new Map(vars.map(v => [v.name, v.value]));
+		assert.strictEqual(byName.get('n'), '4');
+		assert.strictEqual(byName.get('sum'), '0');
+	});
+
+	test('the frame-base local chosen by scanProgram for a VLA function is wrong today', () => {
+		const n = stopIn('vla', -1, () => host.variables(0).find(v => v.name === 'n')?.value);
+		assert.match(n ?? '', /not available/, 'if this fails the scan was fixed: drop the frameBaseShift in the test above');
+	});
+
+	// Both need a host that reads wasm locals (or a compiler spill of the pointer into the shadow stack); no such host exists yet.
+	test.skip('a struct passed by value is listed with its members (pv in mixed)', () => {
+		const pv = stopIn('mixed', -1, () => host.variables(0).find(v => v.name === 'pv'));
+		assert.ok(pv?.hasChildren);
+	});
+
+	test.skip('a VLA is listed with its elements (buf in vla)', () => {
+		const buf = stopIn('vla', -1, () => host.variables(0).find(v => v.name === 'buf'));
+		assert.ok(buf?.hasChildren);
 	});
 });
