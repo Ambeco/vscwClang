@@ -189,12 +189,14 @@ export function scanProgram(bytes: Uint8Array, hookImport = HOOK_IMPORT): ScanRe
 		const nLocalGroups = r.u32();
 		for (let i = 0; i < nLocalGroups; i++) { r.skipLeb(); r.skip(1); }
 		const recent: { op: number; imm: number | undefined }[] = [];
+		let prologueLocal: number | undefined;
+		let sincePrologue = 0;
 		while (r.pos < body.end) {
 			const at = r.pos;
 			const op = r.u8();
 			let imm: number | undefined;
 			let local: number | undefined;
-			if (op === 0x10) { imm = r.u32(); }
+			if (op === 0x10 || op === 0x20) { imm = r.u32(); }
 			else if (op === 0x21 || op === 0x22) { local = r.u32(); }
 			else { imm = readImmediates(r, op); }
 			if (op === 0x10 && imm === hookIndex) {
@@ -209,7 +211,15 @@ export function scanProgram(bytes: Uint8Array, hookImport = HOOK_IMPORT): ScanRe
 			if (local !== undefined && !frameBaseLocals.has(funcIndex)
 				&& last(recent, 1)?.op === 0x6b && last(recent, 2)?.op === 0x41 && last(recent, 3)?.op === 0x23) {
 				frameBaseLocals.set(funcIndex, local);
+				prologueLocal = local;
+				sincePrologue = 0;
 			}
+			// A VLA or alloca moves the prologue's local, so clang pins the frame base in a copy: `local.get A; local.set B`.
+			else if (local !== undefined && op === 0x21 && prologueLocal !== undefined && sincePrologue === 2
+				&& last(recent, 1)?.op === 0x20 && last(recent, 1)?.imm === prologueLocal) {
+				frameBaseLocals.set(funcIndex, local);
+			}
+			sincePrologue++;
 			recent.push({ op, imm });
 			if (recent.length > 3) { recent.shift(); }
 		}
@@ -223,7 +233,13 @@ export interface ShadowEntry { funcIndex: number; pc: number; sp: number }
 export class ShadowStack {
 	readonly entries: ShadowEntry[] = [];
 
-	constructor(private readonly guardSites: Map<number, GuardSite>) {}
+	private readonly entryPcs = new Map<number, number>();
+
+	constructor(private readonly guardSites: Map<number, GuardSite>) {
+		for (const { funcIndex, pc } of guardSites.values()) {
+			if (pc < (this.entryPcs.get(funcIndex) ?? Infinity)) { this.entryPcs.set(funcIndex, pc); }
+		}
+	}
 
 	/** Pops frames that have returned, given the live `__stack_pointer`. */
 	sync(sp: number): void {
@@ -237,6 +253,8 @@ export class ShadowStack {
 		const top = this.entries[this.entries.length - 1];
 		// A sibling call at the same sp (a callee returned, the caller called another with no hook between) takes the frame over.
 		if (top && top.sp === sp) { top.pc = site.pc; top.funcIndex = site.funcIndex; }
+		// A VLA or alloca lowers `__stack_pointer` inside the frame; only an entry guard starts a new frame of the same function.
+		else if (top && top.funcIndex === site.funcIndex && sp < top.sp && site.pc !== this.entryPcs.get(site.funcIndex)) { top.pc = site.pc; }
 		else { this.entries.push({ funcIndex: site.funcIndex, pc: site.pc, sp }); }
 		return this.entries[this.entries.length - 1];
 	}

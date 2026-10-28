@@ -111,9 +111,8 @@ suiteIfReactor('ReactorHost.variables (real lldb-wasm-reactor.wasm, locals.c)', 
 		host.createTarget(bytes);
 	});
 
-	/** Runs the program and calls `inspect` at the `which`th hook (0-based, negative from the end) of the named function.
-	 * `frameBaseShift` moves the named function's frame-base local, to emulate a host that takes it from DWARF. */
-	function stopIn<T>(fn: string, which: number, inspect: () => T, frameBaseShift = 0): T {
+	/** Runs the program and calls `inspect` at the `which`th hook (0-based, negative from the end) of the named function. */
+	function stopIn<T>(fn: string, which: number, inspect: () => T): T {
 		const funcIndex = [...scan.module.names].find(([, n]) => n === fn)?.[0];
 		assert.ok(funcIndex !== undefined, `name section has ${fn}`);
 		const guards = [...scan.guardSites].filter(([, s]) => s.funcIndex === funcIndex).map(([g]) => g).sort((a, b) => a - b);
@@ -127,7 +126,7 @@ suiteIfReactor('ReactorHost.variables (real lldb-wasm-reactor.wasm, locals.c)', 
 			if (guard !== target || result) { return; }
 			const frames = mergeFrames(captureWasmFrames(scan.module.codeStart), shadow)
 				.filter(f => f.sp !== null && scan.frameBaseLocals.has(f.funcIndex))
-				.map(f => ({ pc: f.pc, sp: f.sp!, frameBaseLocal: scan.frameBaseLocals.get(f.funcIndex)! + (f.funcIndex === funcIndex ? frameBaseShift : 0) }));
+				.map(f => ({ pc: f.pc, sp: f.sp!, frameBaseLocal: scan.frameBaseLocals.get(f.funcIndex)! }));
 			host.setMemory({ read: (addr, size) => new Uint8Array((instance.exports.memory as WebAssembly.Memory).buffer).slice(addr, addr + size) });
 			host.setStop(frames);
 			result = { value: inspect() };
@@ -197,17 +196,15 @@ suiteIfReactor('ReactorHost.variables (real lldb-wasm-reactor.wasm, locals.c)', 
 		assert.deepStrictEqual(stopIn('leaf', -1, () => host.variables(0).map(v => `${v.name}=${v.value}`)), ['q=1']);
 	});
 
-	// scanProgram picks local 1 for vla(), DWARF names local 2; the shift stands in for a host that reads DWARF.
-	test('a VLA function lists its ordinary variables when the frame base comes from DWARF', () => {
-		const vars = stopIn('vla', -1, () => host.variables(0), 1);
-		const byName = new Map(vars.map(v => [v.name, v.value]));
-		assert.strictEqual(byName.get('n'), '4');
-		assert.strictEqual(byName.get('sum'), '0');
-	});
-
-	test('the frame-base local chosen by scanProgram for a VLA function is wrong today', () => {
-		const n = stopIn('vla', -1, () => host.variables(0).find(v => v.name === 'n')?.value);
-		assert.match(n ?? '', /not available/, 'if this fails the scan was fixed: drop the frameBaseShift in the test above');
+	test('a VLA function lists n and sum inside its loop, after the stack pointer moved', () => {
+		for (const which of [1, 2, 3]) {
+			const vars = stopIn('vla', which, () => host.variables(0));
+			const byName = new Map(vars.map(v => [v.name, v.value]));
+			assert.strictEqual(byName.get('n'), '4', `hook ${which}`);
+			assert.ok(byName.has('i'), `hook ${which} is in the loop`);
+		}
+		const frames = stopIn('vla', 2, () => host.backtrace());
+		assert.strictEqual(frames.length, 2, `no phantom frames: ${frames.join(' | ')}`);
 	});
 
 	// Both need a host that reads wasm locals (or a compiler spill of the pointer into the shadow stack); no such host exists yet.
