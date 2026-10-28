@@ -15,6 +15,17 @@ export interface StopFrame {
 	sp: number;
 }
 
+/** One row of the Variables pane. */
+export interface VariableInfo {
+	/** Opaque; pass to `ReactorHost.variables` to list this value's children. Valid only for the stop it came from. */
+	path: string;
+	name: string;
+	type: string;
+	/** The data formatter's summary, else the value, else why there is none. Empty for an aggregate with no summary. */
+	value: string;
+	hasChildren: boolean;
+}
+
 const GUEST_DIR = '/work';
 const TARGET_FILE = 'target.wasm';
 const OUT_SIZE = 4096;
@@ -33,6 +44,7 @@ interface ReactorExports {
 	wasm_dbg_resolve_pc(pc: bigint, out: number, size: number): number;
 	wasm_dbg_get_backtrace(out: number, size: number): number;
 	wasm_dbg_format_value(frame: number, expr: number, out: number, size: number): number;
+	wasm_dbg_get_variables(frame: number, path: number, out: number, size: number): number;
 }
 
 /**
@@ -116,6 +128,18 @@ export class ReactorHost {
 		return this.withCString(expr, e => this.outBuffer(out => this.exp.wasm_dbg_format_value(frame, e, out, OUT_SIZE), `evaluate "${expr}" in frame ${frame}`));
 	}
 
+	/** A frame's variables (empty `path`), or the children of a variable from an earlier call. Innermost frame is 0. */
+	variables(frame: number, path = ''): VariableInfo[] {
+		if (typeof this.exp.wasm_dbg_get_variables !== 'function') {
+			throw new Error('vscwClang: the toolchain\'s lldb-wasm-reactor.wasm predates variable listing (no wasm_dbg_get_variables export); did you mean to update to a newer toolchain, or set vscwclang.toolchainUrl to one built from the current llvm-project fork?');
+		}
+		const text = this.withCString(path, p => this.outBufferGrowing((out, size) => this.exp.wasm_dbg_get_variables(frame, p, out, size), `list the variables of frame ${frame}${path ? ` under ${path}` : ''}`));
+		return text.split('\n').filter(line => line).map(line => {
+			const [vpath, name, type, value, children] = line.split('\t');
+			return { path: vpath, name, type, value, hasChildren: children === '1' };
+		});
+	}
+
 	private hostRead(addr: number, buf: number, size: number): number {
 		const bytes = this.memory.read(addr, size);
 		new Uint8Array(this.exp.memory.buffer).set(bytes, buf);
@@ -148,6 +172,22 @@ export class ReactorHost {
 			if (len < 0) { throw new Error(`vscwClang: lldb could not ${what}: ${this.lastError()}`); }
 			return this.readCString(out, Math.min(len, OUT_SIZE - 1));
 		} finally { this.exp.wasm_dbg_free(out); }
+	}
+
+	/** Like `outBuffer`, but a result longer than `OUT_SIZE` is fetched again with a buffer that fits. */
+	private outBufferGrowing(call: (out: number, size: number) => number, what: string): string {
+		let size = OUT_SIZE;
+		for (let attempt = 0; attempt < 2; attempt++) {
+			const out = this.exp.wasm_dbg_alloc(size);
+			if (!out) { throw new Error(`vscwClang: lldb-wasm-reactor is out of memory (wasm_dbg_alloc of ${size} bytes failed); did you mean to expand a smaller value?`); }
+			try {
+				const len = call(out, size);
+				if (len < 0) { throw new Error(`vscwClang: lldb could not ${what}: ${this.lastError()}`); }
+				if (len < size) { return this.readCString(out, len); }
+				size = len + 1;
+			} finally { this.exp.wasm_dbg_free(out); }
+		}
+		throw new Error(`vscwClang: lldb could not ${what}: the result kept growing between attempts.`);
 	}
 
 	private readCString(ptr: number, maxLen: number): string {

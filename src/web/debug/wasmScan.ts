@@ -235,7 +235,8 @@ export class ShadowStack {
 		if (!site) { throw new Error(`hook fired for unknown guard address ${guard}; known: ${[...this.guardSites.keys()].join(', ')}`); }
 		this.sync(sp);
 		const top = this.entries[this.entries.length - 1];
-		if (top && top.sp === sp) { top.pc = site.pc; }
+		// A sibling call at the same sp (a callee returned, the caller called another with no hook between) takes the frame over.
+		if (top && top.sp === sp) { top.pc = site.pc; top.funcIndex = site.funcIndex; }
 		else { this.entries.push({ funcIndex: site.funcIndex, pc: site.pc, sp }); }
 		return this.entries[this.entries.length - 1];
 	}

@@ -170,6 +170,27 @@ suiteIfFixtures('DebugController (real stub program, real lldb reactor, worker w
 		assert.strictEqual((await client.event('exited')).body.exitCode, 11);
 	});
 
+	test('the Variables pane lists a frame\'s locals with values, and expands a struct fetched from the live program', async () => {
+		await start({}, [5]);
+		await client.event('stopped');
+		const variablesOf = async (frameId: number) => {
+			const scopes = (await client.ok('scopes', { frameId })).scopes;
+			return (await client.ok('variables', { variablesReference: scopes[0].variablesReference })).variables as { name: string; value: string; type: string; variablesReference: number }[];
+		};
+		const inAdd = await variablesOf(1);
+		assert.deepStrictEqual(inAdd.map(v => [v.name, v.value]), [['a', '1'], ['b', '10'], ['c', '11']]);
+		assert.strictEqual(inAdd[0].type, 'int');
+		assert.ok(inAdd.every(v => v.variablesReference === 0), 'scalars have nothing to expand');
+		const inCaller = await variablesOf(2);
+		const p = inCaller.find(v => v.name === 'p')!;
+		assert.ok(p.variablesReference > 0, 'the struct expands');
+		const members = (await client.ok('variables', { variablesReference: p.variablesReference })).variables;
+		assert.deepStrictEqual(members.map((v: { name: string; value: string }) => [v.name, v.value]), [['x', '1'], ['y', '2']]);
+		await client.request('variables', { variablesReference: 999 }).then(r => assert.strictEqual(r.success, false));
+		await client.ok('continue', { threadId: 1 });
+		assert.strictEqual((await client.event('exited')).body.exitCode, 11);
+	});
+
 	test('a line in the middle of a block is accepted, and the response says where it will really stop', async () => {
 		await client.ok('initialize');
 		await client.ok('launch', {});

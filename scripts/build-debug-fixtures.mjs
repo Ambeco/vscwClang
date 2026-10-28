@@ -38,6 +38,12 @@ try {
 		copyFileSync(join(work, `${name}stub.wasm`), join(fixtures, `${name}stub.wasm`));
 		console.log(`rebuilt ${name}stub.wasm`);
 	}
+	// locals.wasm has no stub: reactorHost tests give it a JS hook (an imported __sanitizer_cov_trace_pc_guard).
+	await run('clang.wasm', ['clang', ...compile, '-O0', '-g', '-fsanitize-coverage=trace-pc-guard,no-prune', '-fdebug-prefix-map=/src/=', '-fdebug-prefix-map=/work=', '-c', '/src/locals.c', '-o', '/work/locals.o'], work);
+	const link = flags.link['wasm32-wasip1'].map(sub);
+	await run('lld.wasm', ['wasm-ld', link[0], '/work/locals.o', '--export=__stack_pointer', '--allow-undefined', ...link.slice(1), '-o', '/work/locals.wasm'], work);
+	copyFileSync(join(work, 'locals.wasm'), join(fixtures, 'locals.wasm'));
+	console.log('rebuilt locals.wasm');
 } finally {
 	rmSync(work, { recursive: true, force: true });
 }

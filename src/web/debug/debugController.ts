@@ -34,6 +34,8 @@ interface StopState {
 	/** Frames lldb can decode (those with a frame-base local), innermost first; DAP frame ids index into this. */
 	lldbFrames: (StopFrame & { funcIndex: number })[];
 }
+/** What a DAP `variablesReference` stands for: a frame's variables (empty `path`) or one value's children. Valid for one stop. */
+interface VariableRef { frame: number; path: string }
 interface StepState { kind: 'into' | 'over'; sp: number; location: Location | undefined }
 
 const THREAD_ID = 1;
@@ -49,8 +51,9 @@ const THREAD_ID = 1;
  * Limits that come from the hosts, not from this class: stops are at basic-block starts, so a line breakpoint in the
  * middle of a block stops at the block's first line (the response says so) and stepping moves block to block;
  * `pause` and breakpoint changes while running need a host with the matching `capabilities` (breakpoint changes are
- * queued to the next stop otherwise); the Variables pane cannot list locals because the reactor cannot enumerate
- * them, but hover, Watch and the Debug Console evaluate variable paths (`x`, `p.y`, `arr[2]`).
+ * queued to the next stop otherwise); the Variables pane lists what lldb can read, so a variable that lives in a wasm
+ * local (a by-value struct parameter, a VLA pointer) shows the reason instead of a value; hover, Watch and the Debug
+ * Console evaluate variable paths (`x`, `p.y`, `arr[2]`).
  */
 export class DebugController {
 	private seq = 1;
@@ -61,6 +64,7 @@ export class DebugController {
 	private readonly memory = new PagedMemory();
 	private readonly locations = new Map<number, Location | undefined>();
 	private stop: StopState | undefined;
+	private readonly variableRefs = new Map<number, VariableRef>();
 	private stepping: StepState | undefined;
 	private running = false;
 	private finished = false;
@@ -99,8 +103,8 @@ export class DebugController {
 				this.respond(req, true, {});
 				return;
 			case 'stackTrace': return this.stackTrace(req, args);
-			case 'scopes': this.respond(req, true, { scopes: [{ name: 'Locals', variablesReference: Number(args.frameId), expensive: false }] }); return;
-			case 'variables': this.respond(req, true, { variables: [PLACEHOLDER_VARIABLE] }); return;
+			case 'scopes': return this.scopes(req, args);
+			case 'variables': return this.variables(req, args);
 			case 'evaluate': return this.evaluate(req, args);
 			case 'terminate':
 			case 'disconnect':
@@ -226,6 +230,7 @@ export class DebugController {
 		const target = this.requireTarget();
 		const lldbFrames = event.frames.filter(f => target.scan.frameBaseLocals.has(f.funcIndex)).map(f => ({ funcIndex: f.funcIndex, pc: f.pc, sp: f.sp, frameBaseLocal: target.scan.frameBaseLocals.get(f.funcIndex)! }));
 		this.stop = { frames: event.frames, lldbFrames };
+		this.variableRefs.clear();
 		this.memory.clear();
 		target.reactor.setMemory({ read: this.memory.read });
 		target.reactor.setStop(lldbFrames);
@@ -259,6 +264,35 @@ export class DebugController {
 			return { id: i + 1, name, ...(source ? { source } : {}), line: location?.line ?? 0, column: 1 };
 		});
 		this.respond(req, true, { stackFrames: frames.slice(start, start + levels), totalFrames: frames.length });
+	}
+
+	private newVariableRef(ref: VariableRef): number {
+		const id = this.variableRefs.size + 1;
+		this.variableRefs.set(id, ref);
+		return id;
+	}
+
+	private scopes(req: Request, args: Args): void {
+		const stop = this.requireStopped('list scopes');
+		const frame = Number(args.frameId) - 1;
+		if (!stop.lldbFrames[frame]) { throw new Error(`vscwClang: no frame ${args.frameId} in this stop's call stack; did the program run on since the stack was requested?`); }
+		this.respond(req, true, { scopes: [{ name: 'Locals', variablesReference: this.newVariableRef({ frame, path: '' }), expensive: false }] });
+	}
+
+	private async variables(req: Request, args: Args): Promise<void> {
+		const target = this.requireTarget();
+		const stop = this.requireStopped('list variables');
+		const ref = this.variableRefs.get(Number(args.variablesReference));
+		if (!ref) { throw new Error(`vscwClang: variablesReference ${args.variablesReference} is not from this stop; did the program run on since it was listed?`); }
+		const rows = await evaluateWithMemory(this.memory, pages => this.fetchPages(pages), () => target.reactor.variables(ref.frame, ref.path), () => target.reactor.setStop(stop.lldbFrames));
+		const variables = rows.map(row => ({
+			name: row.name,
+			// An aggregate with no formatter summary has no text of its own; its type tells more than a blank.
+			value: row.value || `(${row.type})`,
+			type: row.type,
+			variablesReference: row.hasChildren ? this.newVariableRef({ frame: ref.frame, path: row.path }) : 0,
+		}));
+		this.respond(req, true, { variables });
 	}
 
 	private async evaluate(req: Request, args: Args): Promise<void> {
@@ -302,9 +336,3 @@ export class DebugController {
 
 	private send(message: object): void { this.options.send({ seq: this.seq++, ...message }); }
 }
-
-const PLACEHOLDER_VARIABLE = {
-	name: '(locals not listed)',
-	value: 'hover a name, or use Watch or the Debug Console, to evaluate x, p.y or arr[2]',
-	variablesReference: 0,
-};

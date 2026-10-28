@@ -96,3 +96,99 @@ suiteIfReactor('ReactorHost (real lldb-wasm-reactor.wasm, real debug build)', fu
 		assert.throws(() => host.formatValue(0, 'no_such_variable'), /vscwClang: lldb could not evaluate "no_such_variable"/);
 	});
 });
+
+// locals.wasm is src/web/test/fixtures/debug/locals.c built by scripts/build-debug-fixtures.mjs (no debug stub: the test supplies the hook).
+const LOCALS = join(ROOT, 'src', 'web', 'test', 'fixtures', 'debug', 'locals.wasm');
+
+suiteIfReactor('ReactorHost.variables (real lldb-wasm-reactor.wasm, locals.c)', function () {
+	this.timeout(120000);
+	const bytes = new Uint8Array(readFileSync(LOCALS));
+	const scan = scanProgram(bytes);
+	let host: ReactorHost;
+
+	suiteSetup(async () => {
+		host = await ReactorHost.create(await WebAssembly.compile(readFileSync(REACTOR)));
+		host.createTarget(bytes);
+	});
+
+	/** Runs the program and calls `inspect` at the `which`th hook (0-based, negative from the end) of the named function. */
+	function stopIn<T>(fn: string, which: number, inspect: () => T): T {
+		const funcIndex = [...scan.module.names].find(([, n]) => n === fn)?.[0];
+		assert.ok(funcIndex !== undefined, `name section has ${fn}`);
+		const guards = [...scan.guardSites].filter(([, s]) => s.funcIndex === funcIndex).map(([g]) => g).sort((a, b) => a - b);
+		const target = guards[which < 0 ? guards.length + which : which];
+		const shadow = new ShadowStack(scan.guardSites);
+		let instance!: WebAssembly.Instance;
+		let result: { value: T } | undefined;
+		const hook = (guard: number) => {
+			const sp = (instance.exports.__stack_pointer as WebAssembly.Global).value as number;
+			shadow.onHook(sp, guard);
+			if (guard !== target || result) { return; }
+			const frames = mergeFrames(captureWasmFrames(scan.module.codeStart), shadow)
+				.filter(f => f.sp !== null && scan.frameBaseLocals.has(f.funcIndex))
+				.map(f => ({ pc: f.pc, sp: f.sp!, frameBaseLocal: scan.frameBaseLocals.get(f.funcIndex)! }));
+			host.setMemory({ read: (addr, size) => new Uint8Array((instance.exports.memory as WebAssembly.Memory).buffer).slice(addr, addr + size) });
+			host.setStop(frames);
+			result = { value: inspect() };
+		};
+		instance = new WebAssembly.Instance(new WebAssembly.Module(bytes), {
+			env: { __sanitizer_cov_trace_pc_guard: hook, __sanitizer_cov_trace_pc_guard_init() { /* unused */ } },
+			wasi_snapshot_preview1: { proc_exit() { throw new ProgramExit(); } },
+		});
+		try { (instance.exports._start as () => void)(); } catch (e) { if (!(e instanceof ProgramExit)) { throw e; } }
+		assert.ok(result, `hook ${which} of ${fn} fired`);
+		return result.value;
+	}
+
+	test('lists parameters then locals with types and values, and marks the ones with children', () => {
+		const vars = stopIn('mixed', -1, () => host.variables(0));
+		const byName = new Map(vars.map(v => [v.name, v]));
+		assert.deepStrictEqual(vars.slice(0, 6).map(v => v.name), ['d', 's', 'pv', 'bp', 'll', 'uc'], vars.map(v => v.name).join(','));
+		assert.match(byName.get('d')!.type, /double/);
+		assert.strictEqual(byName.get('d')!.value, '1.5');
+		assert.strictEqual(byName.get('ll')!.value, '123456789012');
+		assert.strictEqual(byName.get('f')!.value, '2.5');
+		assert.match(byName.get('s')!.value, /"hey"/);
+		for (const aggregate of ['arr', 'local', 'bp', 'pv']) { assert.ok(byName.get(aggregate)!.hasChildren, `${aggregate} has children`); }
+		assert.ok(!byName.get('total')!.hasChildren);
+		assert.ok(!vars.some(v => v.name.startsWith('__vla_expr')), 'compiler-made variables are hidden');
+	});
+
+	test('expands arrays, structs and pointers by path, through nested levels', () => {
+		const result = stopIn('mixed', -1, () => {
+			const vars = host.variables(0);
+			const arr = host.variables(0, vars.find(v => v.name === 'arr')!.path);
+			const local = host.variables(0, vars.find(v => v.name === 'local')!.path);
+			const p = host.variables(0, local.find(v => v.name === 'p')!.path);
+			const bp = host.variables(0, vars.find(v => v.name === 'bp')!.path);
+			return { arr, local, p, bp };
+		});
+		assert.deepStrictEqual(result.arr.map(v => v.value), ['1', '2', '3', '4']);
+		assert.deepStrictEqual(result.local.map(v => v.name), ['d', 'tag', 'p']);
+		assert.deepStrictEqual(result.p.map(v => `${v.name}=${v.value}`), ['x=3', 'y=4']);
+		assert.deepStrictEqual(result.bp.map(v => v.name), ['d', 'tag', 'p'], 'a pointer to a struct lists the members of what it points to');
+	});
+
+	test('an outer frame lists its own variables', () => {
+		const frame1 = stopIn('leaf', 0, () => host.variables(1));
+		assert.deepStrictEqual(frame1.map(v => v.name), ['big', 'pv', 'r']);
+	});
+
+	test('a block-scoped variable is listed only while in scope', () => {
+		const inLoop = stopIn('mixed', 2, () => host.variables(0).map(v => v.name));
+		const after = stopIn('mixed', -1, () => host.variables(0).map(v => v.name));
+		assert.ok(inLoop.includes('i') && !after.includes('i'), `in loop: ${inLoop}; after: ${after}`);
+	});
+
+	test('a sibling call at the same stack pointer still shows its own frame', () => {
+		const names = stopIn('shadow', 0, () => host.variables(0).map(v => v.name));
+		assert.ok(names.includes('n') && names.includes('v'), names.join(','));
+	});
+
+	test('a variable the host cannot read still gets a row that says why, and a bad path is an error', () => {
+		const pv = stopIn('mixed', -1, () => host.variables(0).find(v => v.name === 'pv'));
+		assert.match(pv?.value ?? '', /not available: stored in a WebAssembly local/);
+		assert.throws(() => stopIn('mixed', -1, () => host.variables(0, '99')), /no value|none at index/);
+		assert.throws(() => stopIn('mixed', -1, () => host.variables(0, 'x/y')), /not a variable path/);
+	});
+});
