@@ -62,6 +62,12 @@ export class BreakpointIndex {
 		return found < 0 ? undefined : this.firstFuncIndex + found;
 	}
 
+	/** True if `pc` is the first guard of its function, which runs before the parameters are stored to the stack. */
+	isEntryGuard(pc: number): boolean {
+		const func = this.funcAt(pc);
+		return func !== undefined && this.guardsByFunc.get(func)?.[0]?.pc === pc;
+	}
+
 	/** The source line of the row covering `pc`, or undefined if `pc` is outside any sequence. */
 	lineAt(pc: number): { file: string; line: number } | undefined {
 		let lo = 0, hi = this.rowAddrs.length - 1, found = -1;

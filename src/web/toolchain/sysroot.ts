@@ -3,6 +3,8 @@ import { MemoryGuestFs } from '../host/memoryGuestFs';
 import type { ToolchainStore } from './toolchainStore';
 
 export interface CompileFlags {
+	/** Extra debug-build flags for a clang that can place a guard at every source line; absent on older toolchains (guards stay per block). */
+	debugCoverage?: string[];
 	compile: Record<string, string[]>;
 	link: Record<string, string[]>;
 }

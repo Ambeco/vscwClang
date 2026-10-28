@@ -167,8 +167,8 @@ suiteIfFixtures('stub + real program + real lldb reactor (worker with a blocking
 
 	test('a breakpoint stop reports the call stack, and lldb decodes values through fetched pages', async () => {
 		await session.nextStop();
-		const addSecondBlock = guardsOf('add')[1];
-		await session.setBreakpoints([addSecondBlock]);
+		const addIfLine = guardsOf('add')[2]; // entry (line 3), `int c = a + b` (4), then `if (c > 100)` (5): c is set
+		await session.setBreakpoints([addIfLine]);
 		await session.resume('go');
 		const stop = await session.nextStop();
 		assert.strictEqual(stop.reason, 'breakpoint');

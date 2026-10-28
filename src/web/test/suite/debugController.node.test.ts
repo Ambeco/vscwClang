@@ -40,11 +40,27 @@ suite('dwarfLines and BreakpointIndex (real DWARF from prog.c)', () => {
 		assert.deepStrictEqual(index.resolve('prog.c', 10), { line: 10, guards: [guardsOf('caller')[0]], stopsAtLine: undefined });
 	});
 
-	test('a line in the middle of a block stops at the start of its block, and says where', () => {
+	test('a line in the middle of a block has a guard of its own, so it stops exactly', () => {
 		const r = index.resolve('prog.c', 12)!;
 		assert.strictEqual(r.line, 12);
-		assert.deepStrictEqual(r.guards, [guardsOf('caller')[0]]);
-		assert.strictEqual(r.stopsAtLine, 10);
+		assert.strictEqual(r.guards.length, 1);
+		assert.ok(r.guards[0] !== guardsOf('caller')[0], 'not the block-start guard');
+		assert.strictEqual(r.stopsAtLine, undefined);
+		assert.strictEqual(index.lineAt(scan.guardSites.get(r.guards[0])!.pc)!.line, 12);
+	});
+
+	test('every line with code in prog.c has a guard that stops on it', () => {
+		const lines = new Set(rows.filter(r => r.file === 'prog.c' && r.isStmt).map(r => r.line));
+		for (const line of lines) {
+			const r = index.resolve('prog.c', line)!;
+			assert.ok(r.line === line && r.stopsAtLine === undefined, `line ${line} resolves exactly (got ${JSON.stringify(r)})`);
+		}
+	});
+
+	test('only a the first guard of a function is its entry guard', () => {
+		const add = guardsOf('add').map(g => scan.guardSites.get(g)!.pc);
+		assert.strictEqual(index.isEntryGuard(add[0]), true);
+		assert.strictEqual(index.isEntryGuard(add[1]), false);
 	});
 
 	test('a line with no code moves to the next line that has some; past the end, or an unknown file, resolves to nothing', () => {
@@ -191,13 +207,13 @@ suiteIfFixtures('DebugController (real stub program, real lldb reactor, worker w
 		assert.strictEqual((await client.event('exited')).body.exitCode, 11);
 	});
 
-	test('a line in the middle of a block is accepted, and the response says where it will really stop', async () => {
+	test('a line in the middle of a block is accepted and stops exactly there; a line without code moves down', async () => {
 		await client.ok('initialize');
 		await client.ok('launch', {});
 		await client.event('initialized');
 		const body = await client.ok('setBreakpoints', { source: { path: 'prog.c' }, breakpoints: [{ line: 12 }, { line: 9 }, { line: 99 }] });
 		assert.deepStrictEqual(body.breakpoints.map((b: any) => [b.verified, b.line]), [[true, 12], [true, 10], [false, 99]]);
-		assert.match(body.breakpoints[0].message, /block containing this line starts \(line 10\)/);
+		assert.strictEqual(body.breakpoints[0].message, undefined);
 		assert.match(body.breakpoints[2].message, /no code at or after line 99/);
 	});
 
@@ -215,7 +231,36 @@ suiteIfFixtures('DebugController (real stub program, real lldb reactor, worker w
 		assert.match(body.breakpoints[0].message, /outside the workspace folder/);
 	});
 
-	test('step over moves to the next block in the same function; step out returns to the caller; step in enters the callee', async () => {
+	test('next steps one line at a time through caller, stepping over the call to add', async () => {
+		await start({}, [10]);
+		await client.event('stopped');
+		const lines: number[] = [(await topFrames())[0].line];
+		for (let i = 0; i < 4; i++) {
+			await client.ok('next', { threadId: 1 });
+			await client.event('stopped');
+			const frames = await topFrames();
+			assert.strictEqual(frames[0].name, 'caller', `stays in caller (stop ${i + 1})`);
+			lines.push(frames[0].line);
+		}
+		assert.deepStrictEqual(lines, [10, 11, 12, 13, 15]);
+		await client.ok('continue', { threadId: 1 });
+		assert.strictEqual((await client.event('exited')).body.exitCode, 11);
+	});
+
+	test('step in lands on the first body line of the callee, with its parameters already stored', async () => {
+		await start({}, [12]);
+		await client.event('stopped');
+		await client.ok('stepIn', { threadId: 1 });
+		await client.event('stopped');
+		const frames = await topFrames();
+		assert.deepStrictEqual([frames[0].name, frames[0].line], ['add', 4]);
+		assert.match(await evaluate('a'), /\(int\) a = 1\b/);
+		assert.match(await evaluate('b'), /\(int\) b = 10\b/);
+		await client.ok('continue', { threadId: 1 });
+		assert.strictEqual((await client.event('exited')).body.exitCode, 11);
+	});
+
+	test('step over moves to the next line in the same function; step out returns to the caller; step in enters the callee', async () => {
 		await start({}, [10]);
 		await client.event('stopped');
 		assert.deepStrictEqual((await topFrames()).map(f => f.name), ['caller', '__original_main']);

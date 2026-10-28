@@ -92,7 +92,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 	const sub = (f: string) => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource');
 	const userFlags = splitFlags(request.flags, GUEST_WORKSPACE);
 	// no-prune: by default sancov skips blocks it deems redundant, but a line breakpoint needs a guard at every block start.
-	const modeFlags = request.mode === 'debug' ? ['-O0', '-g', '-fsanitize-coverage=trace-pc-guard,no-prune'] : [];
+	const modeFlags = request.mode === 'debug' ? ['-O0', '-g', '-fsanitize-coverage=trace-pc-guard,no-prune', ...(flags.debugCoverage ?? [])] : [];
 	const ownFlags = new Map(sources.map(s => [s.guest, splitFlags(request.sourceFlags?.[s.guest] ?? [], GUEST_WORKSPACE)]));
 	const linkFlags = [...new Set([...userFlags.link, ...[...ownFlags.values()].flatMap(f => f.link)])];
 	const objectPaths: string[] = [];

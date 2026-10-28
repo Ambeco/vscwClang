@@ -32,14 +32,14 @@ try {
 	const compile = flags.compile['wasm32-wasip1'].map(sub);
 	await run('clang.wasm', ['clang', ...compile, '-O2', '-c', '/stub/debugStub.c', '-o', '/work/debugStub.o'], work);
 	for (const name of ['prog', 'chatty']) {
-		await run('clang.wasm', ['clang', ...compile, '-O0', '-g', '-fsanitize-coverage=trace-pc-guard', '-fdebug-prefix-map=/src/=', '-fdebug-prefix-map=/work=', '-c', `/src/${name}.c`, '-o', `/work/${name}.o`], work);
+		await run('clang.wasm', ['clang', ...compile, '-O0', '-g', '-fsanitize-coverage=trace-pc-guard,no-prune', ...(flags.debugCoverage ?? []), '-fdebug-prefix-map=/src/=', '-fdebug-prefix-map=/work=', '-c', `/src/${name}.c`, '-o', `/work/${name}.o`], work);
 		const link = flags.link['wasm32-wasip1'].map(sub);
 		await run('lld.wasm', ['wasm-ld', link[0], `/work/${name}.o`, '/work/debugStub.o', '--export=__sanitizer_cov_trace_pc_guard', ...link.slice(1), '-o', `/work/${name}stub.wasm`], work);
 		copyFileSync(join(work, `${name}stub.wasm`), join(fixtures, `${name}stub.wasm`));
 		console.log(`rebuilt ${name}stub.wasm`);
 	}
 	// locals.wasm has no stub: reactorHost tests give it a JS hook (an imported __sanitizer_cov_trace_pc_guard).
-	await run('clang.wasm', ['clang', ...compile, '-O0', '-g', '-fsanitize-coverage=trace-pc-guard,no-prune', '-fdebug-prefix-map=/src/=', '-fdebug-prefix-map=/work=', '-c', '/src/locals.c', '-o', '/work/locals.o'], work);
+	await run('clang.wasm', ['clang', ...compile, '-O0', '-g', '-fsanitize-coverage=trace-pc-guard,no-prune', ...(flags.debugCoverage ?? []), '-fdebug-prefix-map=/src/=', '-fdebug-prefix-map=/work=', '-c', '/src/locals.c', '-o', '/work/locals.o'], work);
 	const link = flags.link['wasm32-wasip1'].map(sub);
 	await run('lld.wasm', ['wasm-ld', link[0], '/work/locals.o', '--export=__stack_pointer', '--allow-undefined', ...link.slice(1), '-o', '/work/locals.wasm'], work);
 	copyFileSync(join(work, 'locals.wasm'), join(fixtures, 'locals.wasm'));

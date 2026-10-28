@@ -222,7 +222,12 @@ export class DebugController {
 			const top = event.frames[0];
 			const here = top ? this.locate(top.pc) : undefined;
 			if (top && top.sp === step.sp && here && step.location && here.file === step.location.file && here.line === step.location.line) {
-				await this.resume(step.kind); // still on the same line, in the same frame: block-level hooks fire more than once per line
+				await this.resume(step.kind); // still on the same line, in the same frame: several hooks can fire on one line
+				return;
+			}
+			// A step into a call lands on the callee's entry guard, where the parameters are not stored yet; go on to its first line.
+			if (top && step.kind === 'into' && top.sp < step.sp && this.breakpoints?.isEntryGuard(top.pc)) {
+				await this.resume('into');
 				return;
 			}
 		}
