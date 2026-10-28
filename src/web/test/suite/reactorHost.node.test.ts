@@ -185,9 +185,7 @@ suiteIfReactor('ReactorHost.variables (real lldb-wasm-reactor.wasm, locals.c)', 
 		assert.ok(names.includes('n') && names.includes('v'), names.join(','));
 	});
 
-	test('a variable the host cannot read still gets a row that says why, and a bad path is an error', () => {
-		const pv = stopIn('mixed', -1, () => host.variables(0).find(v => v.name === 'pv'));
-		assert.match(pv?.value ?? '', /not available: stored in a WebAssembly local/);
+	test('a bad variable path is an error', () => {
 		assert.throws(() => stopIn('mixed', -1, () => host.variables(0, '99')), /no value|none at index/);
 		assert.throws(() => stopIn('mixed', -1, () => host.variables(0, 'x/y')), /not a variable path/);
 	});
@@ -207,14 +205,28 @@ suiteIfReactor('ReactorHost.variables (real lldb-wasm-reactor.wasm, locals.c)', 
 		assert.strictEqual(frames.length, 2, `no phantom frames: ${frames.join(' | ')}`);
 	});
 
-	// Both need a host that reads wasm locals (or a compiler spill of the pointer into the shadow stack); no such host exists yet.
-	test.skip('a struct passed by value is listed with its members (pv in mixed)', () => {
-		const pv = stopIn('mixed', -1, () => host.variables(0).find(v => v.name === 'pv'));
-		assert.ok(pv?.hasChildren);
+	// The compiler spills the by-value pointer / VLA address (-sanitizer-coverage-spill-debug-vars) so memory reads suffice.
+	test('a struct passed by value is listed with its members (pv in mixed)', () => {
+		const members = stopIn('mixed', -1, () => {
+			const pv = host.variables(0).find(v => v.name === 'pv');
+			assert.ok(pv?.hasChildren);
+			return host.variables(0, pv.path).map(v => `${v.name}=${v.value}`);
+		});
+		assert.deepStrictEqual(members, ['x=3', 'y=4']);
 	});
 
-	test.skip('a VLA is listed with its elements (buf in vla)', () => {
-		const buf = stopIn('vla', -1, () => host.variables(0).find(v => v.name === 'buf'));
-		assert.ok(buf?.hasChildren);
+	test('a VLA is listed with its elements (buf in vla)', () => {
+		const elements = stopIn('vla', -1, () => {
+			const buf = host.variables(0).find(v => v.name === 'buf');
+			assert.ok(buf?.hasChildren);
+			assert.match(buf.type, /int/);
+			return host.variables(0, buf.path).map(v => v.value);
+		});
+		assert.deepStrictEqual(elements, ['0', '3', '6', '9']);
+	});
+
+	test('a by-value struct and a VLA are readable at the entry guard, before any user code ran', () => {
+		const pv = stopIn('mixed', 0, () => host.variables(0).find(v => v.name === 'pv'));
+		assert.ok(pv?.hasChildren, 'pv readable at entry');
 	});
 });

@@ -51,8 +51,9 @@ const THREAD_ID = 1;
  * Limits that come from the hosts, not from this class: stops are at basic-block starts, so a line breakpoint in the
  * middle of a block stops at the block's first line (the response says so) and stepping moves block to block;
  * `pause` and breakpoint changes while running need a host with the matching `capabilities` (breakpoint changes are
- * queued to the next stop otherwise); the Variables pane lists what lldb can read, so a variable that lives in a wasm
- * local (a by-value struct parameter, a VLA pointer) shows the reason instead of a value; hover, Watch and the Debug
+ * queued to the next stop otherwise); the Variables pane lists what lldb can read, which needs a toolchain built
+ * with `-sanitizer-coverage-spill-debug-vars` (a by-value struct or VLA lives in a wasm local otherwise and shows the
+ * reason instead of a value); hover, Watch and the Debug
  * Console evaluate variable paths (`x`, `p.y`, `arr[2]`).
  */
 export class DebugController {
