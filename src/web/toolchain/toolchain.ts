@@ -8,6 +8,7 @@ import { checkUserFlags, splitFlags } from './flagPolicy';
 import { GUEST_WORKSPACE, toGuestPath } from './guestPaths';
 import { loadCompileFlags, loadSysrootGuestFs } from './sysroot';
 import { ToolchainStore, type StoreContext } from './toolchainStore';
+import { COVERAGE_IGNORELIST, COVERAGE_IGNORELIST_FILE } from '../debug/coverageIgnorelist';
 import debugStubSource from '../debug/debugStub.c';
 
 export interface BuildRequest {
@@ -92,7 +93,8 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 	const sub = (f: string) => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource');
 	const userFlags = splitFlags(request.flags, GUEST_WORKSPACE);
 	// no-prune: by default sancov skips blocks it deems redundant, but a line breakpoint needs a guard at every block start.
-	const modeFlags = request.mode === 'debug' ? ['-O0', '-g', '-fsanitize-coverage=trace-pc-guard,no-prune', ...(flags.debugCoverage ?? [])] : [];
+	const modeFlags = request.mode === 'debug' ? ['-O0', '-g', '-fsanitize-coverage=trace-pc-guard,no-prune', ...(flags.debugCoverage ?? []), `-fsanitize-coverage-ignorelist=/obj/${COVERAGE_IGNORELIST_FILE}`] : [];
+	if (request.mode === 'debug') { objects.setFile(COVERAGE_IGNORELIST_FILE, new TextEncoder().encode(COVERAGE_IGNORELIST)); }
 	const ownFlags = new Map(sources.map(s => [s.guest, splitFlags(request.sourceFlags?.[s.guest] ?? [], GUEST_WORKSPACE)]));
 	const linkFlags = [...new Set([...userFlags.link, ...[...ownFlags.values()].flatMap(f => f.link)])];
 	const objectPaths: string[] = [];
@@ -108,7 +110,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 		log.appendLine(`[vscwclang] compiling ${source.guest}`);
 		const started = Date.now();
 		const cc = await run('clang.wasm', [driver, ...flags.compile[SLICE].map(sub), '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics',
-			...DEFAULT_COMPILE_FLAGS, ...(driver === 'clang' ? DEFAULT_C_COMPILE_FLAGS : []), ...modeFlags, ...(request.languageFlags?.[driver === 'clang' ? 'c' : 'cpp'] ?? []), ...userFlags.compile, ...ownFlags.get(source.guest)!.compile, '-c', source.guest, '-o', '-'], { captureStdout: true });
+			...DEFAULT_COMPILE_FLAGS, ...(driver === 'clang' ? DEFAULT_C_COMPILE_FLAGS : []), ...modeFlags, ...(request.languageFlags?.[driver === 'clang' ? 'c' : 'cpp'] ?? []), ...userFlags.compile, ...ownFlags.get(source.guest)!.compile, '-c', source.guest, '-o', '-'], { captureStdout: true, objects });
 		log.appendLine(`[vscwclang] compiled ${source.guest} in ${Date.now() - started} ms (exit ${cc.exitCode})`);
 		diagnostics += cc.stderr;
 		if (cc.stderr !== '') { request.onDiagnostics?.(parseDiagnostics(diagnostics)); }

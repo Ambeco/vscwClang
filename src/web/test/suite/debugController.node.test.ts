@@ -247,6 +247,23 @@ suiteIfFixtures('DebugController (real stub program, real lldb reactor, worker w
 		assert.strictEqual((await client.event('exited')).body.exitCode, 11);
 	});
 
+	test('stepping off the end of a callee stops on the call line in the caller, then on the line after it', async () => {
+		await start({}, [7]);
+		await client.event('stopped');
+		let frames = await topFrames();
+		assert.deepStrictEqual([frames[0].name, frames[0].line], ['add', 7]);
+		const seen: string[] = [];
+		for (let i = 0; i < 3; i++) {
+			await client.ok('next', { threadId: 1 });
+			await client.event('stopped');
+			frames = await topFrames();
+			seen.push(`${frames[0].name}:${frames[0].line}`);
+		}
+		assert.deepStrictEqual(seen, ['caller:12', 'caller:13', 'caller:15']);
+		await client.ok('continue', { threadId: 1 });
+		assert.strictEqual((await client.event('exited')).body.exitCode, 11);
+	});
+
 	test('step in lands on the first body line of the callee, with its parameters already stored', async () => {
 		await start({}, [12]);
 		await client.event('stopped');
