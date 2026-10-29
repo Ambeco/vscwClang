@@ -48,6 +48,11 @@ export class ToolchainStore {
 
 	constructor(private readonly context: StoreContext, private readonly log: vscode.OutputChannel) {}
 
+	/** Identifies the exact toolchain bytes (manifest hash prefix), for cache keys. */
+	async version(): Promise<string> {
+		return (await this.init()).keyDir;
+	}
+
 	async getFile(name: string): Promise<Uint8Array<ArrayBuffer>> {
 		await this.ensure([name]);
 		const { manifest, keyDir, store, opts } = await this.init();

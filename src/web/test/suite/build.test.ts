@@ -76,6 +76,31 @@ suite('vscwClang build (in browser)', function () {
 		assert.deepStrictEqual([ran.exitCode, ran.stdout], [0, 'hello 42\n']);
 	});
 
+	test('incremental rebuild: an unchanged tree skips everything; an edit recompiles only what includes it', async () => {
+		const logged: string[] = [];
+		const watch = { ...log, appendLine: (s: string) => { logged.push(s); log.appendLine(s); } } as vscode.OutputChannel;
+		const rebuild = async (): Promise<{ compiled: string[]; linked: boolean; ran: string }> => {
+			logged.length = 0;
+			const result = await build({ sources: [uri('inc-main.cpp'), uri('inc-a.cpp'), uri('inc-b.cpp')], output: uri('inc.wasm'), flags: [], mode: 'release' }, watch, context);
+			assert.strictEqual(result.exitCode, 0, result.diagnostics);
+			return { compiled: logged.filter(l => / compiled /.test(l)).map(l => /inc-\w+\.cpp/.exec(l)![0]), linked: logged.some(l => /\blinked in\b/.test(l)), ran: (await runWasm(uri('inc.wasm'))).stdout };
+		};
+		await write('inc-a.h', '#pragma once\nint a();\n');
+		await write('inc-a.cpp', '#include "inc-a.h"\nint a() { return 1; }\n');
+		await write('inc-b.cpp', 'int b() { return 10; }\n');
+		await write('inc-main.cpp', '#include <cstdio>\n#include "inc-a.h"\nint b();\nint main() { std::printf("%d", a() + b()); }\n');
+		const first = await rebuild();
+		assert.deepStrictEqual([first.compiled.length, first.linked, first.ran], [3, true, '11']);
+		const again = await rebuild();
+		assert.deepStrictEqual([again.compiled, again.linked, again.ran], [[], false, '11']);
+		await write('inc-b.cpp', 'int b() { return 20; }\n');
+		const sourceEdit = await rebuild();
+		assert.deepStrictEqual([sourceEdit.compiled, sourceEdit.linked, sourceEdit.ran], [['inc-b.cpp'], true, '21']);
+		await write('inc-a.h', '#pragma once\nint a();\n// touched\n');
+		const headerEdit = await rebuild();
+		assert.deepStrictEqual([headerEdit.compiled.sort(), headerEdit.linked], [['inc-a.cpp', 'inc-main.cpp'], true]);
+	});
+
 	test('objects stay in memory: no scratch folder is written to the workspace', async () => {
 		await write('quiet.cpp', 'int main() { return 0; }' + String.fromCharCode(10));
 		const result = await build({ sources: [uri('quiet.cpp')], output: uri('quiet.wasm'), flags: [], mode: 'release' }, log, context);

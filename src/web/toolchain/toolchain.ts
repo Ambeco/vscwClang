@@ -5,7 +5,9 @@ import { VscodeGuestFs } from '../host/vscodeGuestFs';
 import { createGuestWorker } from '../host/workerHost';
 import { parseDiagnostics, withFailureFallback, type ParsedDiagnostic } from './diagnostics';
 import { checkUserFlags, splitFlags } from './flagPolicy';
-import { GUEST_WORKSPACE, toGuestPath } from './guestPaths';
+import { GUEST_WORKSPACE, fromGuestPath, toGuestPath } from './guestPaths';
+import { ObjectCache, hashText, splitIncludeTrace, type LinkRecord, type ReadGuestFile } from './objectCache';
+import { sha256Hex } from './toolchainDownload';
 import { loadCompileFlags, loadSysrootGuestFs } from './sysroot';
 import { ToolchainStore, type StoreContext } from './toolchainStore';
 import { COVERAGE_IGNORELIST, COVERAGE_IGNORELIST_FILE } from '../debug/coverageIgnorelist';
@@ -37,6 +39,16 @@ export interface BuildResult {
 }
 
 const SLICE = 'wasm32-wasip1';
+
+/** Compiled objects and link results kept for the session, so an unchanged tree skips the build and an edit recompiles only what it touches. */
+const objectCache = new ObjectCache();
+const lastLinks = new Map<string, LinkRecord>();
+
+/** Drops every cached object and link result; the next build recompiles everything. */
+export function clearBuildCache(): void {
+	objectCache.clear();
+	lastLinks.clear();
+}
 const GUEST_OUT = '/out';
 
 /** What `build` needs from the extension context: toolchain storage, and the extension's files to start the Worker host. */
@@ -103,32 +115,73 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 	const usesCpp = sources.some(s => !s.guest.endsWith('.c'));
 	const uncaughtShim = usesCpp ? await addShim(objects, clang, flags.compile[SLICE].map(sub), log, UNCAUGHT_SHIM) : undefined;
 	const debugStub = request.mode === 'debug' ? await addShim(objects, clang, flags.compile[SLICE].map(sub), log, DEBUG_STUB) : undefined;
+	const readGuest: ReadGuestFile = async guestPath => {
+		const hostPath = fromGuestPath(folder.path, guestPath);
+		if (hostPath === undefined) { return undefined; }
+		try { return new Uint8Array(await vscode.workspace.fs.readFile(folder.with({ path: hostPath }))); } catch { return undefined; }
+	};
+	const toolchainVersion = await toolchain.version();
+	const cacheScope = `${folder.toString()}|${request.mode}|`;
+	const objectIds: number[] = [];
 	for (const [i, source] of sources.entries()) {
 		const base = source.guest.slice(source.guest.lastIndexOf('/') + 1);
 		const objectName = `${i}-${base}.o`;
 		const driver = base.endsWith('.c') ? 'clang' : 'clang++';
+		const compileArgs = [driver, ...flags.compile[SLICE].map(sub), '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics',
+			...DEFAULT_COMPILE_FLAGS, ...(driver === 'clang' ? DEFAULT_C_COMPILE_FLAGS : []), ...modeFlags, ...(request.languageFlags?.[driver === 'clang' ? 'c' : 'cpp'] ?? []), ...userFlags.compile, ...ownFlags.get(source.guest)!.compile, '-c', source.guest];
+		const sourceBytes = await readGuest(source.guest);
+		const cacheKey = cacheScope + source.guest;
+		const argsKey = await hashText([toolchainVersion, ...compileArgs].join(NL));
+		const sourceHash = sourceBytes && await sha256Hex(sourceBytes);
+		const cached = sourceHash ? await objectCache.lookup(cacheKey, argsKey, sourceHash, readGuest) : undefined;
+		if (cached) {
+			log.appendLine(`[vscwclang] up to date ${source.guest} (reused object)`);
+			diagnostics += cached.stderr;
+			if (cached.stderr !== '') { request.onDiagnostics?.(parseDiagnostics(diagnostics)); }
+			objects.setFile(objectName, cached.object);
+			objectPaths.push(`/obj/${objectName}`);
+			objectIds.push(cached.id);
+			continue;
+		}
 		log.appendLine(`[vscwclang] compiling ${source.guest}`);
 		const started = Date.now();
-		const cc = await run('clang.wasm', [driver, ...flags.compile[SLICE].map(sub), '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics',
-			...DEFAULT_COMPILE_FLAGS, ...(driver === 'clang' ? DEFAULT_C_COMPILE_FLAGS : []), ...modeFlags, ...(request.languageFlags?.[driver === 'clang' ? 'c' : 'cpp'] ?? []), ...userFlags.compile, ...ownFlags.get(source.guest)!.compile, '-c', source.guest, '-o', '-'], { captureStdout: true, objects });
+		// -H lists the included headers on stderr (stripped below); they decide when the cached object goes stale.
+		const cc = await run('clang.wasm', [...compileArgs, '-H', '-o', '-'], { captureStdout: true, objects });
 		log.appendLine(`[vscwclang] compiled ${source.guest} in ${Date.now() - started} ms (exit ${cc.exitCode})`);
-		diagnostics += cc.stderr;
-		if (cc.stderr !== '') { request.onDiagnostics?.(parseDiagnostics(diagnostics)); }
+		const trace = splitIncludeTrace(cc.stderr, GUEST_WORKSPACE);
+		diagnostics += trace.stderr;
+		if (trace.stderr !== '') { request.onDiagnostics?.(parseDiagnostics(diagnostics)); }
 		if (cc.exitCode === 0) {
 			objects.setFile(objectName, cc.stdout);
 			objectPaths.push(`/obj/${objectName}`);
+			const entry = sourceHash ? await objectCache.store(cacheKey, argsKey, sourceHash, trace.headers, cc.stdout, trace.stderr, readGuest) : undefined;
+			objectIds.push(entry?.id ?? -Date.now());
 		} else if (exitCode === 0) {
 			exitCode = cc.exitCode;
 		}
 	}
 	if (exitCode === 0) {
-		log.appendLine(`[vscwclang] linking ${output}`);
 		const link = flags.link[SLICE].map(sub);
-		const linkStarted = Date.now();
-		const ld = await run('lld.wasm', ['wasm-ld', link[0], ...objectPaths, ...(abortShim ? [abortShim] : []), ...(uncaughtShim ? [uncaughtShim, '--wrap=__main_void'] : []), ...(debugStub ? [debugStub, '--export=__sanitizer_cov_trace_pc_guard'] : []), ...DEFAULT_LINK_FLAGS, ...linkFlags, ...link.slice(1), '-o', output], { objects, outputDir: outputInWorkspace ? undefined : outputDir });
-		log.appendLine(`[vscwclang] linked in ${Date.now() - linkStarted} ms (exit ${ld.exitCode})`);
-		diagnostics += ld.stderr;
-		exitCode = ld.exitCode;
+		const linkArgs = ['wasm-ld', link[0], ...objectPaths, ...(abortShim ? [abortShim] : []), ...(uncaughtShim ? [uncaughtShim, '--wrap=__main_void'] : []), ...(debugStub ? [debugStub, '--export=__sanitizer_cov_trace_pc_guard'] : []), ...DEFAULT_LINK_FLAGS, ...linkFlags, ...link.slice(1), '-o', output];
+		const linkKey = await hashText([toolchainVersion, request.output.toString(), objectIds.join(','), ...linkArgs].join(NL));
+		const previous = lastLinks.get(request.output.toString());
+		const outputStat = previous?.key === linkKey ? await vscode.workspace.fs.stat(request.output).then(s => s, () => undefined) : undefined;
+		if (previous && outputStat && outputStat.mtime === previous.mtime && objectIds.every(id => id > 0)) {
+			log.appendLine(`[vscwclang] up to date ${output} (nothing to compile or link)`);
+			diagnostics += previous.stderr;
+		} else {
+			log.appendLine(`[vscwclang] linking ${output}`);
+			const linkStarted = Date.now();
+			const ld = await run('lld.wasm', linkArgs, { objects, outputDir: outputInWorkspace ? undefined : outputDir });
+			log.appendLine(`[vscwclang] linked in ${Date.now() - linkStarted} ms (exit ${ld.exitCode})`);
+			diagnostics += ld.stderr;
+			exitCode = ld.exitCode;
+			lastLinks.delete(request.output.toString());
+			if (ld.exitCode === 0 && objectIds.every(id => id > 0)) {
+				const stat = await vscode.workspace.fs.stat(request.output).then(s => s, () => undefined);
+				if (stat) { lastLinks.set(request.output.toString(), { key: linkKey, mtime: stat.mtime, stderr: ld.stderr } satisfies LinkRecord); }
+			}
+		}
 	}
 	return { exitCode, diagnostics, parsed: withFailureFallback(parseDiagnostics(diagnostics), exitCode, diagnostics) };
 }
