@@ -10,7 +10,7 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 **Near-term plan (decided 2026-10-27, replaces the 2026-10-21 one):** in order: (1) main critical user journeys feature complete; (2) pick a large, pure, portable C++ project from GitHub (many translation units, builds without extra dependencies) as the profiling workload; (3) profile and fix the low-hanging fruit, with incremental build+test speed first (see the Priority item in Milestone 1); (4) secondary journeys feature complete; (5) Make support (pseudo, i.e. interpret the common subset); (6) Python support (partial). Multithreading (`clang-threads.wasm`, `std::thread` in user programs) is not enabled yet and changes the numbers: re-profile after it lands, and expect it to affect concurrent compiles, clangd and the threaded toolchain more than a single-file edit.
 
 **Main critical user journeys (decided 2026-10-27), with the known gaps:**
-- Debug: view local variables, step through statements, conditional breakpoints. Gaps today: stops happen only at basic-block starts (`design.md` debugger section) so stepping is block-level (plan under Milestone 4), and no DAP condition/hit-condition support exists.
+- Debug: view local variables, step through statements, conditional breakpoints. Gaps today: Pause and breakpoint changes while running need the custom runner (Milestone 6).
 - Code intelligence via clangd: completion, IntelliSense, go to definition, go to declaration and similar. Mostly wired (Milestone 3); open: slow first answer with libc++ headers, the `Link has been severed` CWD error, no progress UI, duplicate results with Anycode, go to declaration and other providers not yet checked.
 - Other core cpptools functionality: the settings and features mapped from `C_Cpp.*` (formatting, header insertion, clang-tidy, etc.; see Milestone 3 items) and whatever else the user names; inventory it before calling this journey complete.
 
@@ -87,7 +87,6 @@ Open, most important first (all observed on the local `v24.0.2` toolchain):
 - clangd: slowness with libc++ headers (~2 min first answer, ~50 s per edit) is expected until V2 multithreading; not a bug. Still open: `E VFS: failed to set CWD to /workspace: Link has been severed` on each request, and no progress UI while it warms up.
 - `Tasks: Run Build Task` / Ctrl+Shift+B / `Tasks: Run Task` do nothing on the web workbench for any task (its task service never leaves "reconnecting" without a terminal backend; `documents/live_testing.md` finding 3). Decided 2026-10-22: no keybinding override; mirror cpptools' desktop keys only where web leaves them free (cpptools' sole default is Alt+O Switch Header/Source, which we do not have), and let users sort out conflicts. The `Build C++`/`Run C++` palette commands are the way in; a possible web-side fix is upstream.
 - Re-verify on real vscode.dev: the `C_Cpp.*` fallbacks and folder-level `.vscode/settings.json` flags (now contributed keys and resource-scoped settings), and read the `[vscwclang] workspace:` log line to learn whether a real local folder opens as multi-root.
-- Debug call stack names the entry frame `__original_main` instead of `main`.
 
 ## cpptools-style settings (see design.md "cpptools settings compatibility")
 
@@ -100,7 +99,7 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Remaining gaps:
 - Deliberately skipped: `default.compilerPath/intelliSenseMode/macFrameworkPath/windowsSdkVersion` (one wasm32 target), `vcFormat.*` (clang-format would be a separate item), `vcpkg`, `debugger.*`, `copilotHover`, resource caps (`maxMemory`, `maxConcurrentThreads`, caches), `doxygen.*`, `enhancedColorization`.
 
 ## Milestone 4: debug build + hook runtime
-- Debug builds use `-O0 -g -fsanitize-coverage=trace-pc-guard,no-prune` plus `debugCoverage` from `compile-flags.json` (`-mllvm -sanitizer-coverage-stmt`: a guard at every line change; see `design.md` debug stub channel). Open: (1) publish a toolchain tag whose `clang.wasm` has the option (single- and multi-threaded builds; `package_release.mjs` already writes `debugCoverage`), bump the pin, then update the README Limitations text (it still says block-by-block) and re-run the live pass; (2) overhead on a real program: fib(30) plus a 3M-iteration loop under the stub took 16 ms plain, ~68 ms with block guards, ~110-180 ms with line and post-call guards (Node; fib is the call-heavy worst case); (3) `ShadowStack`/stub: a guard of a different function at the same `sp` should be a new frame (sibling-leaf-call gap in notes.md); (4) `scanProgram` should read `DW_AT_frame_base` instead of guessing the frame-base local; (5) a `{` line on its own line after a multi-line parameter list gets a second entry-area guard before the parameters are stored, which the step-in skip does not cover.
+- Debug builds use `-O0 -g -fsanitize-coverage=trace-pc-guard,no-prune` plus `debugCoverage` from `compile-flags.json` (`-mllvm -sanitizer-coverage-stmt`: a guard at every line change; see `design.md` debug stub channel). Open: (1) re-run the live pass (`documents/live_testing.md`) against the pinned v24.0.4 for stepping, conditions, logpoints and function breakpoints; the multi-threaded `clang-threads.wasm` needs the same `debugCoverage` options checked; (2) overhead on a real program: fib(30) plus a 3M-iteration loop under the stub took 16 ms plain, ~68 ms with block guards, ~110-180 ms with line and post-call guards (Node; fib is the call-heavy worst case); (3) `ShadowStack`/stub: a guard of a different function at the same `sp` should be a new frame (sibling-leaf-call gap in notes.md); (4) `scanProgram` should read `DW_AT_frame_base` instead of guessing the frame-base local; (5) a `{` line on its own line after a multi-line parameter list gets a second entry-area guard before the parameters are stored, which the step-in skip does not cover.
 - Provide the hook import (`__sanitizer_cov_trace_pc_guard`) from JS; map guard -> pc -> source line.
 - Run the debuggee in its own Worker; pause synchronously inside the hook via `Atomics.wait` on a shared buffer; resume on continue/step.
 - JS-side shadow call stack from `__stack_pointer` deltas between hook firings (see llvm-project design.md).
@@ -108,13 +107,13 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Remaining gaps:
 ## Milestone 5: lldb reactor integration
 - Reactor: `lldb-wasm-reactor.wasm` is hosted by `src/web/debug/reactorHost.ts` over `@bjorn3/browser_wasi_shim` (no custom imports needed from the host). It is in the published `v24.0.2` manifest; the adapter fetches it lazily at the first debug launch via `getFile('lldb-wasm-reactor.wasm')`.
 - Debug adapter: `DebugController` (vscode-free DAP logic) over the `DebuggeeSession` interface, implemented by `StubDebuggee`; `debugAdapter.ts` is the VS Code shell. The custom runner will be a second `DebuggeeSession` implementation.
-- Open: stops are at block starts (see Milestone 4): an entry-block stop sees parameters before they are spilled, and a line mid-block stops at the block's first line (the response says so). Outer frames show the line of their last block start, not the call line (true call-site pcs need the custom runner's `captureWasmFrames`).
-- Open: C++ function names in the stack are mangled (`_ZL3addii`); demangle them. `launch.json` `program` is ignored (Debug always rebuilds), function and hit-count breakpoints are not implemented, `.debug_line` is parsed for every launch (unmeasured on large programs), and the line index and breakpoint resolution have no cache.
+- Open: outer frames show the line of their last guard, not the call line (true call-site pcs need the custom runner's `captureWasmFrames`).
+- Open: `demangle.ts` decodes plain, nested, constructor/destructor and operator names only; templates and substitutions (`St`, `S_`) stay mangled, as do `std` frames. `launch.json` `program` is ignored (Debug always rebuilds), `.debug_line` is parsed for every launch (unmeasured on large programs), and the line index and breakpoint resolution have no cache. Conditions have no function calls, casts, `*p`, `&x` or strings (lldb's reactor formats variable paths only).
 - Open: pause, breakpoint changes while running, and traps as stopped states need the custom runner (guard bits in shared memory, `Atomics.wait`). The debug terminal has no end-of-file key and no Ctrl+C.
 - Open: browser tests of the stub-based adapter (`debugAdapter.test.ts`) cover single-file programs (stdio, and iostream with input); add a multi-file program and one that throws and catches a C++ exception.
 
 ## Milestone 6: full DAP surface
-- Breakpoints: function breakpoints, hit counts, conditions (line breakpoints are done).
+- Breakpoints: data breakpoints and exception breakpoints (`setExceptionBreakpoints` is accepted and ignored).
 - Pause; threads (only `main` today); scopes that list locals and expandable variables (see Milestone 5); wasm traps map to a stopped state with a stack (custom runner).
 - Debug console input, `launch` env/cwd.
 
@@ -139,7 +138,7 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Remaining gaps:
 
 - `npm test`: `task provider offers build tasks and the problem matcher produces diagnostics` timed out (60 s) on 2026-10-14 and once during the 2026-10-11 size pass, but passed twice on 2026-10-21 (11.4-11.7 s, Dropbox not running, all 48 pass). Still ~10x slower than its neighbours (it logs a fresh "downloading toolchain" progress); suspect Dropbox scanning, unproven. If it times out again, check whether Dropbox is running before debugging.
 
-- Re-run the live pass from `documents/live_testing.md` against the pinned `v24.0.2`, and update README Limitations "No debugger yet" once Debug is released.
+- Re-run the live pass from `documents/live_testing.md` against the pinned `v24.0.4`.
 - Ship a prebuilt libc++ PCH in the toolchain (built by the pinned `clang.wasm`, one per `-std` and exception mode, e.g. c++17/20, keyed in the manifest) and pass `-include-pch` when the flags match; measured 2.5 -> 1.06 s on a header-only file. Open: which headers to include, behaviour when the user's flags differ, whether a user `#include` order or `-D` change needs a fallback, and a modules route (needs a wasi-libc module map in the sysroot).
 
 ## Found by the compatibility survey (2026-10-27), details in `documents/compat_survey.md`

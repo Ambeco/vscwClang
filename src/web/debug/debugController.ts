@@ -1,5 +1,7 @@
 import { BreakpointIndex } from './breakpointIndex';
 import type { DebuggeeEvent, DebuggeeFrame, DebuggeeSession, ResumeKind } from './debuggeeSession';
+import { evaluateExpression, formatLogMessage, hitConditionMatches, isPlainPath, scalarFromFormatted } from './debugExpression';
+import { displayFunctionName, functionNameMatches } from './demangle';
 import { parseLineTable } from './dwarfLines';
 import { PAGE_SIZE, PagedMemory, evaluateWithMemory } from './pagedMemory';
 import type { PathMapper } from './pathMapper';
@@ -36,6 +38,11 @@ interface StopState {
 }
 /** What a DAP `variablesReference` stands for: a frame's variables (empty `path`) or one value's children. Valid for one stop. */
 interface VariableRef { frame: number; path: string }
+/** What a client attached to a breakpoint besides its place; `key` carries the hit count across the client's re-sends. */
+interface BreakpointSpec { key: string; condition?: string; hitCondition?: string; logMessage?: string }
+interface PlacedSpec { pcs: number[]; spec: BreakpointSpec }
+interface SourceBreakpoint { line: number; condition?: string; hitCondition?: string; logMessage?: string }
+interface FunctionBreakpoint { name: string; condition?: string; hitCondition?: string }
 interface StepState { kind: 'into' | 'over'; sp: number; location: Location | undefined }
 
 const THREAD_ID = 1;
@@ -54,13 +61,16 @@ const THREAD_ID = 1;
  * queued to the next stop otherwise); the Variables pane lists what lldb can read, which needs a toolchain built
  * with `-sanitizer-coverage-spill-debug-vars` (a by-value struct or VLA lives in a wasm local otherwise and shows the
  * reason instead of a value); hover, Watch and the Debug
- * Console evaluate variable paths (`x`, `p.y`, `arr[2]`).
+ * Console evaluate variable paths (`x`, `p.y`, `arr[2]`) and C-like expressions over them (`debugExpression.ts`), which
+ * are also what breakpoint conditions, hit counts and logpoints use.
  */
 export class DebugController {
 	private seq = 1;
 	private target: DebugTarget | undefined;
 	private breakpoints: BreakpointIndex | undefined;
 	private readonly guardsBySource = new Map<string, number[]>();
+	private readonly specsBySource = new Map<string, PlacedSpec[]>();
+	private readonly hitCounts = new Map<string, number>();
 	private armedKey = '';
 	private readonly memory = new PagedMemory();
 	private readonly locations = new Map<number, Location | undefined>();
@@ -86,10 +96,11 @@ export class DebugController {
 		const args = req.arguments ?? {};
 		switch (req.command) {
 			case 'initialize':
-				this.respond(req, true, { supportsConfigurationDoneRequest: true, supportsTerminateRequest: true, supportsEvaluateForHovers: true });
+				this.respond(req, true, { supportsConfigurationDoneRequest: true, supportsTerminateRequest: true, supportsEvaluateForHovers: true, supportsConditionalBreakpoints: true, supportsHitConditionalBreakpoints: true, supportsLogPoints: true, supportsFunctionBreakpoints: true });
 				return;
 			case 'launch': return this.launch(req, args);
 			case 'setBreakpoints': return this.setBreakpoints(req, args);
+			case 'setFunctionBreakpoints': return this.setFunctionBreakpoints(req, args);
 			case 'setExceptionBreakpoints': this.respond(req, true, {}); return;
 			case 'configurationDone':
 				this.respond(req, true, {});
@@ -145,20 +156,52 @@ export class DebugController {
 
 	private async setBreakpoints(req: Request, args: Args): Promise<void> {
 		const target = this.requireTarget();
-		const wanted: number[] = (args.breakpoints as { line: number }[] | undefined)?.map(b => b.line) ?? args.lines ?? [];
+		const requested: SourceBreakpoint[] = args.breakpoints ?? (args.lines as number[] | undefined)?.map(line => ({ line })) ?? [];
 		const sourcePath = String(args.source?.path ?? '');
 		const guest = target.paths.dapToGuest(sourcePath);
 		const guardsHere: number[] = [];
-		const results = wanted.map(line => {
+		const placed: PlacedSpec[] = [];
+		const results = requested.map(({ line, condition, hitCondition, logMessage }) => {
 			if (guest === undefined) { return { verified: false, line, message: `${sourcePath} is outside the workspace folder, which is all the debugger can map to the program's sources.` }; }
 			const file = this.dwarfFileFor(guest);
 			const resolved = file === undefined ? undefined : this.breakpoints!.resolve(file, line);
 			if (!resolved) { return { verified: false, line, message: `no code at or after line ${line} of ${guest}; did you mean to build in debug mode, or is this file part of the program?` }; }
 			guardsHere.push(...resolved.guards);
+			placed.push({ pcs: resolved.guards.map(g => target.scan.guardSites.get(g)!.pc), spec: { key: `${guest}:${resolved.line}`, condition: condition || undefined, hitCondition: hitCondition || undefined, logMessage: logMessage || undefined } });
 			const message = resolved.stopsAtLine === undefined ? undefined : `Stops when the block containing this line starts (line ${resolved.stopsAtLine}); the debugger can only stop at block starts.`;
 			return { verified: true, line: resolved.line, ...(message ? { message } : {}) };
 		});
 		this.guardsBySource.set(guest ?? sourcePath, guardsHere);
+		this.specsBySource.set(guest ?? sourcePath, placed);
+		this.respond(req, true, { breakpoints: results });
+		await this.syncBreakpoints();
+	}
+
+	/**
+	 * A function breakpoint matches the demangled name (`add`, `ns::add`, `Foo::bar` or `add(int, int)`) and stops
+	 * at the function's first body line, where a step into it lands; the `{` entry guard is before the parameters are stored.
+	 */
+	private async setFunctionBreakpoints(req: Request, args: Args): Promise<void> {
+		const target = this.requireTarget();
+		const requested: FunctionBreakpoint[] = args.breakpoints ?? [];
+		const guards: number[] = [];
+		const placed: PlacedSpec[] = [];
+		const results = requested.map(({ name, condition, hitCondition }) => {
+			const funcs = new Set([...target.scan.module.names].filter(([, n]) => functionNameMatches(n, name.trim())).map(([i]) => i));
+			const sites = [...target.scan.guardSites].filter(([, s]) => funcs.has(s.funcIndex)).sort((a, b) => a[1].pc - b[1].pc);
+			if (sites.length === 0) { return { verified: false, message: `no function named "${name}" has code in this program; did you mean its name with the namespace or class (ns::f, Foo::bar), or to build in debug mode?` }; }
+			const picked = new Map<number, [number, number]>(); // function index -> [guard, pc] of its first body guard (else its only one)
+			for (const [guard, site] of sites) {
+				const have = picked.get(site.funcIndex);
+				if (!have || (this.breakpoints!.isEntryGuard(have[1]) && !this.breakpoints!.isEntryGuard(site.pc))) { picked.set(site.funcIndex, [guard, site.pc]); }
+			}
+			guards.push(...[...picked.values()].map(p => p[0]));
+			placed.push({ pcs: [...picked.values()].map(p => p[1]), spec: { key: `fn:${name}`, condition: condition || undefined, hitCondition: hitCondition || undefined } });
+			const line = this.breakpoints!.lineAt([...picked.values()][0][1])?.line;
+			return { verified: true, ...(line ? { line } : {}) };
+		});
+		this.guardsBySource.set('\0functions', guards);
+		this.specsBySource.set('\0functions', placed);
 		this.respond(req, true, { breakpoints: results });
 		await this.syncBreakpoints();
 	}
@@ -232,7 +275,6 @@ export class DebugController {
 				return;
 			}
 		}
-		this.stepping = undefined;
 		const target = this.requireTarget();
 		const lldbFrames = event.frames.filter(f => target.scan.frameBaseLocals.has(f.funcIndex)).map(f => ({ funcIndex: f.funcIndex, pc: f.pc, sp: f.sp, frameBaseLocal: target.scan.frameBaseLocals.get(f.funcIndex)! }));
 		this.stop = { frames: event.frames, lldbFrames };
@@ -240,10 +282,71 @@ export class DebugController {
 		this.memory.clear();
 		target.reactor.setMemory({ read: this.memory.read });
 		target.reactor.setStop(lldbFrames);
+		if (event.reason === 'breakpoint' && event.frames[0]) {
+			const verdict = await this.breakpointVerdict(event.frames[0].pc);
+			if (!verdict.stop) {
+				// A condition, hit count or logpoint said not to stop: carry on with whatever the user was doing.
+				this.stop = undefined;
+				await this.resume(step?.kind ?? 'continue');
+				return;
+			}
+			if (verdict.error) { this.send({ type: 'event', event: 'output', body: { category: 'important', output: `vscwClang: ${verdict.error}\n` } }); }
+		}
+		this.stepping = undefined;
 		await this.syncBreakpoints();
 		const reason = event.reason === 'step' && this.entryPending ? 'entry' : event.reason;
 		this.entryPending = false;
 		this.send({ type: 'event', event: 'stopped', body: { reason, threadId: THREAD_ID, allThreadsStopped: true } });
+	}
+
+	/**
+	 * Decides whether the breakpoint(s) at `pc` really stop: the condition must hold, then the hit count (counting only
+	 * hits whose condition held) must match, and a logpoint prints instead of stopping. A condition that cannot be
+	 * evaluated stops, with the reason, so a typo is noticed rather than silently skipped.
+	 */
+	private async breakpointVerdict(pc: number): Promise<{ stop: boolean; error?: string }> {
+		const specs = [...this.specsBySource.values()].flat().filter(p => p.pcs.includes(pc)).map(p => p.spec);
+		if (specs.length === 0) { return { stop: true }; }
+		let stop = false;
+		let error: string | undefined;
+		for (const spec of specs) {
+			try {
+				if (spec.condition && !await this.evaluateCondition(spec.condition)) { continue; }
+				const hits = (this.hitCounts.get(spec.key) ?? 0) + 1;
+				this.hitCounts.set(spec.key, hits);
+				if (spec.hitCondition && !hitConditionMatches(spec.hitCondition, hits)) { continue; }
+				if (spec.logMessage !== undefined) { await this.logPoint(spec.logMessage); continue; }
+				stop = true;
+			} catch (e) {
+				stop = true;
+				error = `breakpoint condition "${spec.condition ?? spec.hitCondition}" failed, so the program stopped: ${e instanceof Error ? e.message : String(e)}`;
+			}
+		}
+		return { stop, error };
+	}
+
+	private async evaluateValue(expression: string, frame = 0) {
+		const target = this.requireTarget();
+		const stop = this.stop;
+		return evaluateWithMemory(this.memory, pages => this.fetchPages(pages),
+			() => evaluateExpression(expression, path => scalarFromFormatted(path, target.reactor.formatValue(frame, path))),
+			() => { if (stop) { target.reactor.setStop(stop.lldbFrames); } });
+	}
+
+	private async evaluateCondition(condition: string): Promise<boolean> {
+		const v = await this.evaluateValue(condition);
+		return typeof v === 'boolean' ? v : v !== 0;
+	}
+
+	private async logPoint(template: string): Promise<void> {
+		const expressions: string[] = [];
+		formatLogMessage(template, expression => { expressions.push(expression); return ''; });
+		const values: string[] = [];
+		for (const expression of expressions) {
+			values.push(await this.evaluateValue(expression).then(String, e => `<${e instanceof Error ? e.message : String(e)}>`));
+		}
+		let i = 0;
+		this.send({ type: 'event', event: 'output', body: { category: 'console', output: `${formatLogMessage(template, () => values[i++])}\n` } });
 	}
 
 	private locate(pc: number): Location | undefined {
@@ -265,7 +368,8 @@ export class DebugController {
 		const frames = stop.lldbFrames.map((f, i) => {
 			const location = this.locate(f.pc);
 			const dapPath = location && target.paths.guestToDap(location.file);
-			const name = target.scan.module.names.get(f.funcIndex) ?? `wasm-function[${f.funcIndex}]`;
+			const wasmName = target.scan.module.names.get(f.funcIndex);
+			const name = wasmName === undefined ? `wasm-function[${f.funcIndex}]` : displayFunctionName(wasmName);
 			const source = location ? { name: location.file.slice(Math.max(location.file.lastIndexOf('/'), location.file.lastIndexOf('\\')) + 1), ...(dapPath ? { path: dapPath } : {}) } : undefined;
 			return { id: i + 1, name, ...(source ? { source } : {}), line: location?.line ?? 0, column: 1 };
 		});
@@ -306,7 +410,10 @@ export class DebugController {
 		const stop = this.requireStopped('evaluate');
 		const frame = args.frameId === undefined ? 0 : Number(args.frameId) - 1;
 		const expression = String(args.expression ?? '').trim();
-		const result = await evaluateWithMemory(this.memory, pages => this.fetchPages(pages), () => target.reactor.formatValue(frame, expression), () => target.reactor.setStop(stop.lldbFrames));
+		// A lone variable path keeps lldb's type and children; anything else (`a + b`, `i == 3`) is computed here.
+		const result = isPlainPath(expression)
+			? await evaluateWithMemory(this.memory, pages => this.fetchPages(pages), () => target.reactor.formatValue(frame, expression), () => target.reactor.setStop(stop.lldbFrames))
+			: String(await this.evaluateValue(expression, frame));
 		this.respond(req, true, { result, variablesReference: 0 });
 	}
 

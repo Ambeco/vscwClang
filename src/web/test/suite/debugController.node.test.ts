@@ -164,7 +164,10 @@ suiteIfFixtures('DebugController (real stub program, real lldb reactor, worker w
 		const caps = await client.ok('initialize');
 		assert.strictEqual(caps.supportsConfigurationDoneRequest, true);
 		assert.strictEqual(caps.supportsEvaluateForHovers, true);
-		assert.strictEqual(caps.supportsFunctionBreakpoints, undefined);
+		assert.strictEqual(caps.supportsFunctionBreakpoints, true);
+		assert.strictEqual(caps.supportsConditionalBreakpoints, true);
+		assert.strictEqual(caps.supportsHitConditionalBreakpoints, true);
+		assert.strictEqual(caps.supportsLogPoints, true);
 	});
 
 	test('a breakpoint stops with the call stack, source lines and values', async () => {
@@ -172,7 +175,7 @@ suiteIfFixtures('DebugController (real stub program, real lldb reactor, worker w
 		const stopped = await client.event('stopped');
 		assert.strictEqual(stopped.body.reason, 'breakpoint');
 		const frames = await topFrames();
-		assert.deepStrictEqual(frames.map(f => f.name), ['add', 'caller', '__original_main']);
+		assert.deepStrictEqual(frames.map(f => f.name), ['add', 'caller', 'main']);
 		assert.strictEqual(frames[0].line, 5);
 		assert.strictEqual(frames[0].source?.name, 'prog.c');
 		assert.match(frames[0].source?.path ?? '', /prog\.c$/);
@@ -280,7 +283,7 @@ suiteIfFixtures('DebugController (real stub program, real lldb reactor, worker w
 	test('step over moves to the next line in the same function; step out returns to the caller; step in enters the callee', async () => {
 		await start({}, [10]);
 		await client.event('stopped');
-		assert.deepStrictEqual((await topFrames()).map(f => f.name), ['caller', '__original_main']);
+		assert.deepStrictEqual((await topFrames()).map(f => f.name), ['caller', 'main']);
 
 		await client.ok('stepIn', { threadId: 1 }); // caller's entry block calls add(): stepping in enters it
 		await client.event('stopped');
@@ -290,7 +293,7 @@ suiteIfFixtures('DebugController (real stub program, real lldb reactor, worker w
 			await client.event('stopped');
 			frames = await topFrames();
 		}
-		assert.deepStrictEqual(frames.map(f => f.name), ['add', 'caller', '__original_main']);
+		assert.deepStrictEqual(frames.map(f => f.name), ['add', 'caller', 'main']);
 		assert.strictEqual(client.events('stopped').at(-1)!.body.reason, 'step');
 
 		await client.ok('next', { threadId: 1 });
@@ -302,7 +305,7 @@ suiteIfFixtures('DebugController (real stub program, real lldb reactor, worker w
 		await client.ok('stepOut', { threadId: 1 });
 		await client.event('stopped');
 		frames = await topFrames();
-		assert.deepStrictEqual(frames.map(f => f.name), ['caller', '__original_main']);
+		assert.deepStrictEqual(frames.map(f => f.name), ['caller', 'main']);
 
 		await client.ok('continue', { threadId: 1 });
 		assert.strictEqual((await client.event('exited')).body.exitCode, 11);
@@ -311,7 +314,7 @@ suiteIfFixtures('DebugController (real stub program, real lldb reactor, worker w
 	test('stopOnEntry stops in main before any of its code runs', async () => {
 		await start({ stopOnEntry: true });
 		assert.strictEqual((await client.event('stopped')).body.reason, 'entry');
-		assert.strictEqual((await topFrames())[0].name, '__original_main');
+		assert.strictEqual((await topFrames())[0].name, 'main');
 		await client.ok('continue', { threadId: 1 });
 		assert.strictEqual((await client.event('exited')).body.exitCode, 11);
 	});

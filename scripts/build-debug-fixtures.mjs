@@ -1,4 +1,4 @@
-// Rebuilds the debug-stub test fixtures (progstub.wasm, chattystub.wasm) from src/web/debug/debugStub.c with the
+// Rebuilds the debug-stub test fixtures (progstub.wasm, chattystub.wasm, loopstub.wasm) from src/web/debug/debugStub.c with the
 // repo's own clang.wasm and lld.wasm under node:wasi, so they track the stub. Needs llvm-artifacts/ (bin, sysroot,
 // resource, compile-flags.json). Run after changing debugStub.c: node scripts/build-debug-fixtures.mjs
 import { WASI } from 'node:wasi';
@@ -31,7 +31,7 @@ const work = mkdtempSync(join(tmpdir(), 'vscw-fixtures-'));
 try {
 	const compile = flags.compile['wasm32-wasip1'].map(sub);
 	await run('clang.wasm', ['clang', ...compile, '-O2', '-c', '/stub/debugStub.c', '-o', '/work/debugStub.o'], work);
-	for (const name of ['prog', 'chatty']) {
+	for (const name of ['prog', 'chatty', 'loop']) {
 		await run('clang.wasm', ['clang', ...compile, '-O0', '-g', '-fsanitize-coverage=trace-pc-guard,no-prune', ...(flags.debugCoverage ?? []), '-fdebug-prefix-map=/src/=', '-fdebug-prefix-map=/work=', '-c', `/src/${name}.c`, '-o', `/work/${name}.o`], work);
 		const link = flags.link['wasm32-wasip1'].map(sub);
 		await run('lld.wasm', ['wasm-ld', link[0], `/work/${name}.o`, '/work/debugStub.o', '--export=__sanitizer_cov_trace_pc_guard', ...link.slice(1), '-o', `/work/${name}stub.wasm`], work);
