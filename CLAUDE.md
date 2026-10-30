@@ -1,5 +1,6 @@
 # Dev loop
 
+- Node tests find the toolchain via `src/web/test/artifacts.ts`: `VSCWCLANG_ARTIFACTS`, else `./llvm-artifacts`, else the newest `../../llvm-project/release/<tag>`. The browser suite needs `llvm-artifacts/dist`, which can be a junction to the publish repo's `dist`.
 - `npm run test-node` runs the fast, vscode-free tests (`*.node.test.ts`). `npm test` runs the in-browser suite under `@vscode/test-web`: it opens a visible Chromium window, needs `llvm-artifacts/` locally, and builds `llvm-artifacts/dist` first if it is missing. Port 3000 must be free.
 - `npm run package-web` makes the production bundle; `npx @vscode/vsce package --no-dependencies` makes the VSIX. The extension is browser-only and cannot run on desktop VS Code (see `documents/notes.md`).
 - Try a local build on vscode.dev: serve the repo with `npx serve --cors -l 5000`, then "Developer: Install Extension from Location..." (reload the tab after rebuilding).
