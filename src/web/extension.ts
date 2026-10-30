@@ -7,7 +7,7 @@ import { runProgram } from './runProgram';
 import { joinArgs, splitArgs } from './toolchain/runEnvironment';
 import { registerTaskProvider } from './tasks';
 import { publishDiagnostics } from './toolchain/diagnosticsCollection';
-import { getToolchainStore } from './toolchain/toolchain';
+import { buildCacheStats, clearBuildCache, getToolchainStore } from './toolchain/toolchain';
 import { startClangdClient } from './clangd/clangdClient';
 
 export function activate(context: vscode.ExtensionContext) {
@@ -56,6 +56,11 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('vscwclang.clearToolchainCache', async () => {
 			await getToolchainStore(context, log).clear();
 			void vscode.window.showInformationMessage('vscwClang: downloaded toolchain removed; it will be downloaded again on next use.');
+		}),
+		vscode.commands.registerCommand('vscwclang.clearBuildCache', async () => {
+			const before = await buildCacheStats();
+			await clearBuildCache();
+			void vscode.window.showInformationMessage(`vscwClang: build cache cleared (${before.objects} objects, ${(before.bytes / 1048576).toFixed(1)} MB); the next build recompiles everything.`);
 		}),
 		registerTaskProvider(context, log),
 		vscode.debug.registerDebugConfigurationProvider('vscwclang', {

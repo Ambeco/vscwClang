@@ -1,4 +1,5 @@
 import * as assert from 'assert';
+import { CacheStorageByteStore, ObjectCache } from '../../toolchain/objectCache';
 
 // Probe: is the Cache API usable from the extension host, and how does it behave with object-sized blobs?
 suite('CacheStorage probe (in browser)', function () {
@@ -14,6 +15,20 @@ suite('CacheStorage probe (in browser)', function () {
 		const back = new Uint8Array(await (await cache.match('https://vscwclang.invalid/obj/abc'))!.arrayBuffer());
 		assert.deepStrictEqual(back, bytes);
 		assert.strictEqual(await cache.match('https://vscwclang.invalid/obj/missing'), undefined);
+	});
+
+	test('ObjectCache over CacheStorageByteStore survives a new instance, and clear() deletes the cache', async () => {
+		const read = async () => undefined;
+		const object = new Uint8Array([1, 2, 3, 4]);
+		const first = new ObjectCache(new CacheStorageByteStore(NAME));
+		assert.ok(await first.store('k', 'args', 'src', [], object, 'w', read));
+		await first.flush();
+		const second = new ObjectCache(new CacheStorageByteStore(NAME));
+		const hit = await second.lookup('k', 'args', 'src', read);
+		assert.deepStrictEqual([hit?.stderr, hit?.object], ['w', object]);
+		assert.strictEqual((await second.stats()).objects, 1);
+		await second.clear();
+		assert.strictEqual(await caches.has(NAME), false);
 	});
 
 	test('timing and quota for 64 objects of 2 MB', async () => {

@@ -98,7 +98,8 @@ suite('vscwClang build (in browser)', function () {
 		assert.deepStrictEqual([sourceEdit.compiled, sourceEdit.linked, sourceEdit.ran], [['inc-b.cpp'], true, '21']);
 		await write('inc-a.h', '#pragma once\nint a();\n// touched\n');
 		const headerEdit = await rebuild();
-		assert.deepStrictEqual([headerEdit.compiled.sort(), headerEdit.linked], [['inc-a.cpp', 'inc-main.cpp'], true]);
+		// The comment changes no object byte, and objects are identified by content, so the link is skipped too.
+		assert.deepStrictEqual([headerEdit.compiled.sort(), headerEdit.linked], [['inc-a.cpp', 'inc-main.cpp'], false]);
 	});
 
 	test('objects stay in memory: no scratch folder is written to the workspace', async () => {

@@ -6,7 +6,7 @@ import { createGuestWorker } from '../host/workerHost';
 import { parseDiagnostics, withFailureFallback, type ParsedDiagnostic } from './diagnostics';
 import { checkUserFlags, splitFlags } from './flagPolicy';
 import { GUEST_WORKSPACE, fromGuestPath, toGuestPath } from './guestPaths';
-import { ObjectCache, hashText, splitIncludeTrace, type LinkRecord, type ReadGuestFile } from './objectCache';
+import { ObjectCache, defaultByteStore, hashText, splitIncludeTrace, type LinkRecord, type ReadGuestFile } from './objectCache';
 import { sha256Hex } from './toolchainDownload';
 import { loadCompileFlags, loadSysrootGuestFs } from './sysroot';
 import { ToolchainStore, type StoreContext } from './toolchainStore';
@@ -40,14 +40,19 @@ export interface BuildResult {
 
 const SLICE = 'wasm32-wasip1';
 
-/** Compiled objects and link results kept for the session, so an unchanged tree skips the build and an edit recompiles only what it touches. */
-const objectCache = new ObjectCache();
+/** Compiled objects (kept in the browser's Cache API) and link results (this session only), so an unchanged tree skips the build and an edit recompiles only what it touches. */
+const objectCache = new ObjectCache(defaultByteStore('vscwclang-objects-v1'));
 const lastLinks = new Map<string, LinkRecord>();
 
 /** Drops every cached object and link result; the next build recompiles everything. */
-export function clearBuildCache(): void {
-	objectCache.clear();
+export async function clearBuildCache(): Promise<void> {
 	lastLinks.clear();
+	await objectCache.clear();
+}
+
+/** Number of cached sources, distinct objects and their total bytes. */
+export function buildCacheStats(): Promise<{ entries: number; objects: number; bytes: number }> {
+	return objectCache.stats();
 }
 const GUEST_OUT = '/out';
 
@@ -122,7 +127,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 	};
 	const toolchainVersion = await toolchain.version();
 	const cacheScope = `${folder.toString()}|${request.mode}|`;
-	const objectIds: number[] = [];
+	const objectIds: (string | undefined)[] = [];
 	for (const [i, source] of sources.entries()) {
 		const base = source.guest.slice(source.guest.lastIndexOf('/') + 1);
 		const objectName = `${i}-${base}.o`;
@@ -155,7 +160,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 			objects.setFile(objectName, cc.stdout);
 			objectPaths.push(`/obj/${objectName}`);
 			const entry = sourceHash ? await objectCache.store(cacheKey, argsKey, sourceHash, trace.headers, cc.stdout, trace.stderr, readGuest) : undefined;
-			objectIds.push(entry?.id ?? -Date.now());
+			objectIds.push(entry?.id);
 		} else if (exitCode === 0) {
 			exitCode = cc.exitCode;
 		}
@@ -166,7 +171,7 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 		const linkKey = await hashText([toolchainVersion, request.output.toString(), objectIds.join(','), ...linkArgs].join(NL));
 		const previous = lastLinks.get(request.output.toString());
 		const outputStat = previous?.key === linkKey ? await vscode.workspace.fs.stat(request.output).then(s => s, () => undefined) : undefined;
-		if (previous && outputStat && outputStat.mtime === previous.mtime && objectIds.every(id => id > 0)) {
+		if (previous && outputStat && outputStat.mtime === previous.mtime && objectIds.every(id => id !== undefined)) {
 			log.appendLine(`[vscwclang] up to date ${output} (nothing to compile or link)`);
 			diagnostics += previous.stderr;
 		} else {
@@ -177,12 +182,13 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 			diagnostics += ld.stderr;
 			exitCode = ld.exitCode;
 			lastLinks.delete(request.output.toString());
-			if (ld.exitCode === 0 && objectIds.every(id => id > 0)) {
+			if (ld.exitCode === 0 && objectIds.every(id => id !== undefined)) {
 				const stat = await vscode.workspace.fs.stat(request.output).then(s => s, () => undefined);
 				if (stat) { lastLinks.set(request.output.toString(), { key: linkKey, mtime: stat.mtime, stderr: ld.stderr } satisfies LinkRecord); }
 			}
 		}
 	}
+	await objectCache.flush().catch(e => log.appendLine(`[vscwclang] warning: could not save the build cache: ${e instanceof Error ? e.message : String(e)}`));
 	return { exitCode, diagnostics, parsed: withFailureFallback(parseDiagnostics(diagnostics), exitCode, diagnostics) };
 }
 

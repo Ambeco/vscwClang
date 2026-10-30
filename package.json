@@ -22,6 +22,7 @@
     "onCommand:vscwclang.build",
     "onCommand:vscwclang.downloadToolchain",
     "onCommand:vscwclang.clearToolchainCache",
+    "onCommand:vscwclang.clearBuildCache",
     "onCommand:vscwclang.run",
     "onCommand:vscwclang.runWithArgs",
     "onTaskType:vscwclang",
@@ -262,6 +263,10 @@
       {
         "command": "vscwclang.clearToolchainCache",
         "title": "vscwClang: Clear downloaded toolchain"
+      },
+      {
+        "command": "vscwclang.clearBuildCache",
+        "title": "vscwClang: Clear build cache"
       }
     ],
     "breakpoints": [
