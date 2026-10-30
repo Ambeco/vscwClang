@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { nodeReactorThreads } from '../reactorThreads';
 import { artifactReactor } from '../artifacts';
 import { BreakpointIndex } from '../../debug/breakpointIndex';
 import { DebugController, type DebugTarget } from '../../debug/debugController';
@@ -128,7 +129,7 @@ suiteIfFixtures('DebugController (real stub program, real lldb reactor, worker w
 	let client: ReturnType<typeof makeClient>;
 
 	suiteSetup(async () => {
-		reactor = await ReactorHost.create(await WebAssembly.compile(readFileSync(REACTOR)));
+		reactor = await ReactorHost.create(readFileSync(REACTOR), undefined, undefined, nodeReactorThreads());
 		reactor.createTarget(program);
 	});
 
@@ -367,7 +368,7 @@ suiteIfChatty('DebugController program output (chatty.c: prompt, scanf, stderr, 
 	test('stdout and stderr of the program arrive as output events, byte-exact around the stub frames', async () => {
 		const program = new Uint8Array(readFileSync(CHATTY));
 		const scan = scanProgram(program);
-		const reactor = await ReactorHost.create(await WebAssembly.compile(readFileSync(REACTOR)));
+		const reactor = await ReactorHost.create(readFileSync(REACTOR), undefined, undefined, nodeReactorThreads());
 		reactor.createTarget(program);
 		let worker: Debuggee | undefined;
 		const client = makeClient(async () => {
@@ -409,7 +410,7 @@ suiteIfFixtures('DebugController with a scripted host', function () {
 	test('breakpoints set while the program runs are queued, and armed at the next stop before it is reported', async () => {
 		const program = new Uint8Array(readFileSync(PROG));
 		const scan = scanProgram(program);
-		const reactor = await ReactorHost.create(await WebAssembly.compile(readFileSync(REACTOR)));
+		const reactor = await ReactorHost.create(readFileSync(REACTOR), undefined, undefined, nodeReactorThreads());
 		reactor.createTarget(program);
 		const fake = new FakeSession();
 		const client = makeClient(async () => ({ session: fake, reactor, program, scan, paths: identity }));
@@ -430,7 +431,7 @@ suiteIfFixtures('DebugController with a scripted host', function () {
 	test("the target's notice is shown in the Debug Console when the launch succeeds", async () => {
 		const program = new Uint8Array(readFileSync(PROG));
 		const scan = scanProgram(program);
-		const reactor = await ReactorHost.create(await WebAssembly.compile(readFileSync(REACTOR)));
+		const reactor = await ReactorHost.create(readFileSync(REACTOR), undefined, undefined, nodeReactorThreads());
 		reactor.createTarget(program);
 		const client = makeClient(async () => ({ session: new FakeSession(), reactor, program, scan, paths: identity, notice: 'output is in the terminal' }));
 		await client.ok('initialize'); await client.ok('launch', {});
@@ -441,7 +442,7 @@ suiteIfFixtures('DebugController with a scripted host', function () {
 	test('a host error after launch is an important (notification) message, then the session ends', async () => {
 		const program = new Uint8Array(readFileSync(PROG));
 		const scan = scanProgram(program);
-		const reactor = await ReactorHost.create(await WebAssembly.compile(readFileSync(REACTOR)));
+		const reactor = await ReactorHost.create(readFileSync(REACTOR), undefined, undefined, nodeReactorThreads());
 		reactor.createTarget(program);
 		const fake = new FakeSession();
 		const client = makeClient(async () => ({ session: fake, reactor, program, scan, paths: identity }));

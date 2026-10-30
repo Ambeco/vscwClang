@@ -121,6 +121,7 @@ export class DebugController {
 			case 'terminate':
 			case 'disconnect':
 				await this.target?.session.terminate();
+				this.target?.reactor.dispose();
 				this.respond(req, true, {});
 				if (req.command === 'terminate') { this.finish(); }
 				return;

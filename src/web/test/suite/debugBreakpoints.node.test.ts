@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { nodeReactorThreads } from '../reactorThreads';
 import { artifactReactor } from '../artifacts';
 import { DebugController, type DebugTarget } from '../../debug/debugController';
 import { evaluateExpression, formatLogMessage, hitConditionMatches, isPlainPath, scalarFromFormatted } from '../../debug/debugExpression';
@@ -137,7 +138,7 @@ suiteIfFixtures('DebugController conditional breakpoints, hit counts, logpoints 
 	let client: DapClient;
 
 	suiteSetup(async () => {
-		reactor = await ReactorHost.create(await WebAssembly.compile(readFileSync(REACTOR)));
+		reactor = await ReactorHost.create(readFileSync(REACTOR), undefined, undefined, nodeReactorThreads());
 		reactor.createTarget(program);
 	});
 

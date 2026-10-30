@@ -1,3 +1,4 @@
+import type { WorkerThreads } from '../host/workerThreads';
 import { ConsoleStdout, File, OpenFile, PreopenDirectory, WASI, type Fd } from '@bjorn3/browser_wasi_shim';
 
 /** The debuggee's linear memory as the reactor sees it; `read` may return fewer bytes than asked (a short read). */
@@ -63,11 +64,17 @@ export class ReactorHost {
 	private memory: TargetMemory = { read() { throw new Error('vscwClang: the debuggee memory is not attached yet; call setMemory() before formatValue().'); } };
 	private targetBytes: File;
 
+	private threads: WorkerThreads | undefined;
+
 	private constructor(private readonly exp: ReactorExports, targetBytes: File) {
 		this.targetBytes = targetBytes;
 	}
 
-	static async create(module: WebAssembly.Module, memory?: TargetMemory, log: (line: string) => void = () => undefined): Promise<ReactorHost> {
+	/**
+	 * `wasm` is the reactor's binary. A wasi-threads build imports its memory (limits read from the bytes) and starts
+	 * threads while loading debug info, so it needs `threads`; without it `thread-spawn` fails and lldb aborts.
+	 */
+	static async create(wasm: Uint8Array, memory?: TargetMemory, log: (line: string) => void = () => undefined, threads?: WorkerThreads): Promise<ReactorHost> {
 		const target = new File(new Uint8Array(0));
 		const fds: Fd[] = [
 			new OpenFile(new File(new Uint8Array(0))),
@@ -77,22 +84,30 @@ export class ReactorHost {
 		];
 		const wasi = new WASI(['lldb-wasm-reactor'], [], fds, { debug: false });
 		let host: ReactorHost | undefined;
+		const module = await WebAssembly.compile(wasm as Uint8Array<ArrayBuffer>);
+		// lldb reads the target's file (and so its DWARF) from pool threads too, which have their own descriptor tables.
+		const threaded = threads?.imports(module, wasm, { preopens: [GUEST_DIR], files: () => ({ [`${GUEST_DIR}/${TARGET_FILE}`]: target.data }) });
 		const instance = await WebAssembly.instantiate(module, {
 			wasi_snapshot_preview1: wasi.wasiImport,
+			...threaded?.imports,
 			wasm_dbg: {
 				read_memory: (addr: bigint, buf: number, size: number) => host!.hostRead(Number(addr), buf, size),
 				write_memory: (addr: bigint, buf: number, size: number) => host!.hostWrite(Number(addr), buf, size),
 			},
 		});
-		const exp = instance.exports as unknown as ReactorExports;
+		const exp = { ...instance.exports, memory: threaded?.memory ?? instance.exports.memory } as unknown as ReactorExports;
 		wasi.initialize({ exports: { memory: exp.memory, _initialize: exp._initialize } });
 		host = new ReactorHost(exp, target);
+		host.threads = threads;
 		if (memory) { host.memory = memory; }
 		if (exp.wasm_dbg_init() !== 0) { throw new Error(`vscwClang: lldb-wasm-reactor failed to initialize: ${host.lastError()}`); }
 		return host;
 	}
 
 	setMemory(memory: TargetMemory): void { this.memory = memory; }
+
+	/** Ends the reactor's threads (if it has any); the host is unusable afterwards. */
+	dispose(): void { this.threads?.dispose(); }
 
 	/** Loads the program (with DWARF) to decode; replaces any earlier target. */
 	createTarget(program: Uint8Array): void {
@@ -194,7 +209,7 @@ export class ReactorHost {
 		const bytes = new Uint8Array(this.exp.memory.buffer);
 		let end = ptr;
 		while (end < ptr + maxLen && bytes[end] !== 0) { end++; }
-		return decoder.decode(bytes.subarray(ptr, end));
+		return decoder.decode(bytes.slice(ptr, end)); // slice: TextDecoder rejects views of a shared memory
 	}
 
 	private withCString<T>(text: string, use: (ptr: number) => T): T {

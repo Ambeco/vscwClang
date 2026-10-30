@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { nodeReactorThreads } from '../reactorThreads';
 import { artifactReactor } from '../artifacts';
 import { ReactorHost } from '../../debug/reactorHost';
 import { captureWasmFrames, mergeFrames, scanProgram, ShadowStack } from '../../debug/wasmScan';
@@ -42,7 +43,7 @@ suiteIfReactor('ReactorHost (real lldb-wasm-reactor.wasm, real debug build)', fu
 	let mem: () => Uint8Array;
 
 	suiteSetup(async () => {
-		host = await ReactorHost.create(await WebAssembly.compile(readFileSync(REACTOR)));
+		host = await ReactorHost.create(readFileSync(REACTOR), undefined, undefined, nodeReactorThreads());
 		host.createTarget(bytes);
 	});
 
@@ -108,7 +109,7 @@ suiteIfReactor('ReactorHost.variables (real lldb-wasm-reactor.wasm, locals.c)', 
 	let host: ReactorHost;
 
 	suiteSetup(async () => {
-		host = await ReactorHost.create(await WebAssembly.compile(readFileSync(REACTOR)));
+		host = await ReactorHost.create(readFileSync(REACTOR), undefined, undefined, nodeReactorThreads());
 		host.createTarget(bytes);
 	});
 
@@ -229,5 +230,22 @@ suiteIfReactor('ReactorHost.variables (real lldb-wasm-reactor.wasm, locals.c)', 
 	test('a by-value struct and a VLA are readable at the entry guard, before any user code ran', () => {
 		const pv = stopIn('mixed', 0, () => host.variables(0).find(v => v.name === 'pv'));
 		assert.ok(pv?.hasChildren, 'pv readable at entry');
+	});
+});
+
+const THREADED_REACTOR = join(process.cwd(), '..', '..', 'llvm-project', 'build-lldb', 'bin', 'lldb-wasm-reactor.wasm');
+
+(existsSync(THREADED_REACTOR) ? suite : suite.skip)('ReactorHost with the threaded (wasi-threads) reactor', function () {
+	this.timeout(120000);
+
+	test('lldb loads the target through its own thread pool (threads read the target file) and resolves a pc', async () => {
+		const threads = nodeReactorThreads();
+		try {
+			const host = await ReactorHost.create(readFileSync(THREADED_REACTOR), undefined, undefined, threads);
+			host.createTarget(new Uint8Array(readFileSync(PROG)));
+			assert.match(host.resolvePc(0x76), /prog\.c:\d+$/);
+		} finally {
+			threads.dispose();
+		}
 	});
 });

@@ -1,6 +1,5 @@
-import { existsSync, readdirSync, readFileSync } from 'fs';
+import { existsSync, readdirSync } from 'fs';
 import { join, resolve } from 'path';
-import { createSharedMemory } from '../host/sharedMemory';
 
 /**
  * Where the node tests find the toolchain: a folder with `bin/`, `sysroot/`, `resource/` and `compile-flags.json`.
@@ -32,9 +31,8 @@ export function artifactResource(): string {
 	return existsSync(nested) ? join(nested, readdirSync(nested)[0]) : flat;
 }
 
-/** The single-threaded lldb reactor (the host does not give it a shared memory); the release folder ships the threaded one. */
+/** The lldb reactor: a local `llvm-artifacts` copy, else the sibling `llvm-project` build (newer than the packaged release's, which can predate exports the tests need). */
 export function artifactReactor(): string {
-	const packaged = artifactBin('lldb-wasm-reactor.wasm');
-	if (!existsSync(packaged) || !createSharedMemory(readFileSync(packaged))) { return packaged; }
-	return resolve('..', '..', 'llvm-project', 'build-lldb-single-threaded', 'bin', 'lldb-wasm-reactor.wasm');
+	const candidates = [join(resolve('llvm-artifacts'), 'bin', 'lldb-wasm-reactor.wasm'), resolve('..', '..', 'llvm-project', 'build-lldb', 'bin', 'lldb-wasm-reactor.wasm')];
+	return candidates.find(existsSync) ?? artifactBin('lldb-wasm-reactor.wasm');
 }

@@ -5,6 +5,8 @@ import { getToolchainStore } from '../toolchain/toolchain';
 import { DebugController, type DebugTarget } from './debugController';
 import { ProgramTerminal } from '../host/programTerminal';
 import { workspacePathMapper } from './pathMapper';
+import { createGuestWorker } from '../host/workerHost';
+import { WorkerThreads } from '../host/workerThreads';
 import { ReactorHost } from './reactorHost';
 import { StubDebuggee } from './stubDebuggee';
 import { scanProgram } from './wasmScan';
@@ -55,8 +57,9 @@ export class VscwClangDebugAdapter implements vscode.DebugAdapter {
 		const program = await vscode.workspace.fs.readFile(plan.output) as Uint8Array<ArrayBuffer>;
 		const module = await WebAssembly.compile(program);
 		const scan = scanProgram(program);
-		const reactorModule = await WebAssembly.compile(await getToolchainStore(this.context, this.log).getFile('lldb-wasm-reactor.wasm'));
-		const reactor = await ReactorHost.create(reactorModule, undefined, line => this.log.appendLine(line));
+		const reactorBytes = await getToolchainStore(this.context, this.log).getFile('lldb-wasm-reactor.wasm');
+		const spawner = await createGuestWorker(this.context);
+		const reactor = await ReactorHost.create(reactorBytes, undefined, line => this.log.appendLine(line), new WorkerThreads(() => spawner, message => this.log.appendLine(`[vscwclang] lldb thread: ${message}`)));
 		reactor.createTarget(program);
 
 		const environment = await workerProgramEnvironment(this.context);

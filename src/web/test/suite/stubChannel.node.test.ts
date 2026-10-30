@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { nodeReactorThreads } from '../reactorThreads';
 import { artifactReactor } from '../artifacts';
 import { ReactorHost } from '../../debug/reactorHost';
 import { evaluateWithMemory, PAGE_SIZE, PagedMemory } from '../../debug/pagedMemory';
@@ -127,7 +128,7 @@ suiteIfFixtures('stub + real program + real lldb reactor (worker with a blocking
 	let commandsSent: string[];
 
 	suiteSetup(async () => {
-		host = await ReactorHost.create(await WebAssembly.compile(readFileSync(REACTOR)));
+		host = await ReactorHost.create(readFileSync(REACTOR), undefined, undefined, nodeReactorThreads());
 		host.createTarget(wasm);
 	});
 
