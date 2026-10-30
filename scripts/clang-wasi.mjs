@@ -83,23 +83,51 @@ function interruptibleClockSleep(imports, memory) {
 	};
 }
 
+const TRACE = !!process.env.VSCWCLANG_WASI_TRACE;
+const T0 = workerData?.t0 ?? performance.timeOrigin;
+const stamp = () => Math.round(performance.timeOrigin + performance.now() - T0);
+
+/** With VSCWCLANG_WASI_TRACE set: wraps every WASI import to count calls and time spent in them; returns the reporter. */
+function traceImports(imports, label) {
+	const stats = new Map();
+	const wasiImports = imports.wasi_snapshot_preview1;
+	for (const [name, fn] of Object.entries(wasiImports)) {
+		wasiImports[name] = (...a) => {
+			const t = performance.now();
+			try { return fn(...a); } finally {
+				const s = stats.get(name) ?? { n: 0, ms: 0 };
+				s.n++; s.ms += performance.now() - t; stats.set(name, s);
+			}
+		};
+	}
+	return () => {
+		const rows = [...stats].sort((x, y) => y[1].ms - x[1].ms).slice(0, 6).map(([n, s]) => `${n} x${s.n} ${s.ms.toFixed(0)}ms`);
+		const total = [...stats.values()].reduce((t, s) => t + s.ms, 0);
+		writeSync(2, `[trace +${stamp()}ms] ${label} done; WASI total ${total.toFixed(0)}ms: ${rows.join(', ')}
+`);
+	};
+}
+
 /** Builds the import object for the main instance or a thread; `spawn` is the `wasi.thread-spawn` implementation. */
 function makeImports(config, memory, tidCounter) {
 	const { module, preopens, stdoutFd, stderrFd } = config;
 	const wasi = new WASI({ version: 'preview1', args: config.args, returnOnExit: true, preopens, stdout: stdoutFd, stderr: stderrFd, env: {} });
 	const imports = wasi.getImportObject();
-	if (!memory) { return { wasi, imports }; }
+	const report = TRACE ? traceImports(imports, memory ? `thread ${config.tid ?? 0}` : 'main (unthreaded)') : () => {};
+	if (!memory) { return { wasi, imports, report }; }
 	interruptibleClockSleep(imports.wasi_snapshot_preview1, memory);
 	imports.env = { memory };
 	imports.wasi = {
 		'thread-spawn': (startArg) => {
 			const tid = Atomics.add(tidCounter, 0, 1);
-			const worker = new Worker(new URL(import.meta.url), { workerData: { clangWasiThread: true, ...config, module, memory, tid, startArg, tidCounterBuffer: tidCounter.buffer } });
+				if (TRACE) { writeSync(2, `[trace +${stamp()}ms] thread-spawn tid=${tid} startArg=${startArg}
+`); }
+			const worker = new Worker(new URL(import.meta.url), { workerData: { clangWasiThread: true, t0: T0, ...config, module, memory, tid, startArg, tidCounterBuffer: tidCounter.buffer } });
 			worker.on('error', (e) => writeSync(stderrFd, `[thread ${tid}] worker error: ${e?.stack ?? e}\n`));
 			return tid;
 		},
 	};
-	return { wasi, imports };
+	return { wasi, imports, report };
 }
 
 if (!isMainThread && workerData?.clangWasi) {
@@ -114,9 +142,12 @@ if (!isMainThread && workerData?.clangWasi) {
 			tidCounter = new Int32Array(new SharedArrayBuffer(4));
 			Atomics.store(tidCounter, 0, 1);
 		}
-		const { wasi, imports } = makeImports(workerData, memory, tidCounter);
+		const { wasi, imports, report } = makeImports(workerData, memory, tidCounter);
 		const instance = await WebAssembly.instantiate(module, imports);
+		if (TRACE) { writeSync(2, `[trace +${stamp()}ms] main instantiated
+`); }
 		code = wasi.start(memory ? fakeInstance(instance, memory, false) : instance);
+		report();
 	} catch (e) {
 		code = 139;
 		writeFileSync(stderrFd, `crashed inside WebAssembly: ${e?.message ?? e}\n`);
@@ -128,10 +159,13 @@ if (!isMainThread && workerData?.clangWasi) {
 if (!isMainThread && workerData?.clangWasiThread) {
 	const { module, memory, tid, startArg, tidCounterBuffer, stderrFd } = workerData;
 	try {
-		const { wasi, imports } = makeImports(workerData, memory, new Int32Array(tidCounterBuffer));
+		const { wasi, imports, report } = makeImports(workerData, memory, new Int32Array(tidCounterBuffer));
 		const instance = await WebAssembly.instantiate(module, imports);
 		wasi.finalizeBindings(fakeInstance(instance, memory, true));
+		if (TRACE) { writeSync(2, `[trace +${stamp()}ms] thread ${tid} entering wasi_thread_start
+`); }
 		instance.exports.wasi_thread_start(tid, startArg);
+		report();
 	} catch (e) {
 		writeSync(stderrFd, `[thread ${tid}] trapped: ${e?.message ?? e}\n`);
 	}
@@ -148,7 +182,7 @@ export async function runWasi(module, args, preopens, bytes) {
 		const outPath = join(dir, 'out'), errPath = join(dir, 'err');
 		const stdoutFd = openSync(outPath, 'w'), stderrFd = openSync(errPath, 'w');
 		const started = performance.now();
-		const worker = new Worker(new URL(import.meta.url), { workerData: { clangWasi: true, module, bytes, args, preopens, stdoutFd, stderrFd } });
+		const worker = new Worker(new URL(import.meta.url), { workerData: { clangWasi: true, t0: performance.timeOrigin + performance.now(), module, bytes, args, preopens, stdoutFd, stderrFd } });
 		const code = await new Promise((resolve, reject) => {
 			worker.once('message', m => resolve(m.code));
 			worker.once('error', reject);
