@@ -36,6 +36,8 @@ export interface GuestOptions {
 	services: GuestServices;
 	/** stdio reports as a terminal, so `isatty` is true and libc line-buffers stdout. Only for user programs. */
 	terminal?: boolean;
+	/** The module's imported shared memory (wasi-threads modules own none, so the instance exports no `memory`). */
+	memory?: WebAssembly.Memory;
 }
 
 export type GuestResult =
@@ -106,9 +108,25 @@ export class GuestWasi {
 
 	/** Runs the instance's `_start` to its end; flushes unsaved files whatever happens. */
 	start(instance: WebAssembly.Instance): GuestResult {
-		this.memory = instance.exports.memory as WebAssembly.Memory;
+		this.memory = this.options.memory ?? instance.exports.memory as WebAssembly.Memory;
 		const entry = instance.exports._start as (() => void) | undefined;
 		if (!entry) { throw new Error('vscwClang: the module has no _start export, so it is not a WASI command. Did you mean to link an executable (not -shared or --no-entry)?'); }
+		return this.guarded(entry);
+	}
+
+	/**
+	 * Runs a spawned thread's `wasi_thread_start` to its end. Returns undefined when it returns normally; an exit
+	 * (`proc_exit` or an uncaught trap) in any thread ends the whole process, so the caller must report those.
+	 */
+	runThread(instance: WebAssembly.Instance, tid: number, startArg: number): GuestResult | undefined {
+		this.memory = this.options.memory!;
+		const entry = instance.exports.wasi_thread_start as ((tid: number, startArg: number) => void) | undefined;
+		if (!entry) { throw new Error('vscwClang: the module has no wasi_thread_start export, so it cannot run threads. Did you mean to link with -pthread (target wasm32-wasip1-threads)?'); }
+		const result = this.guarded(() => entry(tid, startArg));
+		return result.kind === 'exit' && result.code === 0 && this.exitCode === undefined ? undefined : result;
+	}
+
+	private guarded(entry: () => void): GuestResult {
 		try {
 			entry();
 			return { kind: 'exit', code: 0 };

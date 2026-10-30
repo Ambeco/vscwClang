@@ -1,4 +1,4 @@
-import type { DoneMessage, StartMessage } from './guestWorker';
+import { SPAWN_THREAD_OP, type DoneMessage, type StartMessage, type ThreadMessage } from './guestWorker';
 import { CHANNEL_BYTES, SyncRpcServer, type RpcHandler, type RpcRequest } from './syncChannel';
 import type { GuestDirEntry, GuestResult, GuestStat } from './wasiGuest';
 
@@ -57,6 +57,12 @@ export class StdinQueue {
 	}
 }
 
+function newTidCounter(): SharedArrayBuffer {
+	const buffer = new SharedArrayBuffer(4);
+	Atomics.store(new Int32Array(buffer), 0, 1); // 0 is the main thread
+	return buffer;
+}
+
 export type ProcessOutcome = GuestResult | { kind: 'terminated' } | { kind: 'failed'; message: string };
 
 export interface GuestProcessOptions {
@@ -70,6 +76,10 @@ export interface GuestProcessOptions {
 	stdin: StdinQueue;
 	onOutput: (fd: 1 | 2, data: Uint8Array) => void;
 	createWorker: () => WorkerLike;
+	/** Makes the Worker for each `thread-spawn` (needed only with `sharedMemory`); async so callers can reuse `createGuestWorker`. */
+	createThreadWorker?: () => WorkerLike | Promise<WorkerLike>;
+	/** For a wasi-threads module: the shared memory it imports, from `createSharedMemory`. */
+	sharedMemory?: WebAssembly.Memory;
 }
 
 /**
@@ -80,6 +90,7 @@ export interface GuestProcessOptions {
  */
 export class GuestProcess {
 	private worker: WorkerLike | undefined;
+	private readonly threadWorkers: WorkerLike[] = [];
 	private settle: ((outcome: ProcessOutcome) => void) | undefined;
 
 	constructor(private readonly options: GuestProcessOptions) {}
@@ -93,18 +104,43 @@ export class GuestProcess {
 				if (!this.settle) { return; }
 				this.settle = undefined;
 				worker.terminate();
+				for (const thread of this.threadWorkers) { thread.terminate(); }
 				resolve(outcome);
 			};
 			this.settle = finish;
 			const channel = new SharedArrayBuffer(CHANNEL_BYTES);
-			const server = new SyncRpcServer(channel, this.makeHandler());
-			worker.onMessage(message => {
-				const done = message as DoneMessage;
-				if (done.type === 'done') { finish(done.result); } else if (done.type === 'failed') { finish({ kind: 'failed', message: done.message }); } else { void server.handle(message as RpcRequest); }
-			});
-			worker.onError(message => finish({ kind: 'failed', message }));
-			worker.postMessage({ type: 'start', module: options.module, args: options.args, env: options.env, preopens: options.preopens, terminal: options.terminal, channel } satisfies StartMessage);
+			const threads = options.sharedMemory ? { memory: options.sharedMemory, tidCounter: newTidCounter() } : undefined;
+			this.serve(worker, channel, finish, threads);
+			worker.postMessage({ type: 'start', module: options.module, args: options.args, env: options.env, preopens: options.preopens, terminal: options.terminal, channel, threads } satisfies StartMessage);
 		});
+	}
+
+	/** Answers one Worker's messages: its end, its failure, a request to spawn a thread, or a file/stdio request. */
+	private serve(worker: WorkerLike, channel: SharedArrayBuffer, finish: (outcome: ProcessOutcome) => void, threads: StartMessage['threads']): void {
+		const server = new SyncRpcServer(channel, this.makeHandler());
+		worker.onMessage(message => {
+			const done = message as DoneMessage;
+			if (done.type === 'done') { finish(done.result); }
+			else if (done.type === 'failed') { finish({ kind: 'failed', message: done.message }); }
+			else if ((message as RpcRequest).op === SPAWN_THREAD_OP) { void this.spawnThread((message as RpcRequest).args as { tid: number; startArg: number }, finish, threads); }
+			else { void server.handle(message as RpcRequest); }
+		});
+		worker.onError(message => finish({ kind: 'failed', message }));
+	}
+
+	private async spawnThread({ tid, startArg }: { tid: number; startArg: number }, finish: (outcome: ProcessOutcome) => void, threads: StartMessage['threads']): Promise<void> {
+		const { options } = this;
+		try {
+			if (!threads || !options.createThreadWorker) { throw new Error('the program called thread-spawn but this GuestProcess has no sharedMemory and createThreadWorker. Did you mean to pass both?'); }
+			const worker = await options.createThreadWorker();
+			if (!this.settle) { worker.terminate(); return; }
+			this.threadWorkers.push(worker);
+			const channel = new SharedArrayBuffer(CHANNEL_BYTES);
+			this.serve(worker, channel, finish, threads);
+			worker.postMessage({ type: 'thread', module: options.module, args: options.args, env: options.env, preopens: options.preopens, terminal: options.terminal, channel, threads, tid, startArg } satisfies ThreadMessage);
+		} catch (e) {
+			finish({ kind: 'failed', message: `could not start thread ${tid}: ${e instanceof Error ? e.message : String(e)}` });
+		}
 	}
 
 	terminate(): void {

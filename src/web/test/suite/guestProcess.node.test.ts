@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { GuestProcess, StdinQueue, type GuestFileSystem, type ProcessOutcome, type WorkerLike } from '../../host/guestProcess';
+import { createSharedMemory } from '../../host/sharedMemory';
 import { GuestFsError, type GuestDirEntry, type GuestStat } from '../../host/wasiGuest';
 
 const ROOT = process.cwd();
@@ -74,7 +75,8 @@ class MemoryFs implements GuestFileSystem {
 interface Session { process: GuestProcess; stdin: StdinQueue; out: () => string; err: () => string; fs: MemoryFs; outcome: Promise<ProcessOutcome> }
 
 function start(name: string, args: string[] = [], env: Record<string, string> = {}, terminal = false): Session {
-	const module = new WebAssembly.Module(readFileSync(join(FIXTURES, `${name}.wasm`)));
+	const bytes = readFileSync(join(FIXTURES, `${name}.wasm`));
+	const module = new WebAssembly.Module(bytes);
 	const stdin = new StdinQueue();
 	const fs = new MemoryFs();
 	let out = '';
@@ -83,6 +85,8 @@ function start(name: string, args: string[] = [], env: Record<string, string> = 
 		module, args: [name, ...args], env, preopens: ['/workspace', '/tmp'], terminal, fs, stdin,
 		onOutput: (fd, data) => { if (fd === 1) { out += decoder.decode(data); } else { err += decoder.decode(data); } },
 		createWorker: () => nodeWorker(GUEST_WORKER),
+		createThreadWorker: () => nodeWorker(GUEST_WORKER),
+		sharedMemory: createSharedMemory(bytes),
 	});
 	return { process, stdin, out: () => out, err: () => err, fs, outcome: process.run() };
 }
@@ -189,6 +193,31 @@ suite('GuestProcess over a real Worker', function () {
 		assert.deepStrictEqual(await process.run(), { kind: 'exit', code: 0 });
 		const expected = big.reduce((n, b) => n + b, 0);
 		assert.strictEqual(decoder.decode(fs.files.get('/workspace/sum.txt')), `700000:${expected}`);
+	});
+
+	test('wasi-threads: four pthreads share memory, a mutex counts exactly, and a thread can write to stderr', async () => {
+		const s = start('threads');
+		assert.deepStrictEqual(await s.outcome, { kind: 'exit', code: 0 });
+		assert.strictEqual(s.out(), 'counter = 4000\n');
+		assert.ok(s.err().includes('hello from thread 2'), s.err());
+	});
+
+	test('wasi-threads: _exit in a thread ends the whole process with that code', async () => {
+		const s = start('threads', ['exit']);
+		assert.deepStrictEqual(await s.outcome, { kind: 'exit', code: 7 });
+	});
+
+	test('a threaded module without sharedMemory fails with a did-you-mean', async () => {
+		const module = new WebAssembly.Module(readFileSync(join(FIXTURES, 'threads.wasm')));
+		const process = new GuestProcess({ module, args: ['threads'], env: {}, preopens: [], fs: new MemoryFs(), stdin: new StdinQueue(), onOutput: () => undefined, createWorker: () => nodeWorker(GUEST_WORKER) });
+		const outcome = await process.run();
+		assert.strictEqual(outcome.kind, 'failed');
+		assert.match((outcome as { message: string }).message, /sharedMemory/);
+	});
+
+	test('createSharedMemory returns undefined for a module that owns its memory', () => {
+		assert.strictEqual(createSharedMemory(readFileSync(join(FIXTURES, 'hello.wasm'))), undefined);
+		assert.ok(createSharedMemory(readFileSync(join(FIXTURES, 'threads.wasm')))?.buffer instanceof SharedArrayBuffer);
 	});
 
 	test('a program that cannot start reports why', async () => {
