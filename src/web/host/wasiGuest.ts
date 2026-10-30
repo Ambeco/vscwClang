@@ -158,7 +158,7 @@ export class GuestWasi {
 	private bytes(): Uint8Array { return new Uint8Array(this.memory.buffer); }
 
 	private readString(ptr: number, len: number): string {
-		return this.decoder.decode(this.bytes().subarray(ptr, ptr + len));
+		return this.decoder.decode(this.bytes().slice(ptr, ptr + len));
 	}
 
 	private makeImports(): WebAssembly.ModuleImports {
@@ -191,8 +191,10 @@ export class GuestWasi {
 				this.view().setBigUint64(out, ns, true);
 			}),
 			random_get: guard((ptr: number, len: number) => {
-				const target = this.bytes().subarray(ptr, ptr + len);
-				for (let off = 0; off < len; off += 65536) { crypto.getRandomValues(target.subarray(off, Math.min(len, off + 65536)) as Uint8Array<ArrayBuffer>); }
+				// getRandomValues rejects views of a shared memory, so fill a copy.
+				const random = new Uint8Array(len);
+				for (let off = 0; off < len; off += 65536) { crypto.getRandomValues(random.subarray(off, Math.min(len, off + 65536))); }
+				this.bytes().set(random, ptr);
 			}),
 			sched_yield: guard(() => undefined),
 			proc_exit: (code: number) => { this.exitCode ??= code; throw new GuestExit(code); },

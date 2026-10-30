@@ -69,7 +69,9 @@ function walk(dir, prefix, entries) {
 }
 const sysrootEntries = {};
 walk(join(release, 'sysroot'), 'sysroot', sysrootEntries);
-walk(join(release, 'resource'), 'resource', sysrootEntries);
+// package_release.mjs nests the resource dir as resource/lib/clang/<version>; the toolchain mounts that version folder as /resource.
+const nestedResource = join(release, 'resource', 'lib', 'clang');
+walk(existsSync(nestedResource) ? join(nestedResource, readdirSync(nestedResource)[0]) : join(release, 'resource'), 'resource', sysrootEntries);
 // A PCH records its source header, and clang cannot load the PCH without it.
 sysrootEntries[`sysroot${PCH_HEADER_GUEST_PATH.slice('/sysroot'.length)}`] = [Buffer.from(PCH_HEADER_SOURCE), { level: 9 }];
 const sysrootZip = Buffer.from(zipSync(sysrootEntries));

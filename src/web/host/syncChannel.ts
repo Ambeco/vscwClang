@@ -49,7 +49,7 @@ export class SyncRpcClient {
 		this.send(op, args, bytes, true);
 		const response = this.receive();
 		const jsonLength = new DataView(response.buffer, response.byteOffset).getUint32(0, true);
-		const parsed = JSON.parse(new TextDecoder().decode(response.subarray(4, 4 + jsonLength))) as { value?: unknown; error?: { code?: string; message: string } };
+		const parsed = JSON.parse(new TextDecoder().decode(response.slice(4, 4 + jsonLength))) as { value?: unknown; error?: { code?: string; message: string } };
 		if (parsed.error) {
 			if (parsed.error.code && FS_ERRNOS.has(parsed.error.code)) { throw new GuestFsError(parsed.error.code as FsErrno, parsed.error.message); }
 			throw new Error(parsed.error.message);
