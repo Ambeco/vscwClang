@@ -27,6 +27,7 @@ This is an early release.
 
 - **WebAssembly only.** Programs are built for `wasm32-wasip1` (WASI) and run in the browser. They can use the C and C++ standard libraries, but not operating-system APIs such as sockets, processes or graphics, and not native libraries.
 - **Restricted compiler flags.** Flags that would break the sandbox are rejected with a suggestion, for example `--target`, `-march`, `-o`, `-c`, `-fplugin`, `-fuse-ld`, `--sysroot`, `-B`, and include or library paths outside your workspace. `-I`, `-D`, `-std`, `-O`, `-W...`, `-l`, `-L` and `-Wl,...` work.
+- **Standard headers are preloaded.** To make recompiles faster, C++ files that include `<vector>`, `<string>`, `<iostream>` and similar are compiled against a prebuilt copy of those headers (when your flags allow it; see `vscwclang.precompiledHeaders`). A forgotten `#include` of one of them is therefore not an error here, but is on other compilers; set the setting to `false` to compile exactly as written.
 - **No threads yet.** Programs are single-threaded, and the compiler runs one file at a time.
 - **32-bit target.** WebAssembly here is `wasm32`: pointers, `size_t` and `uintptr_t` are 32 bits. Code that assumes 64-bit pointers (size assertions, pointer-tagging) needs changes.
 - **No Windows APIs.** `windows.h`, `winsock2.h` and MSVC-only functions such as `_stricmp` and `strcpy_s` are not available.

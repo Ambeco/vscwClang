@@ -224,6 +224,11 @@
           "minimum": 16,
           "markdownDescription": "Most megabytes of compiled objects to keep; the least recently used are deleted first. `vscwClang: Clear build cache` removes them all."
         },
+        "vscwclang.precompiledHeaders": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Compile C++ sources against a prebuilt copy of the common standard headers (`<vector>`, `<string>`, `<iostream>`, ...), which cuts the time of each recompiled file by half or more. Used only when your flags match one that was prebuilt (`-std=c++17`, `c++20` or the `gnu++` forms of them, with no `-O` or `-O2`, and no `-D` of a reserved name or `NDEBUG`). Side effect: these headers count as included at the top of every such file, so a missing `#include` goes unnoticed here and fails elsewhere. Turn off to compile exactly as written."
+        },
         "vscwclang.toolTimeoutSeconds": {
           "type": "number",
           "default": 300,

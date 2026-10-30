@@ -2,7 +2,7 @@
 // straight from the llvm-project build trees.
 //
 // usage: node scripts/make-toolchain-dist.mjs --release <packageReleaseDir> [--llvm <llvm-project>] [--dist <outDir>]
-//          [--mtdist <outDir>] [--tag <tag>] [--chunk-mib 16] [--pin] [--if-missing]
+//          [--mtdist <outDir>] [--tag <tag>] [--chunk-mib 16] [--pin] [--if-missing] [--no-pch]
 //   --release     output of llvm-project/wasi-tests/package_release.mjs (supplies sysroot/, resource/, compile-flags.json)
 //   --llvm        llvm-project checkout (default ../../llvm-project relative to this repo)
 //   --dist        single-threaded layout: build-single-threaded/bin/{clang,lld,clangd,llvm-ar}.wasm,
@@ -12,12 +12,17 @@
 //                 build-lldb/bin/lldb-wasm-reactor.wasm (imports wasi.thread-spawn)
 //   --pin         write the --dist manifest's SHA-256 into src/web/toolchain/toolchainPin.ts
 //   --if-missing  skip a layout whose <outDir>/manifest.json already exists
+//   --no-pch      skip the libc++ precompiled headers (a PCH per -std and -O level, each built by the layout's own clang.wasm, ~6 s each)
 // A payload larger than --chunk-mib is split into <name>.000, .001, ...; at most that size is served per file.
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync, mkdtempSync, utimesSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { zipSync } from 'fflate';
 import { strip } from './strip-wasm.mjs';
+import { runWasi } from './clang-wasi.mjs';
+import { DEFAULT_COMPILE_FLAGS } from '../src/web/toolchain/defaultFlags.ts';
+import { PCH_HEADER_GUEST_PATH, PCH_HEADER_SOURCE } from '../src/web/toolchain/pch.ts';
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(name);
@@ -41,7 +46,7 @@ const layouts = [
 	] },
 ].filter((l) => l.outDir);
 if (!release || layouts.length === 0) {
-	console.error('usage: node scripts/make-toolchain-dist.mjs --release <packageReleaseDir> [--llvm <llvm-project>] [--dist <outDir>] [--mtdist <outDir>] [--tag <tag>] [--chunk-mib 16] [--pin] [--if-missing]\n' +
+	console.error('usage: node scripts/make-toolchain-dist.mjs --release <packageReleaseDir> [--llvm <llvm-project>] [--dist <outDir>] [--mtdist <outDir>] [--tag <tag>] [--chunk-mib 16] [--pin] [--if-missing] [--no-pch]\n' +
 		'(--release is the output of llvm-project/wasi-tests/package_release.mjs; pass at least one of --dist/--mtdist)');
 	process.exit(1);
 }
@@ -63,8 +68,10 @@ function walk(dir, prefix, entries) {
 const sysrootEntries = {};
 walk(join(release, 'sysroot'), 'sysroot', sysrootEntries);
 walk(join(release, 'resource'), 'resource', sysrootEntries);
+// A PCH records its source header, and clang cannot load the PCH without it.
+sysrootEntries[`sysroot${PCH_HEADER_GUEST_PATH.slice('/sysroot'.length)}`] = [Buffer.from(PCH_HEADER_SOURCE), { level: 9 }];
 const sysrootZip = Buffer.from(zipSync(sysrootEntries));
-const flags = readFileSync(join(release, 'compile-flags.json'));
+const releaseFlags = JSON.parse(readFileSync(join(release, 'compile-flags.json'), 'utf8'));
 
 const stripped = new Map();
 function strippedBinary(rel) {
@@ -74,6 +81,53 @@ function strippedBinary(rel) {
 		stripped.set(rel, strip(readFileSync(path)));
 	}
 	return stripped.get(rel);
+}
+
+// One PCH per -std and -O level (clang rejects a PCH used at another one); the extension picks by the user's flags (pch.ts).
+const PCH_SLICE = 'wasm32-wasip1';
+const PCH_DEFAULT_STD = 'gnu++17';
+const PCH_STDS = [PCH_DEFAULT_STD, 'c++17', 'gnu++20', 'c++20'];
+const PCH_OPTIMIZATIONS = ['0', '2'];
+
+/**
+ * Builds the PCHs with `clangBytes` against a copy of the shipped sysroot whose files have mtime 0, which is what the
+ * extension's in-memory file system reports; clang checks input mtimes when it loads a PCH. The content-hash flag is
+ * the fallback if the two ever differ. Each PCH is then used once, with no -std for the default one as the extension does.
+ */
+async function buildPchs(clangBytes, layout) {
+	const root = mkdtempSync(join(tmpdir(), 'vscwclang-pch-'));
+	try {
+		for (const [name, [content]] of Object.entries(sysrootEntries)) {
+			const path = join(root, name);
+			mkdirSync(dirname(path), { recursive: true });
+			writeFileSync(path, content);
+			utimesSync(path, 0, 0);
+		}
+		mkdirSync(join(root, 'pch'));
+		mkdirSync(join(root, 'work'));
+		writeFileSync(join(root, 'work', 'smoke.cpp'), '#include <vector>\n#include <string>\nint main() { std::vector<std::string> v; return (int)v.size(); }\n');
+		const preopens = { '/sysroot': join(root, 'sysroot'), '/resource': join(root, 'resource'), '/pch': join(root, 'pch'), '/work': join(root, 'work') };
+		const module = await WebAssembly.compile(clangBytes);
+		const sub = (f) => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource');
+		const base = ['clang++', ...releaseFlags.compile[PCH_SLICE].map(sub), ...DEFAULT_COMPILE_FLAGS, '-fno-color-diagnostics'];
+		const variants = [];
+		for (const std of PCH_STDS) {
+			for (const optimization of PCH_OPTIMIZATIONS) {
+				const file = `pch-${std.replace(/\+/g, 'p')}${optimization === '0' ? '' : `-O${optimization}`}.pch`;
+				const opt = optimization === '0' ? [] : [`-O${optimization}`];
+				const build = await runWasi(module, [...base, `-std=${std}`, ...opt, '-Xclang', '-fno-pch-timestamp', '-Xclang', '-fvalidate-ast-input-files-content', '-x', 'c++-header', PCH_HEADER_GUEST_PATH, '-o', `/pch/${file}`], preopens);
+				if (build.code !== 0) { throw new Error(`[${layout}] building ${file} failed (exit ${build.code}):\n${build.stderr}`); }
+				// Without -std for the default variant: the extension passes none, so this proves clang's default is what the PCH was built for.
+				const smoke = await runWasi(module, [...base, ...(std === PCH_DEFAULT_STD ? [] : [`-std=${std}`]), ...opt, '-include-pch', `/pch/${file}`, '-c', '/work/smoke.cpp', '-o', '/work/smoke.o'], preopens);
+				if (smoke.code !== 0) { throw new Error(`[${layout}] ${file} was built but clang rejects it (exit ${smoke.code}):\n${smoke.stderr}`); }
+				variants.push({ file, std, optimization, content: readFileSync(join(root, 'pch', file)) });
+				console.log(`[${layout}] ${file}: ${variants.at(-1).content.length} bytes, built in ${Math.round(build.ms)} ms, smoke compile ${Math.round(smoke.ms)} ms`);
+			}
+		}
+		return variants;
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 }
 
 for (const { outDir, name: layout, binaries } of layouts) {
@@ -105,6 +159,13 @@ for (const { outDir, name: layout, binaries } of layouts) {
 		add(wasmName, content, 'zip', zipSync({ [wasmName]: [content, { level: 9 }] }), wasmName.replace(/\.wasm$/, '.zip'));
 	}
 	add('sysroot.zip', sysrootZip, 'raw', sysrootZip, 'sysroot.zip');
+	const flagsJson = structuredClone(releaseFlags);
+	if (!flag('--no-pch')) {
+		const variants = await buildPchs(strippedBinary(binaries.find(([n]) => n === 'clang.wasm')[1]), layout);
+		for (const v of variants) { add(v.file, v.content, 'zip', zipSync({ [v.file]: [v.content, { level: 9 }] }), v.file.replace(/\.pch$/, '.zip')); }
+		flagsJson.pch = { [PCH_SLICE]: { defaultStd: PCH_DEFAULT_STD, variants: variants.map(({ file, std, optimization }) => ({ file, std, optimization })) } };
+	}
+	const flags = Buffer.from(JSON.stringify(flagsJson, null, 2));
 	add('compile-flags.json', flags, 'raw', flags, 'compile-flags.json');
 	const manifestText = JSON.stringify({ format: 1, tag, files }, null, 2);
 	writeFileSync(join(outDir, 'manifest.json'), manifestText);

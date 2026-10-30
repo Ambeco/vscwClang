@@ -76,6 +76,35 @@ suite('vscwClang build (in browser)', function () {
 		assert.deepStrictEqual([ran.exitCode, ran.stdout], [0, 'hello 42\n']);
 	});
 
+	test('precompiled headers: used for matching flags, skipped for others, retried without on a name clash', async () => {
+		const logged: string[] = [];
+		const watch = { ...log, appendLine: (s: string) => { logged.push(s); log.appendLine(s); } } as vscode.OutputChannel;
+		const compile = async (name: string, text: string, flags: string[]) => {
+			await write(`${name}.cpp`, text);
+			logged.length = 0;
+			const result = await build({ sources: [uri(`${name}.cpp`)], output: uri(`${name}.wasm`), flags, mode: 'release' }, watch, context);
+			assert.strictEqual(result.exitCode, 0, result.diagnostics);
+			const line = logged.find(l => / compiled /.test(l)) ?? '(not compiled)';
+			return { precompiled: line.includes('precompiled headers'), retried: logged.some(l => /compiling again without them/.test(l)), ran: (await runWasm(uri(`${name}.wasm`))).stdout, line };
+		};
+		const program = '#include <iostream>\n#include <vector>\nint main() { std::vector<int> v{1, 2, 3}; std::cout << v.size(); }\n';
+		const flagged = [
+			await compile('pch-default', program, []),
+			await compile('pch-cxx20', program, ['-std=c++20', '-Wall']),
+			await compile('pch-o2', program, ['-O2']),
+			await compile('pch-define', program, ['-DNDEBUG']),
+			await compile('pch-macro-first', '#define GREETING 1\n' + program, []),
+			await compile('pch-no-include', '#include <cstdio>\nint main() { std::printf("3"); }\n', []),
+		];
+		assert.deepStrictEqual(flagged.map(f => [f.precompiled, f.ran]), [[true, '3'], [true, '3'], [true, '3'], [false, '3'], [false, '3'], [false, '3']], flagged.map(f => f.line).join('\n'));
+		// `rand` is declared by the PCH's C headers but not by a bare <vector>, so only the PCH compile fails on it.
+		const clash = await compile('pch-clash', '#include <vector>\nint rand = 5;\nint main() { return rand - 5; }\n', []);
+		assert.deepStrictEqual([clash.precompiled, clash.retried], [false, true], clash.line);
+		const off = await vscode.workspace.getConfiguration('vscwclang').update('precompiledHeaders', false, vscode.ConfigurationTarget.Global).then(() => compile('pch-off', program + '// off\n', []));
+		await vscode.workspace.getConfiguration('vscwclang').update('precompiledHeaders', undefined, vscode.ConfigurationTarget.Global);
+		assert.deepStrictEqual([off.precompiled, off.ran], [false, '3'], off.line);
+	});
+
 	test('incremental rebuild: an unchanged tree skips everything; an edit recompiles only what includes it', async () => {
 		const logged: string[] = [];
 		const watch = { ...log, appendLine: (s: string) => { logged.push(s); log.appendLine(s); } } as vscode.OutputChannel;

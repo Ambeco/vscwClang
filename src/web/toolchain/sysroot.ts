@@ -1,5 +1,6 @@
 import { unzip } from 'fflate';
 import { MemoryGuestFs } from '../host/memoryGuestFs';
+import type { PchSet } from './pch';
 import type { ToolchainStore } from './toolchainStore';
 
 export interface CompileFlags {
@@ -7,6 +8,8 @@ export interface CompileFlags {
 	debugCoverage?: string[];
 	compile: Record<string, string[]>;
 	link: Record<string, string[]>;
+	/** Prebuilt libc++ precompiled headers per slice; absent on toolchains published before they existed. */
+	pch?: Record<string, PchSet>;
 }
 
 const unzipped = new WeakMap<ToolchainStore, Promise<Record<string, Uint8Array>>>();

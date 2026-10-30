@@ -4,9 +4,11 @@ import { MemoryGuestFs } from '../host/memoryGuestFs';
 import { VscodeGuestFs } from '../host/vscodeGuestFs';
 import { createGuestWorker } from '../host/workerHost';
 import { parseDiagnostics, withFailureFallback, type ParsedDiagnostic } from './diagnostics';
+import { DEFAULT_COMPILE_FLAGS, DEFAULT_C_COMPILE_FLAGS, DEFAULT_LINK_FLAGS } from './defaultFlags';
 import { checkUserFlags, splitFlags } from './flagPolicy';
 import { GUEST_WORKSPACE, fromGuestPath, toGuestPath } from './guestPaths';
 import { ObjectCache, defaultByteStore, hashText, splitIncludeTrace, type LinkRecord, type ReadGuestFile } from './objectCache';
+import { pchRetryable, selectPch, type PchVariant } from './pch';
 import { sha256Hex } from './toolchainDownload';
 import { loadCompileFlags, loadSysrootGuestFs } from './sysroot';
 import { ToolchainStore, type StoreContext } from './toolchainStore';
@@ -136,15 +138,29 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 		try { return new Uint8Array(await vscode.workspace.fs.readFile(folder.with({ path: hostPath }))); } catch { return undefined; }
 	};
 	const toolchainVersion = await toolchain.version();
+	const pchSet = vscode.workspace.getConfiguration('vscwclang').get<boolean>('precompiledHeaders', true) ? flags.pch?.[SLICE] : undefined;
+	const loadPch = async (variant: PchVariant): Promise<boolean> => {
+		try {
+			objects.setFile(variant.file, await getPchBytes(toolchain, toolchainVersion, variant.file));
+			return true;
+		} catch (e) {
+			log.appendLine(`[vscwclang] warning: could not load the precompiled headers ${variant.file}; compiling without them. ${e instanceof Error ? e.message : String(e)}`);
+			return false;
+		}
+	};
 	const cacheScope = `${folder.toString()}|${request.mode}|`;
 	const objectIds: (string | undefined)[] = [];
 	for (const [i, source] of sources.entries()) {
 		const base = source.guest.slice(source.guest.lastIndexOf('/') + 1);
 		const objectName = `${i}-${base}.o`;
 		const driver = base.endsWith('.c') ? 'clang' : 'clang++';
-		const compileArgs = [driver, ...flags.compile[SLICE].map(sub), '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics',
-			...DEFAULT_COMPILE_FLAGS, ...(driver === 'clang' ? DEFAULT_C_COMPILE_FLAGS : []), ...modeFlags, ...(request.languageFlags?.[driver === 'clang' ? 'c' : 'cpp'] ?? []), ...userFlags.compile, ...ownFlags.get(source.guest)!.compile, '-c', source.guest];
 		const sourceBytes = await readGuest(source.guest);
+		const sourceFlags = [...(request.languageFlags?.[driver === 'clang' ? 'c' : 'cpp'] ?? []), ...userFlags.compile, ...ownFlags.get(source.guest)!.compile];
+		const choice = driver === 'clang++' && pchSet ? selectPch(pchSet, sourceFlags, sourceBytes && new TextDecoder().decode(sourceBytes)) : undefined;
+		const pch = choice && 'variant' in choice ? choice.variant : undefined;
+		const compileArgsWith = (usePch: PchVariant | undefined) => [driver, ...flags.compile[SLICE].map(sub), '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics',
+			...DEFAULT_COMPILE_FLAGS, ...(driver === 'clang' ? DEFAULT_C_COMPILE_FLAGS : []), ...modeFlags, ...(usePch ? ['-include-pch', `/obj/${usePch.file}`] : []), ...sourceFlags, '-c', source.guest];
+		const compileArgs = compileArgsWith(pch);
 		const cacheKey = cacheScope + source.guest;
 		const argsKey = await hashText([toolchainVersion, ...compileArgs].join(NL));
 		const sourceHash = sourceBytes && await sha256Hex(sourceBytes);
@@ -161,8 +177,15 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 		log.appendLine(`[vscwclang] compiling ${source.guest}`);
 		const started = Date.now();
 		// -H lists the included headers on stderr (stripped below); they decide when the cached object goes stale.
-		const cc = await run('clang.wasm', [...compileArgs, '-H', '-o', '-'], { captureStdout: true, objects });
-		log.appendLine(`[vscwclang] compiled ${source.guest} in ${Date.now() - started} ms (exit ${cc.exitCode})`);
+		let withPch = pch !== undefined && await loadPch(pch);
+		let cc = withPch ? await run('clang.wasm', [...compileArgs, '-H', '-o', '-'], { captureStdout: true, objects }) : undefined;
+		if (cc && cc.exitCode !== 0 && pchRetryable(cc.stderr)) {
+			log.appendLine(`[vscwclang] ${source.guest}: the precompiled headers may be causing its errors; compiling again without them`);
+			cc = undefined;
+			withPch = false;
+		}
+		cc ??= await run('clang.wasm', [...compileArgsWith(undefined), '-H', '-o', '-'], { captureStdout: true, objects });
+		log.appendLine(`[vscwclang] compiled ${source.guest} in ${Date.now() - started} ms (exit ${cc.exitCode}${withPch ? ', precompiled headers' : ''})`);
 		const trace = splitIncludeTrace(cc.stderr, GUEST_WORKSPACE);
 		diagnostics += trace.stderr;
 		if (trace.stderr !== '') { request.onDiagnostics?.(parseDiagnostics(diagnostics)); }
@@ -200,17 +223,6 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 	}
 	return { exitCode, diagnostics, parsed: withFailureFallback(parseDiagnostics(diagnostics), exitCode, diagnostics) };
 }
-
-/**
- * Flags every build gets before the user's, so porting common C/C++ needs no flags (user flags still win, being later).
- *
- * Signal, getpid and process-clock emulation headers are opt-in in wasi-libc (mmap is left out on purpose: its emulation
- * silently drops writes). setjmp/longjmp needs the sjlj lowering, applied to C only (tested with C; C++ keeps wasm EH).
- * The stack is 8 MiB because the default overflows in template-heavy code and reports only an out-of-bounds trap.
- */
-export const DEFAULT_COMPILE_FLAGS = ['-D_WASI_EMULATED_SIGNAL', '-D_WASI_EMULATED_GETPID', '-D_WASI_EMULATED_PROCESS_CLOCKS'];
-export const DEFAULT_C_COMPILE_FLAGS = ['-mllvm', '-wasm-enable-sjlj'];
-export const DEFAULT_LINK_FLAGS = ['-lwasi-emulated-signal', '-lwasi-emulated-getpid', '-lwasi-emulated-process-clocks', '-lsetjmp', '-z', 'stack-size=8388608'];
 
 const NL = String.fromCharCode(10);
 
@@ -278,6 +290,19 @@ async function addShim(objects: MemoryGuestFs, clang: (args: string[], extra: To
 	}
 	objects.setFile(`vscwclang-${shim.name}.o`, object);
 	return `/obj/vscwclang-${shim.name}.o`;
+}
+
+let loadedPch: { key: string; bytes: Promise<Uint8Array<ArrayBuffer>> } | undefined;
+
+/** The PCH file's verified bytes; only the latest is kept (a PCH is ~15 MB), and a failed download is not remembered. */
+function getPchBytes(toolchain: ToolchainStore, toolchainVersion: string, file: string): Promise<Uint8Array<ArrayBuffer>> {
+	const key = `${toolchainVersion}/${file}`;
+	if (loadedPch?.key !== key) {
+		const bytes = toolchain.getFile(file);
+		bytes.catch(() => { if (loadedPch?.bytes === bytes) { loadedPch = undefined; } });
+		loadedPch = { key, bytes };
+	}
+	return loadedPch.bytes;
 }
 
 // Compiling clang.wasm (~1 s) dominates small builds, so compiled modules survive across builds.

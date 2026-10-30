@@ -7,3 +7,4 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ## [Unreleased]
 
 - Initial release
+- C++ sources compile against prebuilt standard-library headers when the flags allow it (`vscwclang.precompiledHeaders`)
