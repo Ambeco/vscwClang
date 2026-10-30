@@ -30,15 +30,16 @@ const option = (name, fallback) => { const i = args.indexOf(name); return i >= 0
 const release = option('--release');
 const llvm = resolve(option('--llvm', join(import.meta.dirname, '..', '..', '..', 'llvm-project')));
 const layouts = [
-	{ outDir: option('--dist'), name: 'dist', binaries: [
+	{ outDir: option('--dist'), name: 'dist', pchSlices: ['wasm32-wasip1'], driverFlags: [], binaries: [
 		['clang.wasm', 'build-single-threaded/bin/clang.wasm'],
 		['lld.wasm', 'build-single-threaded/bin/lld.wasm'],
 		['clangd.wasm', 'build-single-threaded/bin/clangd.wasm'],
 		['lldb-wasm-reactor.wasm', 'build-lldb-single-threaded/bin/lldb-wasm-reactor.wasm'],
 		['llvm-ar.wasm', 'build-single-threaded/bin/llvm-ar.wasm'],
 	] },
-	// No PCHs: the threaded clang.wasm imports shared memory and thread-spawn, which clang-wasi.mjs does not provide, and a PCH must come from the clang that uses it.
-	{ outDir: option('--mtdist'), name: 'mtdist', pch: false, binaries: [
+	// PCHs come from this layout's own (threaded) clang.wasm, one set per slice, since a PCH must come from the clang that uses it.
+	// -fintegrated-cc1: the threaded driver spawns cc1 as a subprocess otherwise, which clang-wasi.mjs does not provide.
+	{ outDir: option('--mtdist'), name: 'mtdist', pchSlices: ['wasm32-wasip1', 'wasm32-wasip1-threads'], driverFlags: ['-fintegrated-cc1'], binaries: [
 		['clang.wasm', 'build/bin/clang.wasm'],
 		['lld.wasm', 'build/bin/lld.wasm'],
 		['clangd.wasm', 'build-clangd-threads/bin/clangd.wasm'],
@@ -85,7 +86,6 @@ function strippedBinary(rel) {
 }
 
 // One PCH per -std and -O level (clang rejects a PCH used at another one); the extension picks by the user's flags (pch.ts).
-const PCH_SLICE = 'wasm32-wasip1';
 const PCH_DEFAULT_STD = 'gnu++17';
 const PCH_STDS = [PCH_DEFAULT_STD, 'c++17', 'gnu++20', 'c++20'];
 const PCH_OPTIMIZATIONS = ['0', '2'];
@@ -95,7 +95,7 @@ const PCH_OPTIMIZATIONS = ['0', '2'];
  * extension's in-memory file system reports; clang checks input mtimes when it loads a PCH. The content-hash flag is
  * the fallback if the two ever differ. Each PCH is then used once, with no -std for the default one as the extension does.
  */
-async function buildPchs(clangBytes, layout) {
+async function buildPchs(clangBytes, layout, slice, driverFlags) {
 	const root = mkdtempSync(join(tmpdir(), 'vscwclang-pch-'));
 	try {
 		for (const [name, [content]] of Object.entries(sysrootEntries)) {
@@ -109,17 +109,18 @@ async function buildPchs(clangBytes, layout) {
 		writeFileSync(join(root, 'work', 'smoke.cpp'), '#include <vector>\n#include <string>\nint main() { std::vector<std::string> v; return (int)v.size(); }\n');
 		const preopens = { '/sysroot': join(root, 'sysroot'), '/resource': join(root, 'resource'), '/pch': join(root, 'pch'), '/work': join(root, 'work') };
 		const module = await WebAssembly.compile(clangBytes);
+		const sliceSuffix = slice === 'wasm32-wasip1' ? '' : slice.slice('wasm32-wasip1'.length);
 		const sub = (f) => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource');
-		const base = ['clang++', ...releaseFlags.compile[PCH_SLICE].map(sub), ...DEFAULT_COMPILE_FLAGS, '-fno-color-diagnostics'];
+		const base = ['clang++', ...releaseFlags.compile[slice].map(sub), ...DEFAULT_COMPILE_FLAGS, ...driverFlags, '-fno-color-diagnostics'];
 		const variants = [];
 		for (const std of PCH_STDS) {
 			for (const optimization of PCH_OPTIMIZATIONS) {
-				const file = `pch-${std.replace(/\+/g, 'p')}${optimization === '0' ? '' : `-O${optimization}`}.pch`;
+				const file = `pch-${std.replace(/\+/g, 'p')}${optimization === '0' ? '' : `-O${optimization}`}${sliceSuffix}.pch`;
 				const opt = optimization === '0' ? [] : [`-O${optimization}`];
-				const build = await runWasi(module, [...base, `-std=${std}`, ...opt, '-Xclang', '-fno-pch-timestamp', '-Xclang', '-fvalidate-ast-input-files-content', '-x', 'c++-header', PCH_HEADER_GUEST_PATH, '-o', `/pch/${file}`], preopens);
+				const build = await runWasi(module, [...base, `-std=${std}`, ...opt, '-Xclang', '-fno-pch-timestamp', '-Xclang', '-fvalidate-ast-input-files-content', '-x', 'c++-header', PCH_HEADER_GUEST_PATH, '-o', `/pch/${file}`], preopens, clangBytes);
 				if (build.code !== 0) { throw new Error(`[${layout}] building ${file} failed (exit ${build.code}):\n${build.stderr}`); }
 				// Without -std for the default variant: the extension passes none, so this proves clang's default is what the PCH was built for.
-				const smoke = await runWasi(module, [...base, ...(std === PCH_DEFAULT_STD ? [] : [`-std=${std}`]), ...opt, '-include-pch', `/pch/${file}`, '-c', '/work/smoke.cpp', '-o', '/work/smoke.o'], preopens);
+				const smoke = await runWasi(module, [...base, ...(std === PCH_DEFAULT_STD ? [] : [`-std=${std}`]), ...opt, '-include-pch', `/pch/${file}`, '-c', '/work/smoke.cpp', '-o', '/work/smoke.o'], preopens, clangBytes);
 				if (smoke.code !== 0) { throw new Error(`[${layout}] ${file} was built but clang rejects it (exit ${smoke.code}):\n${smoke.stderr}`); }
 				variants.push({ file, std, optimization, content: readFileSync(join(root, 'pch', file)) });
 				console.log(`[${layout}] ${file}: ${variants.at(-1).content.length} bytes, built in ${Math.round(build.ms)} ms, smoke compile ${Math.round(smoke.ms)} ms`);
@@ -131,7 +132,7 @@ async function buildPchs(clangBytes, layout) {
 	}
 }
 
-for (const { outDir, name: layout, binaries, pch } of layouts) {
+for (const { outDir, name: layout, binaries, pchSlices, driverFlags } of layouts) {
 	if (flag('--if-missing') && existsSync(join(outDir, 'manifest.json'))) {
 		console.log(`${outDir}/manifest.json exists; skipping ${layout}.`);
 		continue;
@@ -161,10 +162,13 @@ for (const { outDir, name: layout, binaries, pch } of layouts) {
 	}
 	add('sysroot.zip', sysrootZip, 'raw', sysrootZip, 'sysroot.zip');
 	const flagsJson = structuredClone(releaseFlags);
-	if (!flag('--no-pch') && pch !== false) {
-		const variants = await buildPchs(strippedBinary(binaries.find(([n]) => n === 'clang.wasm')[1]), layout);
-		for (const v of variants) { add(v.file, v.content, 'zip', zipSync({ [v.file]: [v.content, { level: 9 }] }), v.file.replace(/\.pch$/, '.zip')); }
-		flagsJson.pch = { [PCH_SLICE]: { defaultStd: PCH_DEFAULT_STD, variants: variants.map(({ file, std, optimization }) => ({ file, std, optimization })) } };
+	if (!flag('--no-pch')) {
+		flagsJson.pch = {};
+		for (const slice of pchSlices) {
+			const variants = await buildPchs(strippedBinary(binaries.find(([n]) => n === 'clang.wasm')[1]), layout, slice, driverFlags);
+			for (const v of variants) { add(v.file, v.content, 'zip', zipSync({ [v.file]: [v.content, { level: 9 }] }), v.file.replace(/\.pch$/, '.zip')); }
+			flagsJson.pch[slice] = { defaultStd: PCH_DEFAULT_STD, variants: variants.map(({ file, std, optimization }) => ({ file, std, optimization })) };
+		}
 	}
 	const flags = Buffer.from(JSON.stringify(flagsJson, null, 2));
 	add('compile-flags.json', flags, 'raw', flags, 'compile-flags.json');
