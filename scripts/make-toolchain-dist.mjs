@@ -37,7 +37,8 @@ const layouts = [
 		['lldb-wasm-reactor.wasm', 'build-lldb-single-threaded/bin/lldb-wasm-reactor.wasm'],
 		['llvm-ar.wasm', 'build-single-threaded/bin/llvm-ar.wasm'],
 	] },
-	{ outDir: option('--mtdist'), name: 'mtdist', binaries: [
+	// No PCHs: the threaded clang.wasm imports shared memory and thread-spawn, which clang-wasi.mjs does not provide, and a PCH must come from the clang that uses it.
+	{ outDir: option('--mtdist'), name: 'mtdist', pch: false, binaries: [
 		['clang.wasm', 'build/bin/clang.wasm'],
 		['lld.wasm', 'build/bin/lld.wasm'],
 		['clangd.wasm', 'build-clangd-threads/bin/clangd.wasm'],
@@ -130,7 +131,7 @@ async function buildPchs(clangBytes, layout) {
 	}
 }
 
-for (const { outDir, name: layout, binaries } of layouts) {
+for (const { outDir, name: layout, binaries, pch } of layouts) {
 	if (flag('--if-missing') && existsSync(join(outDir, 'manifest.json'))) {
 		console.log(`${outDir}/manifest.json exists; skipping ${layout}.`);
 		continue;
@@ -160,7 +161,7 @@ for (const { outDir, name: layout, binaries } of layouts) {
 	}
 	add('sysroot.zip', sysrootZip, 'raw', sysrootZip, 'sysroot.zip');
 	const flagsJson = structuredClone(releaseFlags);
-	if (!flag('--no-pch')) {
+	if (!flag('--no-pch') && pch !== false) {
 		const variants = await buildPchs(strippedBinary(binaries.find(([n]) => n === 'clang.wasm')[1]), layout);
 		for (const v of variants) { add(v.file, v.content, 'zip', zipSync({ [v.file]: [v.content, { level: 9 }] }), v.file.replace(/\.pch$/, '.zip')); }
 		flagsJson.pch = { [PCH_SLICE]: { defaultStd: PCH_DEFAULT_STD, variants: variants.map(({ file, std, optimization }) => ({ file, std, optimization })) } };
