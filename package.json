@@ -212,6 +212,18 @@
           "default": {},
           "markdownDescription": "Environment variables for the program, added to the defaults `HOME=/home/user`, `TMPDIR=/tmp`, `USER=user`, `LANG=C.UTF-8`. Set a variable to `null` to remove a default. `${workspaceFolder}` and the other variables are expanded in values (as in `vscwclang.run.args`)."
         },
+        "vscwclang.buildCache.maxAgeDays": {
+          "type": "number",
+          "default": 7,
+          "minimum": 1,
+          "markdownDescription": "Compiled objects kept for faster rebuilds are deleted when no build has used them for this many days. Takes effect at the next build."
+        },
+        "vscwclang.buildCache.maxSizeMB": {
+          "type": "number",
+          "default": 1024,
+          "minimum": 16,
+          "markdownDescription": "Most megabytes of compiled objects to keep; the least recently used are deleted first. `vscwClang: Clear build cache` removes them all."
+        },
         "vscwclang.toolTimeoutSeconds": {
           "type": "number",
           "default": 300,

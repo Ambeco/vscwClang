@@ -96,7 +96,7 @@ export interface ObjectCacheOptions {
 }
 
 export const DEFAULT_CACHE_MAX_BYTES = 1024 * 1024 * 1024;
-export const DEFAULT_CACHE_MAX_AGE_MS = 30 * 24 * 3600 * 1000;
+export const DEFAULT_CACHE_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
 const INDEX_KEY = 'index';
 const INDEX_VERSION = 1;
 const objectKey = (id: string) => `obj/${id}`;
@@ -117,8 +117,8 @@ export class ObjectCache {
 	private readonly meta = new Map<string, Meta>();
 	private loading: Promise<void> | undefined;
 	private dirty = false;
-	private readonly maxBytes: number;
-	private readonly maxAgeMs: number;
+	private maxBytes: number;
+	private maxAgeMs: number;
 	private readonly now: () => number;
 	private readonly saveIntervalMs: number;
 	private lastSave = 0;
@@ -129,6 +129,12 @@ export class ObjectCache {
 		this.now = options.now ?? Date.now;
 		this.saveIntervalMs = options.saveIntervalMs ?? 5000;
 		this.lastSave = this.now();
+	}
+
+	/** Replaces the limits (from settings); they apply at the next load or flush. */
+	setLimits(limits: { maxBytes?: number; maxAgeMs?: number }): void {
+		this.maxBytes = limits.maxBytes ?? this.maxBytes;
+		this.maxAgeMs = limits.maxAgeMs ?? this.maxAgeMs;
 	}
 
 	async stats(): Promise<{ entries: number; objects: number; bytes: number }> {

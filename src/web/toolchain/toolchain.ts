@@ -72,6 +72,8 @@ export type BuildContext = StoreContext & Pick<vscode.ExtensionContext, 'extensi
  * Throws (rather than returning a nonzero result) for problems with the request itself.
  */
 export async function build(request: BuildRequest, log: vscode.OutputChannel, context: BuildContext): Promise<BuildResult> {
+	const cacheSettings = vscode.workspace.getConfiguration('vscwclang.buildCache');
+	objectCache.setLimits({ maxBytes: cacheSettings.get<number>('maxSizeMB', 1024) * 1048576, maxAgeMs: cacheSettings.get<number>('maxAgeDays', 7) * 24 * 3600 * 1000 });
 	try {
 		return await buildUncached(request, log, context);
 	} finally {
