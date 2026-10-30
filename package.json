@@ -229,6 +229,12 @@
           "default": true,
           "markdownDescription": "Compile C++ sources against a prebuilt copy of the common standard headers (`<vector>`, `<string>`, `<iostream>`, ...), which cuts the time of each recompiled file by half or more. Used only when your flags match one that was prebuilt (`-std=c++17`, `c++20` or the `gnu++` forms of them, with no `-O` or `-O2`, and no `-D` of a reserved name or `NDEBUG`). Side effect: these headers count as included at the top of every such file, so a missing `#include` goes unnoticed here and fails elsewhere. Turn off to compile exactly as written."
         },
+        "vscwclang.parallelCompiles": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0,
+          "markdownDescription": "How many source files to compile at once, each in its own Worker. `0` picks automatically (the browser's core count minus one, at most 4). Each compile can use several hundred MB, so lower this if the tab runs out of memory."
+        },
         "vscwclang.toolTimeoutSeconds": {
           "type": "number",
           "default": 300,

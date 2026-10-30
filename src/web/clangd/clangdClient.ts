@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { sharedMemoryLimits } from '../host/sharedMemory';
 import { createWorkerProcess, type PipedProcess } from '../host/workerProcess';
 import { LanguageClient, ReadableStreamMessageReader, WriteableStreamMessageWriter, type LanguageClientOptions, type MessageTransports } from 'vscode-languageclient/browser';
 import { loadCompileFlags, loadSysrootFiles, loadSysrootGuestFs } from '../toolchain/sysroot';
@@ -48,7 +49,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	const args = [...CLANGD_ARGS, `-log=${clangdLogLevel(level)}`];
 	const sysroot = await loadSysrootGuestFs(toolchain);
 	const process = await createWorkerProcess(context, {
-		name: 'clangd', module, args, env: {},
+		name: 'clangd', module, args, env: {}, memoryLimits: sharedMemoryLimits(bits),
 		mounts: [
 			{ guestPath: GUEST_WORKSPACE, uri: folder },
 			{ guestPath: '/sysroot', fs: sysroot.sysroot },

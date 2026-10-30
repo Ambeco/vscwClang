@@ -13,6 +13,8 @@ src/web/
     projectSettings            # settings read per workspace folder
     isUserSet                  # user value vs extension default
   toolchain/
+    concurrency.ts
+      forEachLimited           # bounded-parallel loop
     chunkedFile.ts
       readChunked
     guestPaths.ts              # host path <-> /workspace guest path

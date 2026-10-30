@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { GuestProcess, StdinQueue } from './guestProcess';
 import { VscodeGuestFs, type GuestMount } from './vscodeGuestFs';
-import { createGuestWorker } from './workerHost';
+import type { MemoryLimits } from './sharedMemory';
+import { createGuestWorker, threadOptions } from './workerHost';
 
 /** Exit code reported for a guest that trapped, as a SIGSEGV would end a native one. */
 export const TRAPPED_EXIT_CODE = 139;
@@ -44,6 +45,8 @@ export interface WorkerProcessOptions {
 	mounts: GuestMount[];
 	/** See `GuestOptions.terminal`. */
 	terminal?: boolean;
+	/** For a wasi-threads module: `sharedMemoryLimits` of its binary. */
+	memoryLimits?: MemoryLimits;
 }
 
 export async function createWorkerProcess(context: vscode.ExtensionContext, options: WorkerProcessOptions): Promise<PipedProcess> {
@@ -56,6 +59,7 @@ export async function createWorkerProcess(context: vscode.ExtensionContext, opti
 		preopens: options.mounts.map(m => m.guestPath), terminal: options.terminal, fs: new VscodeGuestFs(options.mounts), stdin,
 		onOutput: (fd, data) => (fd === 1 ? stdout : stderr).emit(data),
 		createWorker: () => worker,
+			...threadOptions(context, options.memoryLimits),
 	});
 	return {
 		stdin: { write: data => { stdin.push(typeof data === 'string' ? new TextEncoder().encode(data) : data); return Promise.resolve(); } },

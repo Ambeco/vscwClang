@@ -2,9 +2,11 @@ import * as vscode from 'vscode';
 import { GuestProcess, StdinQueue } from '../host/guestProcess';
 import { MemoryGuestFs } from '../host/memoryGuestFs';
 import { VscodeGuestFs } from '../host/vscodeGuestFs';
-import { createGuestWorker } from '../host/workerHost';
+import { sharedMemoryLimits, type MemoryLimits } from '../host/sharedMemory';
+import { createGuestWorker, threadOptions } from '../host/workerHost';
 import { parseDiagnostics, withFailureFallback, type ParsedDiagnostic } from './diagnostics';
 import { DEFAULT_COMPILE_FLAGS, DEFAULT_C_COMPILE_FLAGS, DEFAULT_LINK_FLAGS } from './defaultFlags';
+import { forEachLimited } from './concurrency';
 import { checkUserFlags, splitFlags } from './flagPolicy';
 import { GUEST_WORKSPACE, fromGuestPath, toGuestPath } from './guestPaths';
 import { ObjectCache, defaultByteStore, hashText, splitIncludeTrace, type LinkRecord, type ReadGuestFile } from './objectCache';
@@ -149,8 +151,9 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 		}
 	};
 	const cacheScope = `${folder.toString()}|${request.mode}|`;
-	const objectIds: (string | undefined)[] = [];
-	for (const [i, source] of sources.entries()) {
+	const stderrs: string[] = sources.map(() => '');
+	const compiles: (CompiledSource | undefined)[] = [];
+	const compileSource = async (source: (typeof sources)[number], i: number): Promise<CompiledSource> => {
 		const base = source.guest.slice(source.guest.lastIndexOf('/') + 1);
 		const objectName = `${i}-${base}.o`;
 		const driver = base.endsWith('.c') ? 'clang' : 'clang++';
@@ -167,12 +170,10 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 		const cached = sourceHash ? await objectCache.lookup(cacheKey, argsKey, sourceHash, readGuest) : undefined;
 		if (cached) {
 			log.appendLine(`[vscwclang] up to date ${source.guest} (reused object)`);
-			diagnostics += cached.stderr;
-			if (cached.stderr !== '') { request.onDiagnostics?.(parseDiagnostics(diagnostics)); }
+			stderrs[i] = cached.stderr;
+			if (cached.stderr !== '') { request.onDiagnostics?.(parseDiagnostics(stderrs.join(''))); }
 			objects.setFile(objectName, cached.object);
-			objectPaths.push(`/obj/${objectName}`);
-			objectIds.push(cached.id);
-			continue;
+			return { exitCode: 0, objectPath: `/obj/${objectName}`, objectId: cached.id };
 		}
 		log.appendLine(`[vscwclang] compiling ${source.guest}`);
 		const started = Date.now();
@@ -187,17 +188,18 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 		cc ??= await run('clang.wasm', [...compileArgsWith(undefined), '-H', '-o', '-'], { captureStdout: true, objects });
 		log.appendLine(`[vscwclang] compiled ${source.guest} in ${Date.now() - started} ms (exit ${cc.exitCode}${withPch ? ', precompiled headers' : ''})`);
 		const trace = splitIncludeTrace(cc.stderr, GUEST_WORKSPACE);
-		diagnostics += trace.stderr;
-		if (trace.stderr !== '') { request.onDiagnostics?.(parseDiagnostics(diagnostics)); }
-		if (cc.exitCode === 0) {
-			objects.setFile(objectName, cc.stdout);
-			objectPaths.push(`/obj/${objectName}`);
-			const entry = sourceHash ? await objectCache.store(cacheKey, argsKey, sourceHash, trace.headers, cc.stdout, trace.stderr, readGuest) : undefined;
-			objectIds.push(entry?.id);
-		} else if (exitCode === 0) {
-			exitCode = cc.exitCode;
-		}
-	}
+		stderrs[i] = trace.stderr;
+		if (trace.stderr !== '') { request.onDiagnostics?.(parseDiagnostics(stderrs.join(''))); }
+		if (cc.exitCode !== 0) { return { exitCode: cc.exitCode }; }
+		objects.setFile(objectName, cc.stdout);
+		const entry = sourceHash ? await objectCache.store(cacheKey, argsKey, sourceHash, trace.headers, cc.stdout, trace.stderr, readGuest) : undefined;
+		return { exitCode: 0, objectPath: `/obj/${objectName}`, objectId: entry?.id };
+	};
+	await forEachLimited(sources, compileParallelism(sources.length), async (source, i) => { compiles[i] = await compileSource(source, i); });
+	diagnostics += stderrs.join('');
+	exitCode = compiles.find(c => c && c.exitCode !== 0)?.exitCode ?? 0;
+	const objectIds = compiles.map(c => c?.objectId);
+	objectPaths.push(...compiles.flatMap(c => c?.objectPath ? [c.objectPath] : []));
 	if (exitCode === 0) {
 		const link = flags.link[SLICE].map(sub);
 		const linkArgs = ['wasm-ld', link[0], ...objectPaths, ...(abortShim ? [abortShim] : []), ...(uncaughtShim ? [uncaughtShim, '--wrap=__main_void'] : []), ...(debugStub ? [debugStub, '--export=__sanitizer_cov_trace_pc_guard'] : []), ...DEFAULT_LINK_FLAGS, ...linkFlags, ...link.slice(1), '-o', output];
@@ -222,6 +224,15 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 		}
 	}
 	return { exitCode, diagnostics, parsed: withFailureFallback(parseDiagnostics(diagnostics), exitCode, diagnostics) };
+}
+
+interface CompiledSource { exitCode: number; objectPath?: string; objectId?: string }
+
+/** Compiles run in parallel Workers; `vscwclang.parallelCompiles` (0 = automatic) caps how many, since each clang can need hundreds of MB. */
+function compileParallelism(sourceCount: number): number {
+	const setting = vscode.workspace.getConfiguration('vscwclang').get<number>('parallelCompiles', 0);
+	const automatic = Math.min(4, Math.max(1, (globalThis.navigator?.hardwareConcurrency ?? 2) - 1));
+	return Math.max(1, Math.min(sourceCount, Number.isFinite(setting) && setting > 0 ? Math.floor(setting) : automatic));
 }
 
 const NL = String.fromCharCode(10);
@@ -306,7 +317,7 @@ function getPchBytes(toolchain: ToolchainStore, toolchainVersion: string, file: 
 }
 
 // Compiling clang.wasm (~1 s) dominates small builds, so compiled modules survive across builds.
-const modules = new Map<string, Promise<WebAssembly.Module>>();
+const modules = new Map<string, Promise<{ module: WebAssembly.Module; limits: MemoryLimits | undefined }>>();
 
 const stores = new Map<string, ToolchainStore>();
 
@@ -321,11 +332,11 @@ export function getToolchainStore(context: StoreContext, log: vscode.OutputChann
 	return store;
 }
 
-function getModule(toolchain: ToolchainStore, wasmFile: string): Promise<WebAssembly.Module> {
+function getModule(toolchain: ToolchainStore, wasmFile: string): Promise<{ module: WebAssembly.Module; limits: MemoryLimits | undefined }> {
 	let module = modules.get(wasmFile);
 	if (!module) {
 		module = toolchain.getFile(wasmFile)
-			.then(bits => WebAssembly.compile(bits))
+			.then(async bits => ({ module: await WebAssembly.compile(bits), limits: sharedMemoryLimits(bits) }))
 			.catch(e => { modules.delete(wasmFile); throw e; });
 		modules.set(wasmFile, module);
 	}
@@ -355,7 +366,7 @@ interface ToolExtras {
  * Runs one tool in its own Worker. Traps and timeouts end the tool with exit code 1 and a message in `stderr`.
  */
 async function runTool(context: BuildContext, workspace: vscode.Uri, toolchain: ToolchainStore, sysroot: { sysroot: MemoryGuestFs; resource: MemoryGuestFs }, wasmFile: string, args: string[], extra: ToolExtras = {}): Promise<ToolResult> {
-	const module = await getModule(toolchain, wasmFile);
+	const { module, limits } = await getModule(toolchain, wasmFile);
 	const worker = await createGuestWorker(context as vscode.ExtensionContext);
 	const mounts = [
 		{ guestPath: GUEST_WORKSPACE, uri: workspace },
@@ -370,11 +381,12 @@ async function runTool(context: BuildContext, workspace: vscode.Uri, toolchain: 
 	let stderr = '';
 	const stdoutChunks: Uint8Array[] = [];
 	const guest = new GuestProcess({
-		module, args, env: {}, preopens: mounts.map(m => m.guestPath), fs: new VscodeGuestFs(mounts), stdin,
+		module, args: limits && wasmFile === 'clang.wasm' ? [args[0], '-fintegrated-cc1', ...args.slice(1)] : args, env: {}, preopens: mounts.map(m => m.guestPath), fs: new VscodeGuestFs(mounts), stdin,
 		onOutput: (fd, data) => {
 			if (fd === 1 && extra.captureStdout) { stdoutChunks.push(new Uint8Array(data)); } else { stderr += decoders[fd].decode(data, { stream: true }); }
 		},
 		createWorker: () => worker,
+		...threadOptions(context as vscode.ExtensionContext, limits),
 	});
 	const timeoutMs = toolTimeoutMs();
 	const timer = timeoutMs === 0 ? undefined : setTimeout(() => guest.terminate(), timeoutMs);

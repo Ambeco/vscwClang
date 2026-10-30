@@ -7,9 +7,9 @@
 //   --llvm        llvm-project checkout (default ../../llvm-project relative to this repo)
 //   --dist        single-threaded layout: build-single-threaded/bin/{clang,lld,clangd,llvm-ar}.wasm,
 //                 build-lldb-single-threaded/bin/lldb-wasm-reactor.wasm
-//   --mtdist      multithreaded layout: build/bin/{clang,lld}.wasm, build-clangd-threads/bin/clangd.wasm,
-//                 build-single-threaded/bin/llvm-ar.wasm (llvm-ranlib = llvm-ar.wasm run with argv[0] llvm-ranlib),
-//                 build-lldb/bin/lldb-wasm-reactor.wasm (imports wasi.thread-spawn)
+//   --mtdist      multithreaded layout: build/bin/{clang,lld}.wasm; clangd, llvm-ar and the lldb reactor are the single-threaded
+//                 builds (the reactor runs in-process on the extension host, where lldb's thread pool cannot start;
+//                 clangd-threads is not wired yet)
 //   --pin         write the --dist manifest's SHA-256 into src/web/toolchain/toolchainPin.ts
 //   --if-missing  skip a layout whose <outDir>/manifest.json already exists
 //   --no-pch      skip the libc++ precompiled headers (a PCH per -std and -O level, each built by the layout's own clang.wasm, ~6 s each)
@@ -42,8 +42,8 @@ const layouts = [
 	{ outDir: option('--mtdist'), name: 'mtdist', pchSlices: ['wasm32-wasip1', 'wasm32-wasip1-threads'], driverFlags: ['-fintegrated-cc1'], binaries: [
 		['clang.wasm', 'build/bin/clang.wasm'],
 		['lld.wasm', 'build/bin/lld.wasm'],
-		['clangd.wasm', 'build-clangd-threads/bin/clangd.wasm'],
-		['lldb-wasm-reactor.wasm', 'build-lldb/bin/lldb-wasm-reactor.wasm'],
+		['clangd.wasm', 'build-single-threaded/bin/clangd.wasm'],
+		['lldb-wasm-reactor.wasm', 'build-lldb-single-threaded/bin/lldb-wasm-reactor.wasm'],
 		['llvm-ar.wasm', 'build-single-threaded/bin/llvm-ar.wasm'], // no threaded variant: llvm-ar spawns no threads
 	] },
 ].filter((l) => l.outDir);

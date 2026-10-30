@@ -2,7 +2,8 @@ import * as vscode from 'vscode';
 import { GuestProcess, StdinQueue } from './host/guestProcess';
 import { ProgramTerminal } from './host/programTerminal';
 import { VscodeGuestFs, type GuestMount } from './host/vscodeGuestFs';
-import { createGuestWorker } from './host/workerHost';
+import { sharedMemoryLimits } from './host/sharedMemory';
+import { createGuestWorker, threadOptions } from './host/workerHost';
 import { GUEST_WORKSPACE } from './toolchain/guestPaths';
 import { runEnvSetting } from './projectConfig';
 import { defaultRunEnvironment, GUEST_HOME, GUEST_TMP } from './toolchain/runEnvironment';
@@ -56,7 +57,8 @@ const TRAPPED_EXIT_CODE = 139;
  */
 export async function runProgram(context: vscode.ExtensionContext, program: vscode.Uri, args: string[], host: RunHost = {}): Promise<number> {
 	const name = program.path.slice(program.path.lastIndexOf('/') + 1);
-	const module = await WebAssembly.compile(await vscode.workspace.fs.readFile(program) as Uint8Array<ArrayBuffer>);
+	const bytes = await vscode.workspace.fs.readFile(program) as Uint8Array<ArrayBuffer>;
+	const module = await WebAssembly.compile(bytes);
 	const { env, mounts, terminal: isTerminal } = await workerProgramEnvironment(context);
 	const stdin = new StdinQueue();
 	const encoder = new TextEncoder();
@@ -77,6 +79,7 @@ export async function runProgram(context: vscode.ExtensionContext, program: vsco
 		stdin,
 		onOutput: (fd, data) => terminal.write(decoders[fd].decode(data, { stream: true })),
 		createWorker: () => worker,
+		...threadOptions(context, sharedMemoryLimits(bytes)),
 	});
 	const outcome = await guest.run();
 	stdin.end();

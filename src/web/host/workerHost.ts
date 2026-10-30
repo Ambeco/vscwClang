@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import type { WorkerLike } from './guestProcess';
+import type { GuestProcessOptions, WorkerLike } from './guestProcess';
+import { newSharedMemory, type MemoryLimits } from './sharedMemory';
 
 /** Where esbuild puts the bundled Worker entry (`guestWorker.web.ts`). */
 const WORKER_SCRIPT = ['dist', 'web', 'host', 'guestWorker.web.js'];
@@ -29,4 +30,9 @@ export async function createGuestWorker(context: vscode.ExtensionContext): Promi
 		onError: listener => { worker.onerror = ev => listener(ev.message || 'the Worker failed to load'); },
 		terminate: () => worker.terminate(),
 	};
+}
+
+/** What a `GuestProcess` needs to run a wasi-threads module (its own shared memory, and Workers for its threads); nothing for other modules. */
+export function threadOptions(context: vscode.ExtensionContext, limits: MemoryLimits | undefined): Pick<GuestProcessOptions, 'sharedMemory' | 'createThreadWorker'> {
+	return limits ? { sharedMemory: newSharedMemory(limits), createThreadWorker: () => createGuestWorker(context) } : {};
 }
