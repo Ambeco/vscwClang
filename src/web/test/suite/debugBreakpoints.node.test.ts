@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { artifactReactor } from '../artifacts';
 import { DebugController, type DebugTarget } from '../../debug/debugController';
 import { evaluateExpression, formatLogMessage, hitConditionMatches, isPlainPath, scalarFromFormatted } from '../../debug/debugExpression';
 import { demangle, displayFunctionName, functionNameMatches } from '../../debug/demangle';
@@ -121,7 +122,7 @@ suite('demangle', () => {
 });
 
 const ROOT = process.cwd();
-const REACTOR = join(ROOT, 'llvm-artifacts', 'bin', 'lldb-wasm-reactor.wasm');
+const REACTOR = artifactReactor();
 const LOOP = join(ROOT, 'src', 'web', 'test', 'fixtures', 'debug', 'loopstub.wasm');
 const identity: PathMapper = { dapToGuest: p => p, guestToDap: p => p };
 const suiteIfFixtures = existsSync(REACTOR) && existsSync(LOOP) ? suite : suite.skip;

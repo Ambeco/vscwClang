@@ -2,11 +2,11 @@ import * as assert from 'assert';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { artifactBin, artifactPath, artifactResource } from '../artifacts';
 import { WASI } from 'wasi';
 import { COVERAGE_IGNORELIST } from '../../debug/coverageIgnorelist';
 import { scanProgram } from '../../debug/wasmScan';
 
-const ART = join(process.cwd(), 'llvm-artifacts');
 const SOURCE = [
 	'#include <vector>', '#include <algorithm>', '#include <cstdio>',
 	'static int twice(int x) {', '  return x * 2;', '}',
@@ -16,20 +16,20 @@ const SOURCE = [
 
 suite('coverage ignorelist (real clang, needs llvm-artifacts)', function () {
 	this.timeout(120000);
-	const ready = existsSync(join(ART, 'bin', 'clang.wasm')) && existsSync(join(ART, 'bin', 'lld.wasm'));
+	const ready = existsSync(artifactBin('clang.wasm')) && existsSync(artifactBin('lld.wasm'));
 	let work: string;
 	suiteSetup(function () { if (!ready) { this.skip(); } work = mkdtempSync(join(tmpdir(), 'vscw-ignore-')); });
 	suiteTeardown(() => { if (work) { rmSync(work, { recursive: true, force: true }); } });
 
 	async function run(tool: string, args: string[]): Promise<void> {
-		const wasi = new WASI({ version: 'preview1', args, returnOnExit: true, preopens: { '/sysroot': join(ART, 'sysroot'), '/resource': join(ART, 'resource'), '/work': work } });
-		const instance = await WebAssembly.instantiate(await WebAssembly.compile(readFileSync(join(ART, 'bin', tool))), wasi.getImportObject() as WebAssembly.Imports);
+		const wasi = new WASI({ version: 'preview1', args, returnOnExit: true, preopens: { '/sysroot': artifactPath('sysroot'), '/resource': artifactResource(), '/work': work } });
+		const instance = await WebAssembly.instantiate(await WebAssembly.compile(readFileSync(artifactBin(tool))), wasi.getImportObject() as WebAssembly.Imports);
 		const code = wasi.start(instance as { exports: { memory: WebAssembly.Memory; _start(): void } });
 		assert.strictEqual(code, 0, `${tool} ${args.join(' ')} exited with ${code}`);
 	}
 
 	async function guardedFunctions(tag: string, extra: string[]): Promise<string[]> {
-		const flags = JSON.parse(readFileSync(join(ART, 'compile-flags.json'), 'utf8'));
+		const flags = JSON.parse(readFileSync(artifactPath('compile-flags.json'), 'utf8'));
 		const sub = (f: string) => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource');
 		const compile = (flags.compile['wasm32-wasip1'] as string[]).map(sub), link = (flags.link['wasm32-wasip1'] as string[]).map(sub);
 		await run('clang.wasm', ['clang++', ...compile, '-std=c++17', '-O0', '-g', '-fsanitize-coverage=trace-pc-guard,no-prune', ...(flags.debugCoverage ?? []), ...extra, '-c', '/work/t.cpp', '-o', `/work/${tag}.o`]);

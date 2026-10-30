@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { artifactReactor } from '../artifacts';
 import { ReactorHost } from '../../debug/reactorHost';
 import { captureWasmFrames, mergeFrames, scanProgram, ShadowStack } from '../../debug/wasmScan';
 
@@ -8,7 +9,7 @@ import { captureWasmFrames, mergeFrames, scanProgram, ShadowStack } from '../../
 //   clang -O0 -g -fsanitize-coverage=trace-pc-guard -Wl,--export=__stack_pointer -Wl,--allow-undefined
 // (wasi-sdk 34). The reactor comes from the local toolchain copy (llvm-artifacts is gitignored), so tests skip without it.
 const ROOT = process.cwd();
-const REACTOR = join(ROOT, 'llvm-artifacts', 'bin', 'lldb-wasm-reactor.wasm');
+const REACTOR = artifactReactor();
 const PROG = join(ROOT, 'src', 'web', 'test', 'fixtures', 'debug', 'prog.wasm');
 
 class ProgramExit extends Error {}

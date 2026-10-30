@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { artifactReactor } from '../artifacts';
 import { ReactorHost } from '../../debug/reactorHost';
 import { evaluateWithMemory, PAGE_SIZE, PagedMemory } from '../../debug/pagedMemory';
 import { FrameDemux, parseMessage, StubSession, type StubMessage } from '../../debug/stubChannel';
@@ -8,7 +9,7 @@ import { scanProgram } from '../../debug/wasmScan';
 import { Debuggee } from './stubWorkerHarness';
 
 const ROOT = process.cwd();
-const REACTOR = join(ROOT, 'llvm-artifacts', 'bin', 'lldb-wasm-reactor.wasm');
+const REACTOR = artifactReactor();
 // progstub.wasm is fixtures/debug/prog.c plus src/web/debug/debugStub.c (wasi-sdk 34):
 //   clang -O2 -c debugStub.c -o debugStub.o
 //   clang -O0 -g -fsanitize-coverage=trace-pc-guard prog.c debugStub.o -Wl,--export=__sanitizer_cov_trace_pc_guard -o progstub.wasm

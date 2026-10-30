@@ -2,9 +2,10 @@ import * as assert from 'assert';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { artifactBin } from '../artifacts';
 import { WASI } from 'wasi';
 
-const BIN = join(process.cwd(), 'llvm-artifacts', 'bin');
+const BIN = artifactBin('');
 const AR = join(BIN, 'llvm-ar.wasm');
 const CLANG = join(BIN, 'clang.wasm');
 const LLD = join(BIN, 'lld.wasm');

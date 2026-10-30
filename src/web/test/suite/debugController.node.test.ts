@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { artifactReactor } from '../artifacts';
 import { BreakpointIndex } from '../../debug/breakpointIndex';
 import { DebugController, type DebugTarget } from '../../debug/debugController';
 import type { DebuggeeEvent, DebuggeeSession, ResumeKind } from '../../debug/debuggeeSession';
@@ -13,7 +14,7 @@ import { DapClient, type DapMessage } from './dapClient';
 import { Debuggee } from './stubWorkerHarness';
 
 const ROOT = process.cwd();
-const REACTOR = join(ROOT, 'llvm-artifacts', 'bin', 'lldb-wasm-reactor.wasm');
+const REACTOR = artifactReactor();
 const FIXTURES = join(ROOT, 'src', 'web', 'test', 'fixtures', 'debug');
 // progstub.wasm / chattystub.wasm are prog.c / chatty.c with the debug stub linked in (commands in stubChannel.node.test.ts);
 // their DWARF names the source file as a bare relative path, so the tests use an identity path mapper.
