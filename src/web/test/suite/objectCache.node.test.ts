@@ -77,6 +77,19 @@ suite('ObjectCache', () => {
 		assert.deepStrictEqual([hit?.stderr, hit?.object], ['w', obj]);
 	});
 
+	test('a build that dies midway keeps what it finished: store saves the index every saveIntervalMs, without flush', async () => {
+		const c = new ObjectCache(store, { now, saveIntervalMs: 100 });
+		await c.store('a', 'x', 's', [], enc('o1'), '', read);
+		clock += 150;
+		await c.store('b', 'x', 's', [], enc('o2'), '', read);
+		clock += 10;
+		await c.store('lost', 'x', 's', [], enc('o3'), '', read);
+		const reopened = new ObjectCache(store, { now });
+		assert.ok(await reopened.lookup('a', 'x', 's', read));
+		assert.ok(await reopened.lookup('b', 'x', 's', read));
+		assert.strictEqual(await reopened.lookup('lost', 'x', 's', read), undefined);
+	});
+
 	test('entries not flushed are lost on restart', async () => {
 		await new ObjectCache(store, { now }).store('k', 'args', 'src', [], obj, '', read);
 		assert.strictEqual(await new ObjectCache(store, { now }).lookup('k', 'args', 'src', read), undefined);

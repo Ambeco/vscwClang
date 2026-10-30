@@ -90,6 +90,8 @@ export interface ObjectCacheOptions {
 	maxBytes?: number;
 	/** Entries unused for this long are dropped when the cache is loaded or flushed. */
 	maxAgeMs?: number;
+	/** `store` saves the index when this long has passed since the last save, so a long build that dies keeps its finished objects. */
+	saveIntervalMs?: number;
 	now?: () => number;
 }
 
@@ -107,7 +109,7 @@ const objectKey = (id: string) => `obj/${id}`;
  * and a small index (what each entry was built from, its size and last use) live in a `ByteStore`, so a persistent store
  * survives reloads. Entries unused for `maxAgeMs`, then the least recently used past `maxBytes`, are dropped.
  *
- * The index is held in memory and written by `flush()` (call it at the end of a build). Two tabs sharing one store each
+ * The index is held in memory and written by `flush()` (call it at the end of a build) and by `store` every `saveIntervalMs`, so a build that dies midway keeps the objects it finished; only orphaned objects are swept by `flush()`. Two tabs sharing one store each
  * write their own index, so the later flush wins and the other tab's objects are deleted as unreferenced; that costs
  * a recompile, never a wrong object. Store failures (quota) are swallowed: the entry simply is not cached.
  */
@@ -118,11 +120,15 @@ export class ObjectCache {
 	private readonly maxBytes: number;
 	private readonly maxAgeMs: number;
 	private readonly now: () => number;
+	private readonly saveIntervalMs: number;
+	private lastSave = 0;
 
 	constructor(private readonly backing: ByteStore, options: ObjectCacheOptions = {}) {
 		this.maxBytes = options.maxBytes ?? DEFAULT_CACHE_MAX_BYTES;
 		this.maxAgeMs = options.maxAgeMs ?? DEFAULT_CACHE_MAX_AGE_MS;
 		this.now = options.now ?? Date.now;
+		this.saveIntervalMs = options.saveIntervalMs ?? 5000;
+		this.lastSave = this.now();
 	}
 
 	async stats(): Promise<{ entries: number; objects: number; bytes: number }> {
@@ -167,6 +173,7 @@ export class ObjectCache {
 		}
 		this.meta.set(key, { id, argsKey, sourceHash, headers: hashes, stderr, size: object.byteLength, lastUsed: this.now() });
 		this.dirty = true;
+		if (this.now() - this.lastSave >= this.saveIntervalMs) { await this.saveIndex(); }
 		return { id, object, stderr };
 	}
 
@@ -174,12 +181,16 @@ export class ObjectCache {
 	async flush(): Promise<void> {
 		await this.load();
 		this.evict();
-		if (this.dirty) {
-			this.dirty = false;
-			const index = { version: INDEX_VERSION, entries: [...this.meta] };
-			await this.backing.put(INDEX_KEY, new TextEncoder().encode(JSON.stringify(index))).catch(() => { this.dirty = true; });
-		}
+		await this.saveIndex();
 		await this.deleteUnreferenced();
+	}
+
+	private async saveIndex(): Promise<void> {
+		this.lastSave = this.now();
+		if (!this.dirty) { return; }
+		this.dirty = false;
+		const index = { version: INDEX_VERSION, entries: [...this.meta] };
+		await this.backing.put(INDEX_KEY, new TextEncoder().encode(JSON.stringify(index))).catch(() => { this.dirty = true; });
 	}
 
 	/** Removes every entry, from memory and the store. */

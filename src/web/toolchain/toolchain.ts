@@ -72,6 +72,14 @@ export type BuildContext = StoreContext & Pick<vscode.ExtensionContext, 'extensi
  * Throws (rather than returning a nonzero result) for problems with the request itself.
  */
 export async function build(request: BuildRequest, log: vscode.OutputChannel, context: BuildContext): Promise<BuildResult> {
+	try {
+		return await buildUncached(request, log, context);
+	} finally {
+		await objectCache.flush().catch(e => log.appendLine(`[vscwclang] warning: could not save the build cache: ${e instanceof Error ? e.message : String(e)}`));
+	}
+}
+
+async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, context: BuildContext): Promise<BuildResult> {
 	if (request.sources.length === 0) {
 		throw new Error('vscwClang: no source files to build. Did you mean to add a .c/.cc/.cpp/.cxx file to the workspace?');
 	}
@@ -188,7 +196,6 @@ export async function build(request: BuildRequest, log: vscode.OutputChannel, co
 			}
 		}
 	}
-	await objectCache.flush().catch(e => log.appendLine(`[vscwclang] warning: could not save the build cache: ${e instanceof Error ? e.message : String(e)}`));
 	return { exitCode, diagnostics, parsed: withFailureFallback(parseDiagnostics(diagnostics), exitCode, diagnostics) };
 }
 
