@@ -12,8 +12,8 @@
 
 /** Libc++ headers the PCH preloads. No `<cmath>` or `<cassert>`: C names such as `y1`, and `NDEBUG`, must stay the user's. */
 export const PCH_HEADERS = [
-	'algorithm', 'array', 'bitset', 'deque', 'fstream', 'functional', 'iomanip', 'iostream', 'list', 'map', 'memory', 'numeric',
-	'optional', 'queue', 'set', 'sstream', 'stack', 'string', 'string_view', 'tuple', 'unordered_map', 'unordered_set', 'utility',
+	'algorithm', 'array', 'atomic', 'bitset', 'condition_variable', 'deque', 'fstream', 'functional', 'future', 'iomanip', 'iostream', 'list', 'map', 'memory', 'mutex', 'numeric',
+	'optional', 'queue', 'set', 'sstream', 'stack', 'string', 'string_view', 'thread', 'tuple', 'unordered_map', 'unordered_set', 'utility',
 	'variant', 'vector',
 ];
 
