@@ -12,6 +12,7 @@ import { clangdLogLevel, compileCommandsPath, logsClangdStderr } from '../toolch
 import { intelliSenseEnabled, loggingLevel, projectSettings, userFlags } from '../projectConfig';
 import { GUEST_CACHE, OVERLAY_BATCH_SIZE, batches, clangdArgs, clangdThreadCount, compilationDatabaseChanges, shardMountPoint } from './clangdConfig';
 import { discoverWorkspaceSources, findCompilationDatabaseDir } from './compileOverlay';
+import { ClangdStatus } from './clangdStatus';
 
 const CLANGD_TMP = 'clangd-tmp';
 const CLANGD_CACHE = 'clangd-cache';
@@ -104,16 +105,22 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	};
 	const sourceWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, '**/*.{c,cc,cpp,cxx}'));
 	const createdSub = sourceWatcher.onDidCreate(uri => { void sendOverlay([uri]).catch(e => log.appendLine(`[vscwclang] clangd: could not register ${uri.path} for indexing: ${errorText(e)}`)); });
-	const disposeWatchers = () => { createdSub.dispose(); sourceWatcher.dispose(); };
+	const statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
+	const status = new ClangdStatus(statusItem);
+	status.setActive(vscode.window.activeTextEditor && code2Protocol(vscode.window.activeTextEditor.document.uri));
+	const editorSub = vscode.window.onDidChangeActiveTextEditor(editor => status.setActive(editor && code2Protocol(editor.document.uri)));
+	const disposeWatchers = () => { createdSub.dispose(); sourceWatcher.dispose(); editorSub.dispose(); statusItem.dispose(); };
 	const clientOptions: LanguageClientOptions = {
 		documentSelector: [{ language: 'c' }, { language: 'cpp' }, { scheme: TOOLCHAIN_SCHEME }],
 		uriConverters: { code2Protocol, protocol2Code },
-		initializationOptions: { fallbackFlags: overlayFlags },
+		initializationOptions: { fallbackFlags: overlayFlags, clangdFileStatus: true },
 		synchronize: { fileEvents: sourceWatcher },
 	};
 	client = new LanguageClient('vscwclangClangd', 'vscwClang clangd', () => Promise.resolve(transports), clientOptions);
 	try {
+		client.onNotification('textDocument/clangd.fileStatus', (p: { uri: string; state: string }) => status.fileStatus(p.uri, p.state));
 		await client.start();
+		status.ready();
 	} catch (e) {
 		// A process that died during startup rejects start(); stop everything started so far so nothing leaks.
 		disposeWatchers();
