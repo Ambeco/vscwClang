@@ -11,7 +11,8 @@
 //   --mtdist      multithreaded layout: build/bin/{clang,lld}.wasm, build-lldb/bin/lldb-wasm-reactor.wasm (imports
 //                 wasi.thread-spawn; the extension host runs its threads in Workers, see workerThreads.ts); llvm-ar is the
 //                 single-threaded build
-//   --pin         write the --dist manifest's SHA-256 into src/web/toolchain/toolchainPin.ts
+//   --pin         write the manifest SHA-256 and the jsDelivr baseUrl (@<tag>/<layout>) into src/web/toolchain/toolchainPin.ts;
+//                 the layout is --mtdist when given (what the extension runs), else --dist
 //   --if-missing  skip a layout whose <outDir>/manifest.json already exists
 //   --no-pch      skip the libc++ precompiled headers (a PCH per -std and -O level, each built by the layout's own clang.wasm, ~6 s each)
 // A payload larger than --chunk-mib is split into <name>.000, .001, ...; at most that size is served per file.
@@ -135,6 +136,7 @@ async function buildPchs(clangBytes, layout, slice, driverFlags) {
 	}
 }
 
+const pinLayout = layouts.some((l) => l.name === 'mtdist') ? 'mtdist' : 'dist';
 for (const { outDir, name: layout, binaries, pchSlices, driverFlags } of layouts) {
 	if (flag('--if-missing') && existsSync(join(outDir, 'manifest.json'))) {
 		console.log(`${outDir}/manifest.json exists; skipping ${layout}.`);
@@ -180,10 +182,12 @@ for (const { outDir, name: layout, binaries, pchSlices, driverFlags } of layouts
 	const manifestSha = sha256(Buffer.from(manifestText));
 	console.log(`[${layout}] manifest.json (tag ${tag}) sha256 ${manifestSha}`);
 
-	if (flag('--pin') && layout === 'dist') {
+	if (flag('--pin') && layout === pinLayout) {
 		const pinFile = 'src/web/toolchain/toolchainPin.ts';
 		const text = readFileSync(pinFile, 'utf8');
-		const updated = text.replace(/manifestSha256: '[0-9a-f]*'/, `manifestSha256: '${manifestSha}'`);
+		const updated = text
+			.replace(/manifestSha256: '[0-9a-f]*'/, `manifestSha256: '${manifestSha}'`)
+			.replace(/(llvm-artifacts)@[^/']+\/\w+'/, `$1@${tag}/${layout}'`);
 		if (updated === text && !text.includes(manifestSha)) { throw new Error(`${pinFile}: no manifestSha256 field to update`); }
 		writeFileSync(pinFile, updated);
 		console.log(`pinned in ${pinFile}`);
