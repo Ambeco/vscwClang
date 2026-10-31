@@ -340,7 +340,7 @@ suiteIfFixtures('DebugController (real stub program, real lldb reactor, worker w
 		assert.match(afterExit.message!, /the program has exited/);
 		const pause = await client.request('pause', { threadId: 1 });
 		assert.strictEqual(pause.success, false);
-		assert.match(pause.message!, /cannot pause a program that is running/);
+		assert.match(pause.message!, /cannot pause this program/);
 		const unknown = await client.request('stepBack');
 		assert.match(unknown.message!, /'stepBack' is not implemented\. Did you mean one of/);
 	});

@@ -13,6 +13,8 @@ export interface StubDebuggeeOptions {
 	exited: Promise<number>;
 	terminate(): void | Promise<void>;
 	guardSites: Map<number, GuardSite>;
+	/** The program's shared linear memory (threaded programs); enables breakpoint changes and Pause while it runs. */
+	memory?: WebAssembly.Memory;
 }
 
 /** Longer than any wait a user will sit through, but under `setTimeout`'s 2^31 ms limit. */
@@ -22,8 +24,12 @@ const FOREVER_MS = 2_000_000_000;
  * `DebuggeeSession` over the in-process debug stub (`debugStub.c`) and its stdio channel (`stubChannel.ts`).
  *
  * The process owner feeds the program's stdout and stderr chunks to `feedStdout`/`feedStderr`. The stub only reads
- * commands at stops, so breakpoint changes and pause cannot reach a program that is running free: `capabilities`
- * says so and the controller queues changes until the next stop.
+ * commands at stops, so over the channel alone breakpoint changes and pause cannot reach a program that is running
+ * free: `capabilities` says so and the controller queues changes until the next stop. With `options.memory` (a
+ * threaded program's shared memory) the host instead writes the breakpoint bit of each guard word directly, and
+ * Pause sets the stub's pause flag; the stub stops at the next guard any thread runs. From the first `setBreakpoints`
+ * on the host owns the bits, so the `bp` command is never mixed in. A program blocked in `std::cin`, a sleep or a
+ * lock does not reach a guard, so Pause waits until it does.
  *
  * `writeInput` forwards what the user types to the program: straight to the pipe while the program runs, queued
  * while it is stopped (the stub would read it as a command). Input forwarded just before a stop may still sit
@@ -31,8 +37,9 @@ const FOREVER_MS = 2_000_000_000;
  * those bytes are back in the queue, in order, before it sends the resume command and then the queue.
  */
 export class StubDebuggee implements DebuggeeSession {
-	readonly capabilities = { pause: false, breakpointsWhileRunning: false };
 	listener: ((event: DebuggeeEvent) => void) | undefined;
+	/** Guard words whose breakpoint bit the host has set in shared memory. */
+	private readonly armedInMemory = new Set<number>();
 	private readonly session: StubSession;
 	private readonly stdoutDecoder = new TextDecoder();
 	private readonly stderrDecoder = new TextDecoder();
@@ -49,14 +56,36 @@ export class StubDebuggee implements DebuggeeSession {
 		void options.exited.then(code => this.onExit(code), e => { this.emit({ kind: 'error', message: `the program failed to run: ${e instanceof Error ? e.message : String(e)}` }); this.onExit(undefined); });
 	}
 
+	/** Meaningful once the stub's `hello` has arrived (the start stop). */
+	get capabilities() {
+		const memory = this.options.memory !== undefined;
+		return { pause: memory && this.session.pauseFlag !== undefined, breakpointsWhileRunning: memory };
+	}
+
 	feedStdout(chunk: Uint8Array): void { this.emit({ kind: 'output', stream: 'stdout', text: this.stdoutDecoder.decode(chunk, { stream: true }) }); }
 	feedStderr(chunk: Uint8Array): void { this.session.onStderr(chunk); }
 
 	async start(): Promise<void> { this.awaitStop(); }
 
 	async setBreakpoints(guards: number[]): Promise<void> {
-		this.requireStopped('set breakpoints');
-		await this.session.setBreakpoints(guards);
+		const memory = this.options.memory;
+		if (!memory) {
+			this.requireStopped('set breakpoints');
+			await this.session.setBreakpoints(guards);
+			return;
+		}
+		if (!this.session.guardRange) { throw new Error('vscwClang: cannot set breakpoints before the program has reached its debug stub (its shared memory is initialised after startup and would erase them).'); }
+		// A fresh view each time: growing the memory replaces its buffer.
+		const words = new Uint32Array(memory.buffer);
+		const wanted = new Set(guards);
+		for (const guard of this.armedInMemory) {
+			if (!wanted.has(guard)) { Atomics.and(words, guard >>> 2, ~1); this.armedInMemory.delete(guard); }
+		}
+		for (const guard of wanted) {
+			if (guard % 4 !== 0 || guard >>> 2 >= words.length) { throw new Error(`vscwClang: guard address ${guard} is not a word inside the program's memory; did the program and debug stub drift apart?`); }
+			Atomics.or(words, guard >>> 2, 1);
+			this.armedInMemory.add(guard);
+		}
 	}
 
 	async resume(how: ResumeKind): Promise<void> {
@@ -89,8 +118,13 @@ export class StubDebuggee implements DebuggeeSession {
 		this.queuedInput.splice(this.handedBack++, 0, data);
 	}
 
-	pause(): Promise<void> {
-		return Promise.reject(new Error('vscwClang cannot pause a program that is running: the debug stub only reads commands at stops. Set a breakpoint and continue instead; pausing needs the custom runner.'));
+	async pause(): Promise<void> {
+		const memory = this.options.memory;
+		const flag = this.session.pauseFlag;
+		if (!memory || flag === undefined) {
+			throw new Error('vscwClang cannot pause this program: Pause needs the shared memory of a threaded debug build (is vscwclang.threads off?) and a current debug stub. Set a breakpoint and continue instead.');
+		}
+		Atomics.store(new Uint32Array(memory.buffer), flag >>> 2, 1);
 	}
 
 	async readMemory(addr: number, len: number): Promise<Uint8Array | undefined> {

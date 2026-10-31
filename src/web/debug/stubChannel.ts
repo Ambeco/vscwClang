@@ -4,8 +4,8 @@
  * The stub pauses the program inside the coverage hook and talks over the program's own stdio: messages to the
  * host are `ESC _ vscw <text> ESC \` frames mixed into stderr, commands from the host are text lines on stdin. Only
  * stderr needs demultiplexing (`FrameDemux`); the host writes commands to stdin only while the program is stopped, and
- * the program's own input only while it runs. Breakpoints and "pause" therefore take effect at stops: a breakpoint
- * cannot be added to a program that is running free.
+ * the program's own input only while it runs. Commands therefore take effect at stops; changing breakpoints or
+ * pausing a program that is running free needs its shared memory instead (see `StubDebuggee`).
  *
  * Program input written just before a stop may still be unread when the stub starts reading commands. A line that does
  * not start with `vscw ` is therefore handed back as an `input` frame (never an error) for the host to re-send after
@@ -26,7 +26,7 @@ const decoder = new TextDecoder();
 export interface StubFrame { guard: number; sp: number }
 
 export type StubMessage =
-	| { kind: 'hello'; guardStart: number; guardEnd: number }
+	| { kind: 'hello'; guardStart: number; guardEnd: number; /** Address of the word the host sets to request a pause; absent from older stubs. */ pauseFlag?: number }
 	| { kind: 'stop'; reason: string; /** 1 is the main thread. */ threadId: number; frames: StubFrame[] }
 	| { kind: 'mem'; addr: number; data: Uint8Array }
 	| { kind: 'memerr'; addr: number; len: number }
@@ -44,7 +44,7 @@ export function parseMessage(text: string): StubMessage {
 	const [kind, ...rest] = text.split(' ');
 	const nums = (parts: string[]) => parts.map(Number);
 	switch (kind) {
-		case 'hello': { const [guardStart, guardEnd] = nums(rest); return { kind, guardStart, guardEnd }; }
+		case 'hello': { const [guardStart, guardEnd, pauseFlag] = nums(rest); return { kind, guardStart, guardEnd, ...(pauseFlag === undefined ? {} : { pauseFlag }) }; }
 		case 'stop': {
 			const [reason, threadId, depth, ...pairs] = rest;
 			const frames: StubFrame[] = [];
@@ -147,6 +147,7 @@ export class StubSession {
 	private waiter: (() => void) | undefined;
 	private closed = false;
 	guardRange: { start: number; end: number } | undefined;
+	pauseFlag: number | undefined;
 
 	/** `onProgramInput` receives bytes meant for the program that the stub read at a stop; they must be re-sent after the next resume. */
 	constructor(private readonly send: (text: string) => void | Promise<void>, onProgramStderr: (b: Uint8Array) => void, private readonly onProgramInput?: (b: Uint8Array) => void) {
@@ -178,7 +179,7 @@ export class StubSession {
 	async nextStop(timeoutMs = 30_000): Promise<StopEvent> {
 		const m = await this.take(x => x.kind === 'hello' || x.kind === 'stop', 'a stop', timeoutMs);
 		this.memory.clear();
-		if (m.kind === 'hello') { this.guardRange = { start: m.guardStart, end: m.guardEnd }; return { reason: 'start', threadId: 1, frames: [] }; }
+		if (m.kind === 'hello') { this.guardRange = { start: m.guardStart, end: m.guardEnd }; this.pauseFlag = m.pauseFlag; return { reason: 'start', threadId: 1, frames: [] }; }
 		const stop = m as Extract<StubMessage, { kind: 'stop' }>;
 		return { reason: stop.reason, threadId: stop.threadId, frames: stop.frames };
 	}

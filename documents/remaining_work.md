@@ -10,7 +10,7 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 **Near-term plan (decided 2026-10-27, replaces the 2026-10-21 one):** in order: (1) main critical user journeys feature complete; (2) pick a large, pure, portable C++ project from GitHub (many translation units, builds without extra dependencies) as the profiling workload; (3) profile and fix the low-hanging fruit, with incremental build+test speed first (see the Priority item in Milestone 1); (4) secondary journeys feature complete; (5) Make support (pseudo, i.e. interpret the common subset); (6) Python support (partial). Multithreading is on (threaded tools, clangd and user programs) and changes the numbers: re-profile, and expect it to affect concurrent compiles, clangd and the threaded toolchain more than a single-file edit.
 
 **Main critical user journeys (decided 2026-10-27), with the known gaps:**
-- Debug: view local variables, step through statements, conditional breakpoints. Gaps today: Pause and breakpoint changes while running need the custom runner (Milestone 6).
+- Debug: view local variables, step through statements, conditional breakpoints. Gaps today: all-stop for threads and traps as stopped states need the custom runner (Milestone 6); Pause and live breakpoint edits are done in code for threaded programs (unchecked in a real browser; no Pause while blocked in `cin`).
 - Code intelligence via clangd: completion, IntelliSense, go to definition, go to declaration and similar. Mostly wired (Milestone 3); open: slow first answer with libc++ headers, the `Link has been severed` CWD error, no progress UI, duplicate results with Anycode, go to declaration and other providers not yet checked.
 - Other core cpptools functionality: the settings and features mapped from `C_Cpp.*` (formatting, header insertion, clang-tidy, etc.; see Milestone 3 items) and whatever else the user names; inventory it before calling this journey complete.
 
@@ -109,12 +109,12 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Remaining gaps:
 - Debug adapter: `DebugController` (vscode-free DAP logic) over the `DebuggeeSession` interface, implemented by `StubDebuggee`; `debugAdapter.ts` is the VS Code shell. The custom runner will be a second `DebuggeeSession` implementation.
 - Open: outer frames show the line of their last guard, not the call line (true call-site pcs need the custom runner's `captureWasmFrames`).
 - Open: `demangle.ts` decodes plain, nested, constructor/destructor and operator names only; templates and substitutions (`St`, `S_`) stay mangled, as do `std` frames. `launch.json` `program` is ignored (Debug always rebuilds), `.debug_line` is parsed for every launch (unmeasured on large programs), and the line index and breakpoint resolution have no cache. Conditions have no function calls, casts, `*p`, `&x` or strings (lldb's reactor formats variable paths only).
-- Open: pause, breakpoint changes while running, and traps as stopped states need the custom runner (guard bits in shared memory, `Atomics.wait`). The debug terminal has no end-of-file key and no Ctrl+C.
+- Open: traps as stopped states need the custom runner. Pause and live breakpoint edits (done via shared memory) need a check through the real adapter in a browser (`debugAdapter.test.ts`, then vscode.dev); a non-threaded debug build still queues edits to the next stop. The debug terminal has no end-of-file key and no Ctrl+C.
 - Open: browser tests of the stub-based adapter (`debugAdapter.test.ts`) cover single-file programs (stdio, and iostream with input); add a multi-file program and one that throws and catches a C++ exception.
 
 ## Milestone 6: full DAP surface
 - Breakpoints: data breakpoints and exception breakpoints (`setExceptionBreakpoints` is accepted and ignored).
-- Pause; all-stop for threads (today a stop halts only the thread that hit it, the rest run on; an all-stop needs the custom runner); scopes that list locals and expandable variables (see Milestone 5); wasm traps map to a stopped state with a stack (custom runner).
+- All-stop for threads (today a stop halts only the thread that hit it, the rest run on; an all-stop needs the custom runner); scopes that list locals and expandable variables (see Milestone 5); wasm traps map to a stopped state with a stack (custom runner).
 - Debug console input, `launch` env/cwd.
 
 ## Milestone 7: release

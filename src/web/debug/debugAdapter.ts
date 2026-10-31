@@ -76,7 +76,7 @@ export class VscwClangDebugAdapter implements vscode.DebugAdapter {
 			send: text => process.stdin!.write(encoder.encode(text)),
 			sendInput: data => process.stdin!.write(data),
 			onOutput: terminal && ((_stream, text) => terminal.write(text)),
-			exited, terminate: () => void process.terminate(), guardSites: scan.guardSites,
+			exited, terminate: () => void process.terminate(), guardSites: scan.guardSites, memory: process.memory,
 		});
 
 		const folder = this.session.workspaceFolder?.uri ?? vscode.workspace.workspaceFolders?.[0]?.uri;

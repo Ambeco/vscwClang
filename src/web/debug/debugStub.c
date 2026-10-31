@@ -31,6 +31,8 @@ static _Thread_local uint32_t depth;
 static uint32_t *armed[MAX_ARMED];
 static uint32_t armed_count;
 static int detached; /* host closed stdin: never stop again */
+/* Set by the host through shared memory (its address is in `hello`); the first hook to see it stops with "pause". */
+static uint32_t pause_requested;
 enum { STEP_NONE, STEP_INTO, STEP_OVER, STEP_OUT };
 static _Thread_local int step_mode;
 static _Thread_local uintptr_t step_sp;
@@ -166,6 +168,8 @@ static void command_loop(void) {
 
 __attribute__((noinline)) static void stop(const char *reason) {
   pthread_mutex_lock(&stop_lock);
+  /* Any stop satisfies a pending pause; otherwise it would fire again right after the resume. */
+  __atomic_store_n(&pause_requested, 0, __ATOMIC_SEQ_CST);
   if (!thread_id) thread_id = __atomic_fetch_add(&next_thread_id, 1, __ATOMIC_SEQ_CST);
   out_begin("stop"); out_str(reason); out_str(" "); out_num(thread_id); out_str(" "); out_num(depth);
   for (uint32_t i = depth; i-- > 0;) { out_str(" "); out_num((uintptr_t)frames[i].guard); out_str(" "); out_num(frames[i].sp); }
@@ -179,7 +183,7 @@ void __sanitizer_cov_trace_pc_guard_init(uint32_t *start, uint32_t *end) {
   if (announced) return;
   announced = 1;
   thread_id = __atomic_fetch_add(&next_thread_id, 1, __ATOMIC_SEQ_CST);
-  out_begin("hello"); out_num((uintptr_t)start); out_str(" "); out_num((uintptr_t)end); out_end();
+  out_begin("hello"); out_num((uintptr_t)start); out_str(" "); out_num((uintptr_t)end); out_str(" "); out_num((uintptr_t)&pause_requested); out_end();
   command_loop();
 }
 
@@ -189,6 +193,7 @@ void __sanitizer_cov_trace_pc_guard(uint32_t *guard) {
   while (depth && frames[depth - 1].sp < sp) depth--;
   if (depth && frames[depth - 1].sp == sp) frames[depth - 1].guard = guard;
   else if (depth < MAX_FRAMES) { frames[depth].guard = guard; frames[depth].sp = sp; depth++; }
+  if (__atomic_load_n(&pause_requested, __ATOMIC_RELAXED) && __atomic_exchange_n(&pause_requested, 0, __ATOMIC_SEQ_CST)) { stop("pause"); return; }
   if (*guard & 1u) { stop("breakpoint"); return; }
   switch (step_mode) {
     case STEP_INTO: stop("step"); break;

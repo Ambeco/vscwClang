@@ -35,6 +35,8 @@ export interface PipedProcess {
 	stderr?: { onData(listener: (data: Uint8Array) => void): { dispose(): void } };
 	run(): Promise<number>;
 	terminate(): Promise<unknown>;
+	/** The shared linear memory of a wasi-threads program, which the host may read and write while it runs. */
+	memory?: WebAssembly.Memory;
 }
 
 export interface WorkerProcessOptions {
@@ -54,14 +56,16 @@ export async function createWorkerProcess(context: vscode.ExtensionContext, opti
 	const stdout = new OutputPipe();
 	const stderr = new OutputPipe();
 	const worker = await createGuestWorker(context);
+	const threads = threadOptions(context, options.memoryLimits);
 	const guest = new GuestProcess({
 		module: options.module, args: [options.name, ...options.args], env: options.env,
 		preopens: options.mounts.map(m => m.guestPath), terminal: options.terminal, fs: new VscodeGuestFs(options.mounts), stdin,
 		onOutput: (fd, data) => (fd === 1 ? stdout : stderr).emit(data),
 		createWorker: () => worker,
-			...threadOptions(context, options.memoryLimits),
+		...threads,
 	});
 	return {
+		memory: threads.sharedMemory,
 		stdin: { write: data => { stdin.push(typeof data === 'string' ? new TextEncoder().encode(data) : data); return Promise.resolve(); } },
 		stdout, stderr,
 		async run() {

@@ -59,7 +59,7 @@ const MAIN_THREAD_ID = 1;
  * Limits that come from the hosts, not from this class: stops are at basic-block starts, so a line breakpoint in the
  * middle of a block stops at the block's first line (the response says so) and stepping moves block to block;
  * `pause` and breakpoint changes while running need a host with the matching `capabilities` (breakpoint changes are
- * queued to the next stop otherwise); the Variables pane lists what lldb can read, which needs a toolchain built
+ * queued to the next stop otherwise; `pause` on a stopped program is a no-op); the Variables pane lists what lldb can read, which needs a toolchain built
  * with `-sanitizer-coverage-spill-debug-vars` (a by-value struct or VLA lives in a wasm local otherwise and shows the
  * reason instead of a value); hover, Watch and the Debug
  * Console evaluate variable paths (`x`, `p.y`, `arr[2]`) and C-like expressions over them (`debugExpression.ts`), which
@@ -114,7 +114,7 @@ export class DebugController {
 			case 'stepIn': return this.resumeFromRequest(req, 'into', {}, args);
 			case 'stepOut': return this.resumeFromRequest(req, 'out', {}, args);
 			case 'pause':
-				await this.requireTarget().session.pause();
+				if (!this.stop) { await this.requireTarget().session.pause(); }
 				this.respond(req, true, {});
 				return;
 			case 'stackTrace': return this.stackTrace(req, args);

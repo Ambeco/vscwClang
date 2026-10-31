@@ -1,9 +1,9 @@
 /**
  * What the DAP controller (`debugController.ts`) needs from a running debuggee, whatever hosts it; vscode-free.
  *
- * Two hosts are planned: the in-process stub over the program's stdio (`stubDebuggee.ts`) and, later, the custom
- * Worker runner (guard bits in shared memory, `Atomics.wait` pauses). The controller must not know which one it has,
- * so everything the stub cannot do is a flag in `capabilities` that the controller turns into a clear DAP error.
+ * Today's host is the in-process stub (`stubDebuggee.ts`); a custom Worker runner (all-stop, traps) may follow. The
+ * controller must not know which one it has, so everything a host cannot do is a flag in `capabilities` that the
+ * controller turns into a clear DAP error. The stub host can pause and edit breakpoints live only for programs with shared memory.
  *
  * Breakpoints are guard addresses (`scanProgram().guardSites` keys), the same handle both hosts arm. Frames come
  * innermost first and carry the DWARF pc of the last instrumented block run in that frame; for outer frames that is
