@@ -90,6 +90,30 @@ suite('vscwClang debug adapter (in browser)', function () {
 		assert.strictEqual(client.events('output').filter(m => m.body.category === 'stdout').map(m => m.body.output).join(''), 'r=11\n');
 	});
 
+	test('steps line by line: over each statement of a function, skipping an untaken branch, then back into the caller', async () => {
+		const client = newClient();
+		await client.ok('initialize', { adapterID: 'vscwclang' });
+		await client.ok('launch', { console: 'internalConsole' });
+		await client.event('initialized');
+		await client.ok('setBreakpoints', { source: { path: sourcePath() }, breakpoints: [{ line: 3 }] });
+		await client.ok('configurationDone');
+		await client.event('stopped');
+		const topLine = async () => ((await client.ok('stackTrace', { threadId: 1 })).stackFrames as { name: string; line: number }[])[0];
+		assert.strictEqual((await topLine()).line, 3);
+		const seen: number[] = [];
+		for (let i = 0; i < 2; i++) {
+			const before = client.events('stopped').length;
+			await client.ok('next', { threadId: 1 });
+			while (client.events('stopped').length === before) { await new Promise(r => setTimeout(r, 20)); }
+			const top = await topLine();
+			assert.match(top.name, /add/, JSON.stringify(top));
+			seen.push(top.line);
+		}
+		assert.deepStrictEqual(seen, [4, 6], 'c = 11 does not take the if, so line 5 is skipped');
+		await client.ok('continue', { threadId: 1 });
+		assert.strictEqual((await client.event('exited')).body.exitCode, 0);
+	});
+
 	test('debugs a multithreaded program: a breakpoint in a thread function stops on that thread', async () => {
 		const nl = String.fromCharCode(10);
 		await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, 'threaded.cpp'), new TextEncoder().encode([
