@@ -129,23 +129,6 @@
           ],
           "markdownDescription": "Globs, relative to the workspace folder, of the source files that `vscwClang: Build` compiles together into one program. Narrow this (e.g. `[\"src/**/*.cpp\"]`) when the folder holds several programs, such as tests that each define `main`. A leading `${workspaceFolder}/` is accepted and ignored."
         },
-        "vscwclang.indexing.enabled": {
-          "type": "boolean",
-          "default": true,
-          "markdownDescription": "Index the workspace's source files in the background so go-to-definition, find symbol and completion see the whole project, not just open files. Progress shows in the status bar. Turn off if editing feels sluggish while it runs; only open files are then known to the language server."
-        },
-        "vscwclang.indexing.pauseMs": {
-          "type": "number",
-          "default": 200,
-          "minimum": 0,
-          "markdownDescription": "Pause in milliseconds between files while indexing, leaving a gap for completion and hover requests. Raise it if the editor feels slow while indexing; lower it to finish indexing sooner."
-        },
-        "vscwclang.indexing.holdOpenMs": {
-          "type": "number",
-          "default": 300,
-          "minimum": 0,
-          "markdownDescription": "How long in milliseconds each file is held open for the language server to parse it while indexing. Raise it for very large files that end up only partly indexed."
-        },
         "vscwclang.compileCommands": {
           "scope": "resource",
           "type": [

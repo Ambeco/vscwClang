@@ -5,11 +5,12 @@
 //          [--mtdist <outDir>] [--tag <tag>] [--chunk-mib 16] [--pin] [--if-missing] [--no-pch]
 //   --release     output of llvm-project/wasi-tests/package_release.mjs (supplies sysroot/, resource/, compile-flags.json)
 //   --llvm        llvm-project checkout (default ../../llvm-project relative to this repo)
-//   --dist        single-threaded layout: build-single-threaded/bin/{clang,lld,clangd,llvm-ar}.wasm,
+//   --dist        single-threaded layout: build-single-threaded/bin/{clang,lld,llvm-ar}.wasm,
+//                 build-clangd-threads/bin/clangd.wasm,
 //                 build-lldb-single-threaded/bin/lldb-wasm-reactor.wasm
 //   --mtdist      multithreaded layout: build/bin/{clang,lld}.wasm, build-lldb/bin/lldb-wasm-reactor.wasm (imports
-//                 wasi.thread-spawn; the extension host runs its threads in Workers, see workerThreads.ts); clangd and
-//                 llvm-ar are the single-threaded builds (clangd-threads is not wired yet)
+//                 wasi.thread-spawn; the extension host runs its threads in Workers, see workerThreads.ts); llvm-ar is the
+//                 single-threaded build
 //   --pin         write the --dist manifest's SHA-256 into src/web/toolchain/toolchainPin.ts
 //   --if-missing  skip a layout whose <outDir>/manifest.json already exists
 //   --no-pch      skip the libc++ precompiled headers (a PCH per -std and -O level, each built by the layout's own clang.wasm, ~6 s each)
@@ -33,7 +34,7 @@ const layouts = [
 	{ outDir: option('--dist'), name: 'dist', pchSlices: ['wasm32-wasip1'], driverFlags: [], binaries: [
 		['clang.wasm', 'build-single-threaded/bin/clang.wasm'],
 		['lld.wasm', 'build-single-threaded/bin/lld.wasm'],
-		['clangd.wasm', 'build-single-threaded/bin/clangd.wasm'],
+		['clangd.wasm', 'build-clangd-threads/bin/clangd.wasm'], // threaded in both layouts: real background indexing
 		['lldb-wasm-reactor.wasm', 'build-lldb-single-threaded/bin/lldb-wasm-reactor.wasm'],
 		['llvm-ar.wasm', 'build-single-threaded/bin/llvm-ar.wasm'],
 	] },
@@ -42,7 +43,7 @@ const layouts = [
 	{ outDir: option('--mtdist'), name: 'mtdist', pchSlices: ['wasm32-wasip1', 'wasm32-wasip1-threads'], driverFlags: ['-fintegrated-cc1'], binaries: [
 		['clang.wasm', 'build/bin/clang.wasm'],
 		['lld.wasm', 'build/bin/lld.wasm'],
-		['clangd.wasm', 'build-single-threaded/bin/clangd.wasm'],
+		['clangd.wasm', 'build-clangd-threads/bin/clangd.wasm'], // threaded in both layouts: real background indexing
 		['lldb-wasm-reactor.wasm', 'build-lldb/bin/lldb-wasm-reactor.wasm'],
 		['llvm-ar.wasm', 'build-single-threaded/bin/llvm-ar.wasm'], // no threaded variant: llvm-ar spawns no threads
 	] },

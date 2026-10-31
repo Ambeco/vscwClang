@@ -7,23 +7,24 @@ import { fallbackFlags } from './fallbackFlags';
 import { getToolchainStore } from '../toolchain/toolchain';
 import { GUEST_WORKSPACE, TOOLCHAIN_SCHEME, fromGuestPath, isToolchainGuestPath, toGuestPath } from '../toolchain/guestPaths';
 import { ToolchainFileSystem } from '../toolchain/toolchainFileSystem';
-import { configuredSources } from '../toolchain/projectModel';
-import { clangdLogLevel, logsClangdStderr } from '../toolchain/cppToolsSettings';
-import { intelliSenseEnabled, loggingLevel, readLaunches, readTasks, userFlags, variableContext } from '../projectConfig';
-import { IndexSweep, discoverWorkspaceSources } from './indexSweep';
+import { clangdLogLevel, compileCommandsPath, logsClangdStderr } from '../toolchain/cppToolsSettings';
+import { intelliSenseEnabled, loggingLevel, projectSettings, userFlags } from '../projectConfig';
+import { GUEST_CACHE, OVERLAY_BATCH_SIZE, batches, clangdArgs, clangdThreadCount, compilationDatabaseChanges } from './clangdConfig';
+import { discoverWorkspaceSources, hasCompilationDatabase } from './compileOverlay';
 
-const CLANGD_ARGS = ['-sync', '-background-index=false', '-resource-dir=/resource'];
 const CLANGD_TMP = 'clangd-tmp';
-
+const CLANGD_CACHE = 'clangd-cache';
 /**
  * Starts clangd.wasm as a long-lived process on the Worker host and wires it to VS Code's language-client
  * machinery, so completion/hover/go-to-definition/diagnostics come from clangd instead of nothing.
  *
- * clangd.wasm is a normal toolchain-manifest entry (`llvm-artifacts/dist/manifest.json`, published at the pinned
- * tag alongside clang.wasm/lld.wasm; see the `Ambeco/llvm-artifacts` release), downloaded and cached the same way.
- * The background indexer needs a worker thread this single-threaded build doesn't have, hence
- * `-background-index=false`; `IndexSweep` (`indexSweep.ts`) works around that with a didOpen/didClose fake-
- * indexing sweep over the workspace's source files (documents/remaining_work.md "V3 idea: clangd").
+ * clangd.wasm is a normal toolchain-manifest entry (published at the pinned tag alongside clang.wasm/lld.wasm;
+ * see the `Ambeco/llvm-artifacts` release), downloaded and cached the same way. It is the wasi-threads build, so
+ * clangd runs its own parser pool and background indexer on Workers. The indexer only knows files that have compile
+ * commands, so unless the project has a compilation database the workspace sources are sent as
+ * `compilationDatabaseChanges` (`compileOverlay.ts`), and new files as they are created. Index shards persist under
+ * `/cache` (`XDG_CACHE_HOME`, extension storage), except beside a project's own `compile_commands.json`, where
+ * clangd writes `<root>/.cache/clangd/index`. Indexing progress is clangd's own work-done progress notification.
  *
  * Only one client may be live per extension host: the server's commands (`clangd.applyFix`, ...) are registered
  * globally, so a second client fails to initialize. The test workspace turns the activation client off
@@ -42,19 +43,26 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	const [bits, sysrootFiles, flags] = await Promise.all([toolchain.getFile('clangd.wasm'), loadSysrootFiles(toolchain), loadCompileFlags(toolchain)]);
 	const compileFlags = flags.compile['wasm32-wasip1'].map(f => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource'));
 	const module = await WebAssembly.compile(bits);
+	const memoryLimits = sharedMemoryLimits(bits);
+	if (!memoryLimits) {
+		throw new Error('vscwClang: the downloaded clangd.wasm is the single-threaded build, which no longer has an indexing fallback. Did you mean to use a toolchain published from build-clangd-threads (see scripts/make-toolchain-dist.mjs)?');
+	}
 
 	const tmpDir = vscode.Uri.joinPath(context.globalStorageUri, CLANGD_TMP);
+	const cacheDir = vscode.Uri.joinPath(context.globalStorageUri, CLANGD_CACHE);
 	await vscode.workspace.fs.createDirectory(tmpDir);
+	await vscode.workspace.fs.createDirectory(cacheDir);
 
-	const args = [...CLANGD_ARGS, `-log=${clangdLogLevel(level)}`];
+	const args = clangdArgs(clangdLogLevel(level), clangdThreadCount(globalThis.navigator?.hardwareConcurrency));
 	const sysroot = await loadSysrootGuestFs(toolchain);
 	const process = await createWorkerProcess(context, {
-		name: 'clangd', module, args, env: {}, memoryLimits: sharedMemoryLimits(bits),
+		name: 'clangd', module, args, env: { XDG_CACHE_HOME: GUEST_CACHE }, memoryLimits,
 		mounts: [
 			{ guestPath: GUEST_WORKSPACE, uri: folder },
 			{ guestPath: '/sysroot', fs: sysroot.sysroot },
 			{ guestPath: '/resource', fs: sysroot.resource },
 			{ guestPath: '/tmp', uri: tmpDir },
+			{ guestPath: GUEST_CACHE, uri: cacheDir },
 		],
 	});
 	const stderrChunks: string[] = [];
@@ -68,7 +76,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	const stderrTail = () => stderrChunks.join('').slice(-800);
 	void exited.then(
 		code => { if (code !== 0) { log.appendLine(`[vscwclang] clangd exited unexpectedly (code ${code}): ${stderrTail()}`); } },
-		e => log.appendLine(`[vscwclang] clangd could not run: ${e instanceof Error ? e.message : String(e)} ${stderrTail()}`));
+		e => log.appendLine(`[vscwclang] clangd could not run: ${errorText(e)} ${stderrTail()}`));
 
 	const toolchainFs = vscode.workspace.registerFileSystemProvider(TOOLCHAIN_SCHEME, new ToolchainFileSystem(sysrootFiles), { isReadonly: true });
 	const code2Protocol = (uri: vscode.Uri) => uri.scheme === TOOLCHAIN_SCHEME ? `file://${uri.path}` : `file://${toGuestPath(folder.path, uri.path) ?? GUEST_WORKSPACE}`;
@@ -79,74 +87,47 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 		return hostPath !== undefined ? folder.with({ path: hostPath }) : vscode.Uri.parse(value);
 	};
 	let client!: LanguageClient;
-	const indexSweep = new IndexSweep(
-		{ sendNotification: (type, params) => client.sendNotification(type, params as never) },
-		code2Protocol,
-		log,
-		{
-			get enabled() { return indexingSetting<boolean>('enabled', true); },
-			get pauseMs() { return indexingSetting<number>('pauseMs', 200); },
-			get holdOpenMs() { return indexingSetting<number>('holdOpenMs', 300); },
-		},
-	);
-	const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
-	status.name = 'vscwClang indexing';
-	const showProgress = (p: { done: number; total: number }) => {
-		if (p.done >= p.total || !indexingSetting<boolean>('enabled', true)) { status.hide(); return; }
-		status.text = `$(sync~spin) Indexing ${p.done}/${p.total}`;
-		status.tooltip = 'vscwClang is indexing workspace sources so go-to-definition and symbol search work project-wide (setting: vscwclang.indexing.enabled).';
-		status.show();
+	const overlayFlags = fallbackFlags(compileFlags, userFlags(log, true).flags);
+	const sendOverlay = async (uris: readonly vscode.Uri[]) => {
+		const guestPaths = uris.flatMap(u => toGuestPath(folder.path, u.path) ?? []);
+		for (const batch of batches(guestPaths, OVERLAY_BATCH_SIZE)) {
+			await client.sendNotification('workspace/didChangeConfiguration', { settings: { compilationDatabaseChanges: compilationDatabaseChanges(batch, overlayFlags) } });
+		}
 	};
-	const progressSub = indexSweep.onDidChangeProgress(showProgress);
-	const startSweep = () => {
-		void (async () => {
-			try {
-				// Config-named files first (tier 'config'); the rest then skips them as already queued.
-				const configured = await discoverConfiguredSources(folder, log);
-				if (configured.length > 0) { indexSweep.enqueue(configured, 'config'); }
-				indexSweep.enqueue(await discoverWorkspaceSources());
-				indexSweep.start();
-			} catch (e) {
-				log.appendLine(`[vscwclang] index sweep: could not list workspace sources: ${e instanceof Error ? e.message : String(e)}`);
-			}
-		})();
-	};
-	const configSub = vscode.workspace.onDidChangeConfiguration(e => {
-		if (!e.affectsConfiguration('vscwclang.indexing.enabled')) { return; }
-		if (indexingSetting<boolean>('enabled', true)) { startSweep(); } else { status.hide(); }
-	});
+	const sourceWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, '**/*.{c,cc,cpp,cxx}'));
+	const createdSub = sourceWatcher.onDidCreate(uri => { void sendOverlay([uri]).catch(e => log.appendLine(`[vscwclang] clangd: could not register ${uri.path} for indexing: ${errorText(e)}`)); });
+	const disposeWatchers = () => { createdSub.dispose(); sourceWatcher.dispose(); };
 	const clientOptions: LanguageClientOptions = {
 		documentSelector: [{ language: 'c' }, { language: 'cpp' }, { scheme: TOOLCHAIN_SCHEME }],
 		uriConverters: { code2Protocol, protocol2Code },
-		initializationOptions: { fallbackFlags: fallbackFlags(compileFlags, userFlags(log, true).flags) },
-		middleware: {
-			// Must run (and close any fake-indexed copy) before `next()` sends the real didOpen; see indexSweep.ts.
-			didOpen: async (document, next) => { if (document.uri.scheme !== TOOLCHAIN_SCHEME) { await indexSweep.willRealOpen(document); } return next(document); },
-		},
+		initializationOptions: { fallbackFlags: overlayFlags },
+		synchronize: { fileEvents: sourceWatcher },
 	};
 	client = new LanguageClient('vscwclangClangd', 'vscwClang clangd', () => Promise.resolve(transports), clientOptions);
 	try {
 		await client.start();
 	} catch (e) {
 		// A process that died during startup rejects start(); stop everything started so far so nothing leaks.
-		indexSweep.dispose();
-		progressSub.dispose();
-		configSub.dispose();
-		status.dispose();
+		disposeWatchers();
 		toolchainFs.dispose();
 		void process.terminate();
-		throw new Error(`clangd failed to start: ${e instanceof Error ? e.message : String(e)}. ${stderrTail() || 'It wrote nothing to stderr.'} Did you mean to reload the window?`);
+		throw new Error(`clangd failed to start: ${errorText(e)}. ${stderrTail() || 'It wrote nothing to stderr.'} Did you mean to reload the window?`);
 	}
 
-	startSweep();
+	void (async () => {
+		try {
+			const configured = compileCommandsPath(projectSettings('vscwclang').get<unknown>('compileCommands')) ?? compileCommandsPath(projectSettings('C_Cpp').get<unknown>('default.compileCommands'));
+			if (await hasCompilationDatabase(folder, configured)) { return; }
+			await sendOverlay(await discoverWorkspaceSources());
+		} catch (e) {
+			log.appendLine(`[vscwclang] clangd: could not register workspace sources for background indexing: ${errorText(e)}`);
+		}
+	})();
 
 	return new vscode.Disposable(() => {
 		void (async () => {
-			indexSweep.dispose();
-			progressSub.dispose();
-			configSub.dispose();
-			status.dispose();
-			const stopped = client.stop().catch(e => log.appendLine(`[vscwclang] stopping clangd: ${e instanceof Error ? e.message : String(e)}`));
+			disposeWatchers();
+			const stopped = client.stop().catch(e => log.appendLine(`[vscwclang] stopping clangd: ${errorText(e)}`));
 			const timer = setTimeout(() => void process.terminate(), 5_000);
 			try { await Promise.race([stopped, exited.catch(() => undefined)]); } finally { clearTimeout(timer); }
 		})();
@@ -172,25 +153,10 @@ function makeMessageTransports(process: PipedProcess, exited: Promise<number>, l
 		onError: noError,
 		onEnd: onClose,
 	});
-	reader.onError(e => log.appendLine(`[vscwclang] clangd message reader error: ${e instanceof Error ? e.message : String(e)}`));
+	reader.onError(e => log.appendLine(`[vscwclang] clangd message reader error: ${errorText(e)}`));
 	return { reader, writer };
 }
 
-function indexingSetting<T>(key: string, fallback: T): T {
-	return vscode.workspace.getConfiguration('vscwclang.indexing').get<T>(key, fallback);
-}
-
-/** Workspace files that `tasks.json`/`launch.json` name as build sources, resolved from their paths/globs. */
-async function discoverConfiguredSources(folder: vscode.Uri, log: vscode.OutputChannel): Promise<vscode.Uri[]> {
-	try {
-		const sources = configuredSources(readTasks(folder), readLaunches(folder), variableContext(folder));
-		const found = new Map<string, vscode.Uri>();
-		for (const source of sources) {
-			for (const uri of await vscode.workspace.findFiles(new vscode.RelativePattern(folder, source), '**/node_modules/**')) { found.set(uri.toString(), uri); }
-		}
-		return [...found.values()];
-	} catch (e) {
-		log.appendLine(`[vscwclang] index sweep: ignoring tasks.json/launch.json hints: ${e instanceof Error ? e.message : String(e)}`);
-		return [];
-	}
+function errorText(e: unknown): string {
+	return e instanceof Error ? e.message : String(e);
 }

@@ -6,16 +6,16 @@ import { getToolchainStore } from '../../toolchain/toolchain';
 import { GUEST_WORKSPACE } from '../../toolchain/guestPaths';
 import { fallbackFlags } from '../../clangd/fallbackFlags';
 import { GUEST_TMP } from '../../toolchain/runEnvironment';
+import { GUEST_CACHE, clangdArgs } from '../../clangd/clangdConfig';
+import { sharedMemoryLimits } from '../../host/sharedMemory';
 
 /**
- * Host-integration tests for clangd.wasm: does the Worker host's bidirectional pipe stdio (not the
- * one-shot `run-to-completion` model `build()`/`runProgram()` use) actually carry a real LSP session,
- * and does the chosen no-background-thread indexing mitigation (didOpen/didClose sweep, see
- * documents/remaining_work.md) produce usable cross-file results through this host.
+ * Host-integration tests for the threaded clangd.wasm: does the Worker host's bidirectional pipe stdio (not the
+ * one-shot `run-to-completion` model `build()`/`runProgram()` use) carry a real LSP session, and does clangd's own
+ * background indexer (real wasi-threads Workers) make closed files' symbols resolvable from other files.
  *
- * clangd.wasm is not published yet (not in the toolchain manifest). Build it from the `llvm-project`
- * fork (`build-single-threaded.bat`) and copy `build-single-threaded/bin/clangd.wasm` to
- * `llvm-artifacts/bin/clangd.wasm` (gitignored) before running this suite; it skips otherwise.
+ * clangd.wasm comes from the toolchain at `llvm-artifacts/dist` (published from the fork's `build-clangd-threads`
+ * by `scripts/make-toolchain-dist.mjs`); the suite skips when that directory is missing.
  *
  * Needs a workspace folder and --coi (see the `test` script in package.json).
  */
@@ -25,6 +25,8 @@ suite('vscwClang clangd (in browser)', function () {
 	let dir: vscode.Uri;
 	let tmpDir: vscode.Uri;
 	let module: WebAssembly.Module;
+	let memoryLimits: ReturnType<typeof sharedMemoryLimits>;
+	let cacheDir: vscode.Uri;
 	let sysroot: Awaited<ReturnType<typeof loadSysrootGuestFs>>;
 	let context: vscode.ExtensionContext;
 	const log = vscode.window.createOutputChannel('vscwclang-clangd-test');
@@ -40,22 +42,25 @@ suite('vscwClang clangd (in browser)', function () {
 		await vscode.workspace.fs.createDirectory(dir);
 		tmpDir = vscode.Uri.joinPath(folder, 'clangd-test-tmp');
 		await vscode.workspace.fs.createDirectory(tmpDir);
+		cacheDir = vscode.Uri.joinPath(folder, 'clangd-test-cache');
+		await vscode.workspace.fs.createDirectory(cacheDir);
 		const extension = vscode.extensions.getExtension('undefined_publisher.vscwclang') ?? vscode.extensions.all.find(e => e.id.endsWith('.vscwclang'));
 		assert.ok(extension, 'vscwclang extension is not loaded');
-		let bits: Uint8Array;
-		try {
-			bits = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(extension.extensionUri, 'llvm-artifacts', 'bin', 'clangd.wasm')) as Uint8Array<ArrayBuffer>;
-		} catch {
-			this.skip();
-			return;
-		}
 		const toolchainUrl = `${extension.extensionUri.toString().replace(/\/$/, '')}/llvm-artifacts/dist`;
 		await vscode.workspace.getConfiguration('vscwclang').update('toolchainUrl', toolchainUrl, vscode.ConfigurationTarget.Global);
 		context = { extensionUri: extension.extensionUri, globalStorageUri: vscode.Uri.joinPath(dir, 'storage') } as vscode.ExtensionContext;
 		const toolchain = getToolchainStore(context, log);
-		await toolchain.ensure();
+		try {
+			await toolchain.ensure();
+		} catch {
+			this.skip();
+			return;
+		}
+		const bits = await toolchain.getFile('clangd.wasm');
+		memoryLimits = sharedMemoryLimits(bits);
+		assert.ok(memoryLimits, 'clangd.wasm in the toolchain is the single-threaded build; republish it from build-clangd-threads');
 		sysroot = await loadSysrootGuestFs(toolchain);
-		module = await WebAssembly.compile(bits as Uint8Array<ArrayBuffer>);
+		module = await WebAssembly.compile(bits);
 	});
 
 	const NL = String.fromCharCode(13) + String.fromCharCode(10);
@@ -184,13 +189,14 @@ suite('vscwClang clangd (in browser)', function () {
 	async function start(extraFiles: Record<string, string> = {}): Promise<LspClient> {
 		for (const [name, text] of Object.entries(extraFiles)) { await write(name, text); }
 		const process = await createWorkerProcess(context, {
-			name: 'clangd', module, env: {},
-			args: ['-sync', '-background-index=false', '-resource-dir=/resource', '-log=error'],
+			name: 'clangd', module, env: { XDG_CACHE_HOME: GUEST_CACHE }, memoryLimits,
+			args: clangdArgs('error', 2),
 			mounts: [
 				{ guestPath: GUEST_WORKSPACE, uri: vscode.workspace.workspaceFolders![0].uri },
 				{ guestPath: '/sysroot', fs: sysroot.sysroot },
 				{ guestPath: '/resource', fs: sysroot.resource },
 				{ guestPath: GUEST_TMP, uri: tmpDir },
+				{ guestPath: GUEST_CACHE, uri: cacheDir },
 			],
 		});
 		return new LspClient(process);
@@ -259,8 +265,14 @@ suite('vscwClang clangd (in browser)', function () {
 		await client.init();
 		await client.open('big.cpp', text);
 		await client.waitNote(n => n.method === 'textDocument/publishDiagnostics' && (n.params as { uri: string }).uri === uri('big.cpp'));
-		const items = await client.request('textDocument/completion', { textDocument: { uri: uri('big.cpp') }, position: { line: 5, character: 7 } }) as { items?: unknown[] } | unknown[];
-		const list = Array.isArray(items) ? items : items.items ?? [];
+		// The server is asynchronous, so the first answers can precede the preamble: ask again until it is built.
+		let list: unknown[] = [];
+		const deadline = Date.now() + 60_000;
+		while (Date.now() < deadline && list.length <= 50) {
+			const items = await client.request('textDocument/completion', { textDocument: { uri: uri('big.cpp') }, position: { line: 5, character: 7 } }) as { items?: unknown[] } | unknown[] | null;
+			list = (Array.isArray(items) ? items : items?.items) ?? [];
+			if (list.length <= 50) { await new Promise(r => setTimeout(r, 500)); }
+		}
 		// std:: in a TU with <vector>/<string>/<map>/<algorithm> has hundreds of members; a short list means the
 		// response was truncated or corrupted in transit, which is exactly the class of bug the fork's Node
 		// pipe testing found (a short read silently corrupting a later buffered read).
@@ -268,45 +280,39 @@ suite('vscwClang clangd (in browser)', function () {
 		await client.shutdown();
 	});
 
-	test('fake background indexing (didOpen/didClose sweep) makes a closed file\'s symbols resolvable from another file', async () => {
-		const libText = 'int quadruple(int x) { return x * 4; }\n';
-		const mainText = '#include "lib.h"\nint main() { return quadruple(5); }\n';
-		const libHeader = 'int quadruple(int x);\n';
-		const client = await withCompileCommands({ 'lib.cpp': libText, 'lib.h': libHeader, 'main.cpp': mainText });
-		await client.init();
-		// Sweep: open then close lib.cpp (and its header) without ever opening main.cpp yet, simulating the
-		// didOpen/didClose indexing mitigation in documents/remaining_work.md "Chosen indexing mitigation".
-		await client.open('lib.cpp', libText);
-		await client.waitNote(n => n.method === 'textDocument/publishDiagnostics' && (n.params as { uri: string }).uri === uri('lib.cpp'));
-		await client.close('lib.cpp');
+	/** Polls go-to-definition at `needle` in main.cpp until it leaves the header declaration (the background indexer works on its own schedule). */
+	async function definitionOnceIndexed(client: LspClient, mainText: string, needle: string): Promise<{ uri: string }[]> {
 		await client.open('main.cpp', mainText);
 		await client.waitNote(n => n.method === 'textDocument/publishDiagnostics' && (n.params as { uri: string }).uri === uri('main.cpp'));
-		const callLine = 1, callChar = mainText.split('\n')[1].indexOf('quadruple') + 1;
-		const def = await client.request('textDocument/definition', { textDocument: { uri: uri('main.cpp') }, position: { line: callLine, character: callChar } }) as { uri: string }[];
-		assert.ok(Array.isArray(def) && def.length > 0, `go-to-definition found nothing after the sweep (closed lib.cpp before opening main.cpp): ${JSON.stringify(def)}`);
-		assert.strictEqual(def[0].uri, uri('lib.cpp'), 'expected the definition in the now-closed lib.cpp, not a header declaration only');
+		const callLine = 1, callChar = mainText.split('\n')[1].indexOf(needle) + 1;
+		const deadline = Date.now() + 90_000;
+		let def: { uri: string }[] = [];
+		while (Date.now() < deadline) {
+			def = await client.request('textDocument/definition', { textDocument: { uri: uri('main.cpp') }, position: { line: callLine, character: callChar } }) as { uri: string }[];
+			if (Array.isArray(def) && def.length > 0 && def[0].uri !== uri('lib.h')) { break; }
+			await new Promise(r => setTimeout(r, 500));
+		}
+		return def;
+	}
+
+	test('background indexing makes a never-opened file\'s symbols resolvable from another file', async () => {
+		const libText = 'int quadruple(int x) { return x * 4; }\n';
+		const mainText = '#include "lib.h"\nint main() { return quadruple(5); }\n';
+		const client = await withCompileCommands({ 'lib.cpp': libText, 'lib.h': 'int quadruple(int x);\n', 'main.cpp': mainText });
+		await client.init();
+		const def = await definitionOnceIndexed(client, mainText, 'quadruple');
+		assert.ok(Array.isArray(def) && def.length > 0, `go-to-definition found nothing for a symbol defined in a never-opened file: ${JSON.stringify(def)}`);
+		assert.strictEqual(def[0].uri, uri('lib.cpp'), 'expected the definition in lib.cpp, not the header declaration');
 		await client.shutdown();
 	});
 
-	test('fake-opening a .cpp also indexes its header\'s own symbols (an inline function defined only in the header)', async () => {
-		// quintuple is defined entirely in lib.h (no .cpp has its own definition), so this isolates whether
-		// sweeping a .cpp that #includes a header is enough to index that header's symbols, or whether
-		// documents/remaining_work.md's "their includes" priority tier is independently needed.
-		const libHeader = 'inline int quintuple(int x) { return x * 5; }\n';
-		const otherText = '#include "lib.h"\nint useOther() { return quintuple(1); }\n';
-		const mainText = '#include "lib.h"\nint main() { return quintuple(5); }\n';
-		const client = await withCompileCommands({ 'lib.h': libHeader, 'other.cpp': otherText, 'main.cpp': mainText });
+	test('background indexing records its shards under the compilation database\'s .cache', async () => {
+		const mainText = '#include "lib.h"\nint main() { return quadruple(5); }\n';
+		const client = await withCompileCommands({ 'lib.cpp': 'int quadruple(int x) { return x * 4; }\n', 'lib.h': 'int quadruple(int x);\n', 'main.cpp': mainText });
 		await client.init();
-		// Sweep: open then close other.cpp (which pulls in lib.h), without ever opening lib.h or main.cpp directly.
-		await client.open('other.cpp', otherText);
-		await client.waitNote(n => n.method === 'textDocument/publishDiagnostics' && (n.params as { uri: string }).uri === uri('other.cpp'));
-		await client.close('other.cpp');
-		await client.open('main.cpp', mainText);
-		await client.waitNote(n => n.method === 'textDocument/publishDiagnostics' && (n.params as { uri: string }).uri === uri('main.cpp'));
-		const callLine = 1, callChar = mainText.split('\n')[1].indexOf('quintuple') + 1;
-		const def = await client.request('textDocument/definition', { textDocument: { uri: uri('main.cpp') }, position: { line: callLine, character: callChar } }) as { uri: string }[];
-		assert.ok(Array.isArray(def) && def.length > 0, `go-to-definition found nothing for a header-only symbol after sweeping a different TU that includes it: ${JSON.stringify(def)}`);
-		assert.strictEqual(def[0].uri, uri('lib.h'), `expected the definition in lib.h: ${JSON.stringify(def)}`);
+		await definitionOnceIndexed(client, mainText, 'quadruple');
 		await client.shutdown();
+		const shards = await vscode.workspace.fs.readDirectory(vscode.Uri.joinPath(dir, '.cache', 'clangd', 'index'));
+		assert.ok(shards.some(([name]) => name.startsWith('lib.cpp.')), `no lib.cpp shard in .cache/clangd/index: ${JSON.stringify(shards)}`);
 	});
 });
