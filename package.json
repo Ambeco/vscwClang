@@ -32,6 +32,9 @@
   ],
   "browser": "./dist/web/extension.js",
   "contributes": {
+    "resourceLabelFormatters": [
+      { "scheme": "vscwclang-toolchain", "formatting": { "label": "${path}", "separator": "/" } }
+    ],
     "configurationDefaults": {
       "[c]": { "anycode.language.features": { "definitions": false, "references": false, "completions": false, "workspaceSymbols": false, "highlights": false, "outline": false } },
       "[cpp]": { "anycode.language.features": { "definitions": false, "references": false, "completions": false, "workspaceSymbols": false, "highlights": false, "outline": false } }

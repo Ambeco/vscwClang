@@ -47,3 +47,11 @@ suite('Anycode overlap', () => {
 		}
 	});
 });
+
+suite('toolchain URI labels', () => {
+	test('toolchain file URIs are labelled with forward slashes (workspace symbols would show backslashes otherwise)', () => {
+		const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
+		const formatter = pkg.contributes.resourceLabelFormatters.find((f: { scheme: string }) => f.scheme === 'vscwclang-toolchain');
+		assert.strictEqual(formatter?.formatting.separator, '/');
+	});
+});
