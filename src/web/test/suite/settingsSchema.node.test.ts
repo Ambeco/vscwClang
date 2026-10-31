@@ -35,3 +35,15 @@ suite('package.json setting scopes', () => {
 		assert.deepStrictEqual(read.filter(k => !props[`C_Cpp.${k}`]).map(k => `C_Cpp.${k} is read but not contributed`), []);
 	});
 });
+
+suite('Anycode overlap', () => {
+	test('configurationDefaults turn off the Anycode features clangd duplicates for C and C++', () => {
+		const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
+		for (const lang of ['[c]', '[cpp]']) {
+			const features = pkg.contributes.configurationDefaults[lang]['anycode.language.features'];
+			for (const key of ['definitions', 'references', 'completions', 'workspaceSymbols', 'highlights', 'outline']) {
+				assert.strictEqual(features[key], false, `${lang} ${key}`);
+			}
+		}
+	});
+});

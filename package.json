@@ -32,6 +32,10 @@
   ],
   "browser": "./dist/web/extension.js",
   "contributes": {
+    "configurationDefaults": {
+      "[c]": { "anycode.language.features": { "definitions": false, "references": false, "completions": false, "workspaceSymbols": false, "highlights": false, "outline": false } },
+      "[cpp]": { "anycode.language.features": { "definitions": false, "references": false, "completions": false, "workspaceSymbols": false, "highlights": false, "outline": false } }
+    },
     "configuration": {
       "title": "vscwClang",
       "properties": {
