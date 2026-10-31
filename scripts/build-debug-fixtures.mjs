@@ -49,7 +49,7 @@ async function run(threaded, wasmFile, toolArgs, work) {
 const instrument = ['-O0', '-g', '-fsanitize-coverage=trace-pc-guard,no-prune', ...debugCoverage, '-fdebug-prefix-map=/src/=', '-fdebug-prefix-map=/work='];
 const work = mkdtempSync(join(tmpdir(), 'vscw-fixtures-'));
 try {
-	for (const [slice, threaded, names] of [['wasm32-wasip1', false, ['prog', 'chatty', 'loop']], ['wasm32-wasip1-threads', true, ['threads', 'spin']]]) {
+	for (const [slice, threaded, names] of [['wasm32-wasip1', false, ['prog', 'chatty', 'loop', 'stepcall']], ['wasm32-wasip1-threads', true, ['threads', 'spin', 'stepcallmt']]]) {
 		const compile = flags.compile[slice].map(sub);
 		const link = flags.link[slice].map(sub);
 		// The threaded driver spawns cc1 as a subprocess unless told not to (see notes.md 2026-10-29).

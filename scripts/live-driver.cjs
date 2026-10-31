@@ -18,7 +18,7 @@ const log = (kind, msg) => fs.appendFileSync(LOG, `[${new Date().toISOString().s
 (async () => {
   const b = await chromium.connectOverCDP('http://127.0.0.1:9333');
   const ctx = b.contexts()[0];
-  const p = ctx.pages()[0];
+  const p = ctx.pages().find(pg => /vscode.dev/.test(pg.url())) || ctx.pages()[0];
   await ctx.addInitScript(() => {
     if (location.hostname !== 'vscode.dev') { return; }
     window.showDirectoryPicker = async () => (await navigator.storage.getDirectory()).getDirectoryHandle('proj', { create: true });
