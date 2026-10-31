@@ -155,6 +155,18 @@ suite('GuestProcess over a real Worker', function () {
 		assert.ok(s.out().includes('tmp: writable'));
 	});
 
+	test('realpath resolves existing directories (clangd sets its working directory with it) and reports missing ones', async () => {
+		const s = start('realpath');
+		assert.deepStrictEqual(await s.outcome, { kind: 'exit', code: 0 });
+		assert.strictEqual(s.out(), [
+			'/workspace -> /workspace (ok)',
+			'/workspace/. -> /workspace (ok)',
+			'/workspace/sub/../sub -> null (No such file or directory)',
+			'/workspace/missing -> null (No such file or directory)',
+			'/tmp -> /tmp (ok)',
+			''].join('\n'));
+	});
+
 	for (const [mode, message] of [['oob', /out of bounds/], ['div', /divide by zero/], ['trap', /unreachable/]] as const) {
 		test(`trap case "${mode}" ends the run with the engine's message`, async () => {
 			const s = start('trap', [mode]);

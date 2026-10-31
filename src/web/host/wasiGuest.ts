@@ -311,7 +311,11 @@ export class GuestWasi {
 				this.services.rename(from, to);
 			}),
 			path_symlink: enosys,
-			path_readlink: enosys,
+			// No symlinks exist, so every existing path is "not a link"; libc's realpath needs INVAL here, not NOSYS.
+			path_readlink: guard((dirfd: number, pathPtr: number, pathLen: number) => {
+				this.services.stat(this.resolve(dirfd, this.readString(pathPtr, pathLen)).path);
+				fail(ERRNO.INVAL);
+			}),
 			path_link: enosys,
 			sock_accept: enosys,
 			sock_recv: enosys,
