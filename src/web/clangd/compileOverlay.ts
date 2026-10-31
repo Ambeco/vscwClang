@@ -13,14 +13,14 @@ export async function discoverWorkspaceSources(): Promise<vscode.Uri[]> {
 }
 
 /**
- * Whether clangd will find a compilation database on its own (`compile_commands.json` at the root or in `build/`,
- * the `vscwclang.compileCommands` setting, or `compile_flags.txt`). Overlay commands would shadow its entries, so
- * the caller sends none then.
+ * The workspace-relative directory of the compilation database clangd will find on its own (`compile_commands.json`
+ * at the root or in `build/`, the `vscwclang.compileCommands` setting, or `compile_flags.txt`), '' for the root, or
+ * undefined if there is none. Overlay commands would shadow its entries, so the caller sends none then.
  */
-export async function hasCompilationDatabase(folder: vscode.Uri, configured: string | undefined): Promise<boolean> {
+export async function findCompilationDatabaseDir(folder: vscode.Uri, configured: string | undefined): Promise<string | undefined> {
 	const candidates = [configured, 'compile_commands.json', 'build/compile_commands.json', 'compile_flags.txt'].filter((c): c is string => !!c);
 	for (const relative of candidates) {
-		try { await vscode.workspace.fs.stat(vscode.Uri.joinPath(folder, relative)); return true; } catch { /* not there */ }
+		try { await vscode.workspace.fs.stat(vscode.Uri.joinPath(folder, relative)); return relative.includes('/') ? relative.slice(0, relative.lastIndexOf('/')) : ''; } catch { /* not there */ }
 	}
-	return false;
+	return undefined;
 }

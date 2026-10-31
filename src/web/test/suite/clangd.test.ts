@@ -6,7 +6,7 @@ import { getToolchainStore } from '../../toolchain/toolchain';
 import { GUEST_WORKSPACE } from '../../toolchain/guestPaths';
 import { fallbackFlags } from '../../clangd/fallbackFlags';
 import { GUEST_TMP } from '../../toolchain/runEnvironment';
-import { GUEST_CACHE, clangdArgs } from '../../clangd/clangdConfig';
+import { GUEST_CACHE, clangdArgs, shardMountPoint } from '../../clangd/clangdConfig';
 import { sharedMemoryLimits } from '../../host/sharedMemory';
 
 /**
@@ -27,6 +27,7 @@ suite('vscwClang clangd (in browser)', function () {
 	let module: WebAssembly.Module;
 	let memoryLimits: ReturnType<typeof sharedMemoryLimits>;
 	let cacheDir: vscode.Uri;
+	let shardDir: vscode.Uri;
 	let sysroot: Awaited<ReturnType<typeof loadSysrootGuestFs>>;
 	let context: vscode.ExtensionContext;
 	const log = vscode.window.createOutputChannel('vscwclang-clangd-test');
@@ -44,6 +45,8 @@ suite('vscwClang clangd (in browser)', function () {
 		await vscode.workspace.fs.createDirectory(tmpDir);
 		cacheDir = vscode.Uri.joinPath(folder, 'clangd-test-cache');
 		await vscode.workspace.fs.createDirectory(cacheDir);
+		shardDir = vscode.Uri.joinPath(folder, 'clangd-test-shards');
+		await vscode.workspace.fs.createDirectory(shardDir);
 		const extension = vscode.extensions.getExtension('undefined_publisher.vscwclang') ?? vscode.extensions.all.find(e => e.id.endsWith('.vscwclang'));
 		assert.ok(extension, 'vscwclang extension is not loaded');
 		const toolchainUrl = `${extension.extensionUri.toString().replace(/\/$/, '')}/llvm-artifacts/dist`;
@@ -197,6 +200,7 @@ suite('vscwClang clangd (in browser)', function () {
 				{ guestPath: '/resource', fs: sysroot.resource },
 				{ guestPath: GUEST_TMP, uri: tmpDir },
 				{ guestPath: GUEST_CACHE, uri: cacheDir },
+				{ guestPath: shardMountPoint('clangd-test')!, uri: shardDir },
 			],
 		});
 		return new LspClient(process);
@@ -306,13 +310,14 @@ suite('vscwClang clangd (in browser)', function () {
 		await client.shutdown();
 	});
 
-	test('background indexing records its shards under the compilation database\'s .cache', async () => {
+	test('background indexing writes its shards to the mount over <root>/.cache/clangd, not into the folder', async () => {
 		const mainText = '#include "lib.h"\nint main() { return quadruple(5); }\n';
 		const client = await withCompileCommands({ 'lib.cpp': 'int quadruple(int x) { return x * 4; }\n', 'lib.h': 'int quadruple(int x);\n', 'main.cpp': mainText });
 		await client.init();
 		await definitionOnceIndexed(client, mainText, 'quadruple');
 		await client.shutdown();
-		const shards = await vscode.workspace.fs.readDirectory(vscode.Uri.joinPath(dir, '.cache', 'clangd', 'index'));
-		assert.ok(shards.some(([name]) => name.startsWith('lib.cpp.')), `no lib.cpp shard in .cache/clangd/index: ${JSON.stringify(shards)}`);
+		const shards = await vscode.workspace.fs.readDirectory(vscode.Uri.joinPath(shardDir, 'index'));
+		assert.ok(shards.some(([name]) => name.startsWith('lib.cpp.')), `no lib.cpp shard in the mounted cache: ${JSON.stringify(shards)}`);
+		await assert.rejects(Promise.resolve(vscode.workspace.fs.stat(vscode.Uri.joinPath(dir, '.cache'))), /./, 'clangd wrote .cache into the project folder');
 	});
 });

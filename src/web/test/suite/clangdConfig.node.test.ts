@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { OVERLAY_BATCH_SIZE, batches, clangdArgs, clangdThreadCount, compilationDatabaseChanges } from '../../clangd/clangdConfig';
+import { OVERLAY_BATCH_SIZE, batches, clangdArgs, clangdThreadCount, compilationDatabaseChanges, shardMountPoint } from '../../clangd/clangdConfig';
 
 suite('clangdConfig', () => {
 	test('clangdThreadCount leaves a core for the extension host and stays within 2..4', () => {
@@ -21,6 +21,14 @@ suite('clangdConfig', () => {
 		assert.deepStrictEqual(changes['/workspace/a.cpp'], { workingDirectory: '/workspace', compilationCommand: ['clang++', '--target=wasm32-wasip1', '-std=c++20', '/workspace/a.cpp'] });
 		assert.strictEqual(changes['/workspace/src/b.cc'].compilationCommand[0], 'clang++');
 		assert.strictEqual(changes['/workspace/c.c'].compilationCommand[0], 'clang');
+	});
+
+	test('shardMountPoint is <root>/.cache/clangd under the database directory, and undefined outside the workspace', () => {
+		assert.strictEqual(shardMountPoint(''), '/workspace/.cache/clangd');
+		assert.strictEqual(shardMountPoint('build'), '/workspace/build/.cache/clangd');
+		assert.strictEqual(shardMountPoint('./out/debug/'), '/workspace/out/debug/.cache/clangd');
+		assert.strictEqual(shardMountPoint('/abs/dir'), undefined);
+		assert.strictEqual(shardMountPoint('../elsewhere'), undefined);
 	});
 
 	test('batches splits into slices of at most OVERLAY_BATCH_SIZE', () => {

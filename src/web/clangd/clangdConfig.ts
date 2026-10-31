@@ -2,6 +2,17 @@ import { GUEST_WORKSPACE } from '../toolchain/guestPaths';
 
 export const GUEST_CACHE = '/cache';
 
+/**
+ * Where clangd writes index shards for a compilation database in `databaseDir` (workspace-relative, '' for the
+ * root): `<root>/.cache/clangd`. Mounting extension storage there keeps shards out of the user's folder and works
+ * when the folder is read-only. Undefined when the database lies outside the workspace.
+ */
+export function shardMountPoint(databaseDir: string): string | undefined {
+	if (databaseDir.startsWith('/') || databaseDir.split('/').includes('..')) { return undefined; }
+	const dir = databaseDir.split('/').filter(part => part !== '' && part !== '.').join('/');
+	return `${GUEST_WORKSPACE}${dir ? '/' + dir : ''}/.cache/clangd`;
+}
+
 /** Worker threads for clangd's parser pool and background indexer: most cores, but each is a Worker with its own stack. */
 export function clangdThreadCount(hardwareConcurrency: number | undefined): number {
 	return Math.max(2, Math.min(4, (hardwareConcurrency ?? 4) - 1));

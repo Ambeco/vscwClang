@@ -9,8 +9,8 @@ import { GUEST_WORKSPACE, TOOLCHAIN_SCHEME, fromGuestPath, isToolchainGuestPath,
 import { ToolchainFileSystem } from '../toolchain/toolchainFileSystem';
 import { clangdLogLevel, compileCommandsPath, logsClangdStderr } from '../toolchain/cppToolsSettings';
 import { intelliSenseEnabled, loggingLevel, projectSettings, userFlags } from '../projectConfig';
-import { GUEST_CACHE, OVERLAY_BATCH_SIZE, batches, clangdArgs, clangdThreadCount, compilationDatabaseChanges } from './clangdConfig';
-import { discoverWorkspaceSources, hasCompilationDatabase } from './compileOverlay';
+import { GUEST_CACHE, OVERLAY_BATCH_SIZE, batches, clangdArgs, clangdThreadCount, compilationDatabaseChanges, shardMountPoint } from './clangdConfig';
+import { discoverWorkspaceSources, findCompilationDatabaseDir } from './compileOverlay';
 
 const CLANGD_TMP = 'clangd-tmp';
 const CLANGD_CACHE = 'clangd-cache';
@@ -22,9 +22,10 @@ const CLANGD_CACHE = 'clangd-cache';
  * see the `Ambeco/llvm-artifacts` release), downloaded and cached the same way. It is the wasi-threads build, so
  * clangd runs its own parser pool and background indexer on Workers. The indexer only knows files that have compile
  * commands, so unless the project has a compilation database the workspace sources are sent as
- * `compilationDatabaseChanges` (`compileOverlay.ts`), and new files as they are created. Index shards persist under
- * `/cache` (`XDG_CACHE_HOME`, extension storage), except beside a project's own `compile_commands.json`, where
- * clangd writes `<root>/.cache/clangd/index`. Indexing progress is clangd's own work-done progress notification.
+ * `compilationDatabaseChanges` (`compileOverlay.ts`), and new files as they are created. Index shards persist in a
+ * per-workspace folder of extension storage, mounted at `/cache` (`XDG_CACHE_HOME`) and, with a compilation
+ * database, over the `<root>/.cache/clangd` where clangd insists on writing them, so the user's folder (possibly
+ * read-only) is never touched. Indexing progress is clangd's own work-done progress notification.
  *
  * Only one client may be live per extension host: the server's commands (`clangd.applyFix`, ...) are registered
  * globally, so a second client fails to initialize. The test workspace turns the activation client off
@@ -49,9 +50,12 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	}
 
 	const tmpDir = vscode.Uri.joinPath(context.globalStorageUri, CLANGD_TMP);
-	const cacheDir = vscode.Uri.joinPath(context.globalStorageUri, CLANGD_CACHE);
+	const cacheDir = vscode.Uri.joinPath(context.globalStorageUri, CLANGD_CACHE, await workspaceKey(folder));
 	await vscode.workspace.fs.createDirectory(tmpDir);
 	await vscode.workspace.fs.createDirectory(cacheDir);
+	const configured = compileCommandsPath(projectSettings('vscwclang').get<unknown>('compileCommands')) ?? compileCommandsPath(projectSettings('C_Cpp').get<unknown>('default.compileCommands'));
+	const databaseDir = await findCompilationDatabaseDir(folder, configured);
+	const shardMount = databaseDir === undefined ? undefined : shardMountPoint(databaseDir);
 
 	const args = clangdArgs(clangdLogLevel(level), clangdThreadCount(globalThis.navigator?.hardwareConcurrency));
 	const sysroot = await loadSysrootGuestFs(toolchain);
@@ -63,6 +67,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 			{ guestPath: '/resource', fs: sysroot.resource },
 			{ guestPath: '/tmp', uri: tmpDir },
 			{ guestPath: GUEST_CACHE, uri: cacheDir },
+			...(shardMount ? [{ guestPath: shardMount, uri: cacheDir }] : []),
 		],
 	});
 	const stderrChunks: string[] = [];
@@ -116,8 +121,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 
 	void (async () => {
 		try {
-			const configured = compileCommandsPath(projectSettings('vscwclang').get<unknown>('compileCommands')) ?? compileCommandsPath(projectSettings('C_Cpp').get<unknown>('default.compileCommands'));
-			if (await hasCompilationDatabase(folder, configured)) { return; }
+			if (databaseDir !== undefined) { return; }
 			await sendOverlay(await discoverWorkspaceSources());
 		} catch (e) {
 			log.appendLine(`[vscwclang] clangd: could not register workspace sources for background indexing: ${errorText(e)}`);
@@ -155,6 +159,12 @@ function makeMessageTransports(process: PipedProcess, exited: Promise<number>, l
 	});
 	reader.onError(e => log.appendLine(`[vscwclang] clangd message reader error: ${errorText(e)}`));
 	return { reader, writer };
+}
+
+/** Short stable id of the workspace folder, so projects with the same relative paths do not share index shards. */
+async function workspaceKey(folder: vscode.Uri): Promise<string> {
+	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(folder.toString()));
+	return [...new Uint8Array(digest).slice(0, 8)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 function errorText(e: unknown): string {
