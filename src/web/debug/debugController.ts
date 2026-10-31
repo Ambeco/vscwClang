@@ -32,6 +32,7 @@ export interface DebugControllerOptions {
 
 interface Location { file: string; line: number }
 interface StopState {
+	threadId: number;
 	frames: DebuggeeFrame[];
 	/** Frames lldb can decode (those with a frame-base local), innermost first; DAP frame ids index into this. */
 	lldbFrames: (StopFrame & { funcIndex: number })[];
@@ -45,7 +46,7 @@ interface SourceBreakpoint { line: number; condition?: string; hitCondition?: st
 interface FunctionBreakpoint { name: string; condition?: string; hitCondition?: string }
 interface StepState { kind: 'into' | 'over'; sp: number; location: Location | undefined }
 
-const THREAD_ID = 1;
+const MAIN_THREAD_ID = 1;
 
 /**
  * The Debug Adapter Protocol logic, independent of both VS Code and the debuggee's host; vscode-free, so node tests
@@ -75,6 +76,8 @@ export class DebugController {
 	private readonly memory = new PagedMemory();
 	private readonly locations = new Map<number, Location | undefined>();
 	private stop: StopState | undefined;
+	/** Threads that have stopped so far (and main); the stub reports a thread only when it stops. */
+	private readonly threads = new Set<number>([MAIN_THREAD_ID]);
 	private readonly variableRefs = new Map<number, VariableRef>();
 	private stepping: StepState | undefined;
 	private running = false;
@@ -105,11 +108,11 @@ export class DebugController {
 			case 'configurationDone':
 				this.respond(req, true, {});
 				return this.begin();
-			case 'threads': this.respond(req, true, { threads: [{ id: THREAD_ID, name: 'main' }] }); return;
-			case 'continue': return this.resumeFromRequest(req, 'continue', { allThreadsContinued: true });
-			case 'next': return this.resumeFromRequest(req, 'over', {});
-			case 'stepIn': return this.resumeFromRequest(req, 'into', {});
-			case 'stepOut': return this.resumeFromRequest(req, 'out', {});
+			case 'threads': this.respond(req, true, { threads: [...this.threads].map(id => ({ id, name: id === MAIN_THREAD_ID ? 'main' : `thread ${id}` })) }); return;
+			case 'continue': return this.resumeFromRequest(req, 'continue', { allThreadsContinued: false }, args);
+			case 'next': return this.resumeFromRequest(req, 'over', {}, args);
+			case 'stepIn': return this.resumeFromRequest(req, 'into', {}, args);
+			case 'stepOut': return this.resumeFromRequest(req, 'out', {}, args);
 			case 'pause':
 				await this.requireTarget().session.pause();
 				this.respond(req, true, {});
@@ -231,8 +234,11 @@ export class DebugController {
 		await this.resume(this.stopOnEntry ? 'into' : 'continue');
 	}
 
-	private async resumeFromRequest(req: Request, how: ResumeKind, body: object): Promise<void> {
+	private async resumeFromRequest(req: Request, how: ResumeKind, body: object, args: Args): Promise<void> {
 		const stop = this.requireStopped(how === 'continue' ? 'continue' : `step (${how})`);
+		if (args.threadId !== undefined && Number(args.threadId) !== stop.threadId) {
+			throw new Error(`vscwClang: thread ${args.threadId} is running; only thread ${stop.threadId} is stopped, and the debug stub resumes just the stopped thread. Did you mean to continue or step thread ${stop.threadId}?`);
+		}
 		const top = stop.frames[0];
 		this.stepping = (how === 'into' || how === 'over') && top ? { kind: how, sp: top.sp, location: this.locate(top.pc) } : undefined;
 		this.respond(req, true, body);
@@ -278,7 +284,11 @@ export class DebugController {
 		}
 		const target = this.requireTarget();
 		const lldbFrames = event.frames.filter(f => target.scan.frameBaseLocals.has(f.funcIndex)).map(f => ({ funcIndex: f.funcIndex, pc: f.pc, sp: f.sp, frameBaseLocal: target.scan.frameBaseLocals.get(f.funcIndex)! }));
-		this.stop = { frames: event.frames, lldbFrames };
+		this.stop = { threadId: event.threadId, frames: event.frames, lldbFrames };
+		if (!this.threads.has(event.threadId)) {
+			this.threads.add(event.threadId);
+			this.send({ type: 'event', event: 'thread', body: { reason: 'started', threadId: event.threadId } });
+		}
 		this.variableRefs.clear();
 		this.memory.clear();
 		target.reactor.setMemory({ read: this.memory.read });
@@ -297,7 +307,7 @@ export class DebugController {
 		await this.syncBreakpoints();
 		const reason = event.reason === 'step' && this.entryPending ? 'entry' : event.reason;
 		this.entryPending = false;
-		this.send({ type: 'event', event: 'stopped', body: { reason, threadId: THREAD_ID, allThreadsStopped: true } });
+		this.send({ type: 'event', event: 'stopped', body: { reason, threadId: event.threadId, allThreadsStopped: false } });
 	}
 
 	/**
@@ -365,6 +375,11 @@ export class DebugController {
 	private async stackTrace(req: Request, args: Args): Promise<void> {
 		const target = this.requireTarget();
 		const stop = this.requireStopped('read the stack');
+		if (args.threadId !== undefined && Number(args.threadId) !== stop.threadId) {
+			// Running threads have no frames to show: the stub reports a thread's stack only when it stops.
+			this.respond(req, true, { stackFrames: [], totalFrames: 0 });
+			return;
+		}
 		const start = Number(args.startFrame ?? 0), levels = Number(args.levels ?? 0) || stop.lldbFrames.length;
 		const frames = stop.lldbFrames.map((f, i) => {
 			const location = this.locate(f.pc);

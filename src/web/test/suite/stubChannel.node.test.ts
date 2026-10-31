@@ -37,12 +37,12 @@ suite('stubChannel: FrameDemux', () => {
 	});
 
 	test('a frame split across chunks at every byte boundary still parses, and program bytes keep their order', () => {
-		const whole = bytes(`abc${frame('stop breakpoint 2 10 5000 20 6000')}def`);
+		const whole = bytes(`abc${frame('stop breakpoint 3 2 10 5000 20 6000')}def`);
 		for (let cut = 1; cut < whole.length; cut++) {
 			const { d, messages, program } = demux();
 			d.push(whole.subarray(0, cut)); d.push(whole.subarray(cut)); d.end();
 			assert.strictEqual(program(), 'abcdef', `cut at ${cut}`);
-			assert.deepStrictEqual(messages, [{ kind: 'stop', reason: 'breakpoint', frames: [{ guard: 10, sp: 5000 }, { guard: 20, sp: 6000 }] }], `cut at ${cut}`);
+			assert.deepStrictEqual(messages, [{ kind: 'stop', reason: 'breakpoint', threadId: 3, frames: [{ guard: 10, sp: 5000 }, { guard: 20, sp: 6000 }] }], `cut at ${cut}`);
 		}
 	});
 

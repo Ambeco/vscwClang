@@ -397,7 +397,7 @@ class FakeSession implements DebuggeeSession {
 	listener: ((e: DebuggeeEvent) => void) | undefined;
 	armed: number[][] = [];
 	resumed: ResumeKind[] = [];
-	async start(): Promise<void> { this.listener!({ kind: 'stopped', reason: 'start', frames: [] }); }
+	async start(): Promise<void> { this.listener!({ kind: 'stopped', reason: 'start', threadId: 1, frames: [] }); }
 	async setBreakpoints(guards: number[]): Promise<void> { this.armed.push(guards); }
 	async resume(how: ResumeKind): Promise<void> { this.resumed.push(how); }
 	async pause(): Promise<void> { throw new Error('no pause'); }
@@ -423,9 +423,36 @@ suiteIfFixtures('DebugController with a scripted host', function () {
 		assert.deepStrictEqual(fake.armed, [], 'the host cannot take breakpoints while running');
 
 		const add = [...scan.guardSites].filter(([, s]) => scan.module.names.get(s.funcIndex) === 'add').sort((a, b) => a[1].pc - b[1].pc)[0];
-		fake.listener!({ kind: 'stopped', reason: 'pause', frames: [{ funcIndex: add[1].funcIndex, pc: add[1].pc, sp: 1000 }] });
+		fake.listener!({ kind: 'stopped', reason: 'pause', threadId: 1, frames: [{ funcIndex: add[1].funcIndex, pc: add[1].pc, sp: 1000 }] });
 		await client.event('stopped');
 		assert.deepStrictEqual(fake.armed, [[add[0]]]);
+	});
+
+	test('a stop on another thread announces the thread, lists it, and only that thread can be resumed or read', async () => {
+		const program = new Uint8Array(readFileSync(PROG));
+		const scan = scanProgram(program);
+		const reactor = await ReactorHost.create(readFileSync(REACTOR), undefined, undefined, nodeReactorThreads());
+		reactor.createTarget(program);
+		const fake = new FakeSession();
+		const client = makeClient(async () => ({ session: fake, reactor, program, scan, paths: identity }));
+		await client.ok('initialize'); await client.ok('launch', {}); await client.event('initialized');
+		await client.ok('configurationDone');
+		assert.deepStrictEqual((await client.ok('threads')).threads, [{ id: 1, name: 'main' }]);
+
+		const add = [...scan.guardSites].filter(([, s]) => scan.module.names.get(s.funcIndex) === 'add').sort((a, b) => a[1].pc - b[1].pc)[0];
+		fake.listener!({ kind: 'stopped', reason: 'breakpoint', threadId: 4, frames: [{ funcIndex: add[1].funcIndex, pc: add[1].pc, sp: 1000 }] });
+		assert.deepStrictEqual((await client.event('thread')).body, { reason: 'started', threadId: 4 });
+		assert.deepStrictEqual((await client.event('stopped')).body, { reason: 'breakpoint', threadId: 4, allThreadsStopped: false });
+		assert.deepStrictEqual((await client.ok('threads')).threads, [{ id: 1, name: 'main' }, { id: 4, name: 'thread 4' }]);
+		assert.ok((await client.ok('stackTrace', { threadId: 4 })).stackFrames.length > 0);
+		assert.deepStrictEqual(await client.ok('stackTrace', { threadId: 1 }), { stackFrames: [], totalFrames: 0 });
+
+		const wrong = await client.request('next', { threadId: 1 });
+		assert.strictEqual(wrong.success, false);
+		assert.match(String(wrong.message), /thread 1 is running; only thread 4 is stopped/);
+		assert.deepStrictEqual(fake.resumed, ['continue']);
+		assert.deepStrictEqual(await client.ok('continue', { threadId: 4 }), { allThreadsContinued: false });
+		assert.deepStrictEqual(fake.resumed, ['continue', 'continue']);
 	});
 
 	test("the target's notice is shown in the Debug Console when the launch succeeds", async () => {

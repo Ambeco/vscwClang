@@ -5,6 +5,7 @@ import { LanguageClient, ReadableStreamMessageReader, WriteableStreamMessageWrit
 import { loadCompileFlags, loadSysrootFiles, loadSysrootGuestFs } from '../toolchain/sysroot';
 import { fallbackFlags } from './fallbackFlags';
 import { getToolchainStore } from '../toolchain/toolchain';
+import { chooseSlice } from '../toolchain/threadSlice';
 import { GUEST_WORKSPACE, TOOLCHAIN_SCHEME, fromGuestPath, isToolchainGuestPath, toGuestPath } from '../toolchain/guestPaths';
 import { ToolchainFileSystem } from '../toolchain/toolchainFileSystem';
 import { clangdLogLevel, compileCommandsPath, logsClangdStderr } from '../toolchain/cppToolsSettings';
@@ -42,7 +43,9 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 
 	const toolchain = getToolchainStore(context, log);
 	const [bits, sysrootFiles, flags] = await Promise.all([toolchain.getFile('clangd.wasm'), loadSysrootFiles(toolchain), loadCompileFlags(toolchain)]);
-	const compileFlags = flags.compile['wasm32-wasip1'].map(f => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource'));
+	const extraFlags = userFlags(log, true).flags;
+	// The same slice Build picks, or <thread> and <mutex> would be errors here but not there.
+	const compileFlags = flags.compile[chooseSlice(Object.keys(flags.compile), vscode.workspace.getConfiguration('vscwclang').get<boolean>('threads', true), [extraFlags])].map(f => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource'));
 	const module = await WebAssembly.compile(bits);
 	const memoryLimits = sharedMemoryLimits(bits);
 	if (!memoryLimits) {
@@ -92,7 +95,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 		return hostPath !== undefined ? folder.with({ path: hostPath }) : vscode.Uri.parse(value);
 	};
 	let client!: LanguageClient;
-	const overlayFlags = fallbackFlags(compileFlags, userFlags(log, true).flags);
+	const overlayFlags = fallbackFlags(compileFlags, extraFlags);
 	const sendOverlay = async (uris: readonly vscode.Uri[]) => {
 		const guestPaths = uris.flatMap(u => toGuestPath(folder.path, u.path) ?? []);
 		for (const batch of batches(guestPaths, OVERLAY_BATCH_SIZE)) {

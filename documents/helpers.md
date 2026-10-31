@@ -33,6 +33,8 @@ src/web/
       joinArgs
     sourceFilter.ts
       makeSourceExcluder       # files.exclude globs
+    threadSlice.ts
+      chooseSlice              # wasip1 vs wasip1-threads
     toolchainDownload.ts
       sha256Hex
 ```

@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { createWorkerProcess, type PipedProcess } from '../../host/workerProcess';
+import { sharedMemoryLimits } from '../../host/sharedMemory';
 import { PAGE_SIZE } from '../../debug/pagedMemory';
 import { StubSession } from '../../debug/stubChannel';
 import { scanProgram } from '../../debug/wasmScan';
@@ -30,7 +31,7 @@ suite('vscwClang debug stub over Worker host pipes (in browser)', function () {
 
 	async function launch(name: string): Promise<{ bytes: Uint8Array<ArrayBuffer>; dbg: Debuggee }> {
 		const bytes = await fixture(name);
-		const process = await createWorkerProcess({ extensionUri: extension.extensionUri } as vscode.ExtensionContext, { name, module: await WebAssembly.compile(bytes), args: [], env: {}, mounts: [] });
+		const process = await createWorkerProcess({ extensionUri: extension.extensionUri } as vscode.ExtensionContext, { name, module: await WebAssembly.compile(bytes), args: [], env: {}, mounts: [], memoryLimits: sharedMemoryLimits(bytes) });
 		let stdout = '', stderr = '';
 		const session = new StubSession(text => process.stdin!.write(encoder.encode(text)), b => { stderr += decoder.decode(b, { stream: true }); });
 		process.stdout!.onData(d => { stdout += decoder.decode(d, { stream: true }); });

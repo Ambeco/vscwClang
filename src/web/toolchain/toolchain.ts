@@ -13,6 +13,7 @@ import { ObjectCache, defaultByteStore, hashText, splitIncludeTrace, type LinkRe
 import { pchRetryable, selectPch, type PchVariant } from './pch';
 import { sha256Hex } from './toolchainDownload';
 import { loadCompileFlags, loadSysrootGuestFs } from './sysroot';
+import { chooseSlice } from './threadSlice';
 import { ToolchainStore, type StoreContext } from './toolchainStore';
 import { COVERAGE_IGNORELIST, COVERAGE_IGNORELIST_FILE } from '../debug/coverageIgnorelist';
 import debugStubSource from '../debug/debugStub.c';
@@ -41,8 +42,6 @@ export interface BuildResult {
 	diagnostics: string;
 	parsed: ParsedDiagnostic[];
 }
-
-const SLICE = 'wasm32-wasip1';
 
 /** Compiled objects (kept in the browser's Cache API) and link results (this session only), so an unchanged tree skips the build and an edit recompiles only what it touches. */
 const objectCache = new ObjectCache(defaultByteStore('vscwclang-objects-v1'));
@@ -121,6 +120,8 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 	const objects = new MemoryGuestFs();
 	const run = (wasmFile: string, args: string[], extra?: ToolExtras) => runTool(context, folder, toolchain, guestSysroot, wasmFile, args, extra);
 	const flags = await flagsPromise;
+	const slice = chooseSlice(Object.keys(flags.compile), vscode.workspace.getConfiguration('vscwclang').get<boolean>('threads', true), [request.flags, ...Object.values(request.sourceFlags ?? {})]);
+	log.appendLine(`[vscwclang] building for ${slice}`);
 	const sub = (f: string) => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource');
 	const userFlags = splitFlags(request.flags, GUEST_WORKSPACE);
 	// no-prune: by default sancov skips blocks it deems redundant, but a line breakpoint needs a guard at every block start.
@@ -130,17 +131,17 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 	const linkFlags = [...new Set([...userFlags.link, ...[...ownFlags.values()].flatMap(f => f.link)])];
 	const objectPaths: string[] = [];
 	const clang = (args: string[], extra: ToolExtras) => run('clang.wasm', args, extra);
-	const abortShim = await addShim(objects, clang, flags.compile[SLICE].map(sub), log, ABORT_SHIM);
+	const abortShim = await addShim(objects, clang, slice, flags.compile[slice].map(sub), log, ABORT_SHIM);
 	const usesCpp = sources.some(s => !s.guest.endsWith('.c'));
-	const uncaughtShim = usesCpp ? await addShim(objects, clang, flags.compile[SLICE].map(sub), log, UNCAUGHT_SHIM) : undefined;
-	const debugStub = request.mode === 'debug' ? await addShim(objects, clang, flags.compile[SLICE].map(sub), log, DEBUG_STUB) : undefined;
+	const uncaughtShim = usesCpp ? await addShim(objects, clang, slice, flags.compile[slice].map(sub), log, UNCAUGHT_SHIM) : undefined;
+	const debugStub = request.mode === 'debug' ? await addShim(objects, clang, slice, flags.compile[slice].map(sub), log, DEBUG_STUB) : undefined;
 	const readGuest: ReadGuestFile = async guestPath => {
 		const hostPath = fromGuestPath(folder.path, guestPath);
 		if (hostPath === undefined) { return undefined; }
 		try { return new Uint8Array(await vscode.workspace.fs.readFile(folder.with({ path: hostPath }))); } catch { return undefined; }
 	};
 	const toolchainVersion = await toolchain.version();
-	const pchSet = vscode.workspace.getConfiguration('vscwclang').get<boolean>('precompiledHeaders', true) ? flags.pch?.[SLICE] : undefined;
+	const pchSet = vscode.workspace.getConfiguration('vscwclang').get<boolean>('precompiledHeaders', true) ? flags.pch?.[slice] : undefined;
 	const loadPch = async (variant: PchVariant): Promise<boolean> => {
 		try {
 			objects.setFile(variant.file, await getPchBytes(toolchain, toolchainVersion, variant.file));
@@ -161,7 +162,7 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 		const sourceFlags = [...(request.languageFlags?.[driver === 'clang' ? 'c' : 'cpp'] ?? []), ...userFlags.compile, ...ownFlags.get(source.guest)!.compile];
 		const choice = driver === 'clang++' && pchSet ? selectPch(pchSet, sourceFlags, sourceBytes && new TextDecoder().decode(sourceBytes)) : undefined;
 		const pch = choice && 'variant' in choice ? choice.variant : undefined;
-		const compileArgsWith = (usePch: PchVariant | undefined) => [driver, ...flags.compile[SLICE].map(sub), '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics',
+		const compileArgsWith = (usePch: PchVariant | undefined) => [driver, ...flags.compile[slice].map(sub), '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics',
 			...DEFAULT_COMPILE_FLAGS, ...(driver === 'clang' ? DEFAULT_C_COMPILE_FLAGS : []), ...modeFlags, ...(usePch ? ['-include-pch', `/obj/${usePch.file}`] : []), ...sourceFlags, '-c', source.guest];
 		const compileArgs = compileArgsWith(pch);
 		const cacheKey = cacheScope + source.guest;
@@ -201,7 +202,7 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 	const objectIds = compiles.map(c => c?.objectId);
 	objectPaths.push(...compiles.flatMap(c => c?.objectPath ? [c.objectPath] : []));
 	if (exitCode === 0) {
-		const link = flags.link[SLICE].map(sub);
+		const link = flags.link[slice].map(sub);
 		const linkArgs = ['wasm-ld', link[0], ...objectPaths, ...(abortShim ? [abortShim] : []), ...(uncaughtShim ? [uncaughtShim, '--wrap=__main_void'] : []), ...(debugStub ? [debugStub, '--export=__sanitizer_cov_trace_pc_guard'] : []), ...DEFAULT_LINK_FLAGS, ...linkFlags, ...link.slice(1), '-o', output];
 		const linkKey = await hashText([toolchainVersion, request.output.toString(), objectIds.join(','), ...linkArgs].join(NL));
 		const previous = lastLinks.get(request.output.toString());
@@ -286,8 +287,9 @@ const DEBUG_STUB: Shim = { name: 'debugstub', source: debugStubSource, flags: ['
 const shimObjects = new Map<string, Uint8Array<ArrayBuffer>>();
 
 /** Puts the compiled shim in `objects` and returns its guest path; undefined (build goes on) if it cannot be compiled. */
-async function addShim(objects: MemoryGuestFs, clang: (args: string[], extra: ToolExtras) => Promise<ToolResult>, compileFlags: string[], log: vscode.OutputChannel, shim: Shim): Promise<string | undefined> {
-	let object = shimObjects.get(shim.name);
+async function addShim(objects: MemoryGuestFs, clang: (args: string[], extra: ToolExtras) => Promise<ToolResult>, slice: string, compileFlags: string[], log: vscode.OutputChannel, shim: Shim): Promise<string | undefined> {
+	const cacheKey = `${slice}/${shim.name}`;
+	let object = shimObjects.get(cacheKey);
 	if (!object) {
 		const sourceName = `vscwclang-${shim.name}.${shim.cxx ? 'cpp' : 'c'}`;
 		objects.setFile(sourceName, new TextEncoder().encode(shim.source));
@@ -297,7 +299,7 @@ async function addShim(objects: MemoryGuestFs, clang: (args: string[], extra: To
 			return undefined;
 		}
 		object = cc.stdout;
-		shimObjects.set(shim.name, object);
+		shimObjects.set(cacheKey, object);
 	}
 	objects.setFile(`vscwclang-${shim.name}.o`, object);
 	return `/obj/vscwclang-${shim.name}.o`;

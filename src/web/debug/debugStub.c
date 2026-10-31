@@ -10,7 +10,12 @@
  * The host only writes commands while the program is stopped here, so the two uses of stdin never overlap, except
  * for program input written just before a stop: such a line (one not starting with "vscw ") is sent back as an
  * `input` frame instead of being treated as a command.
+ *
+ * Threads: the shadow stack and step state are per thread (`_Thread_local`; each thread has its own `__stack_pointer`),
+ * and one thread at a time holds `stop_lock` while it is stopped. The others keep running, and a thread that hits a
+ * breakpoint meanwhile waits for the lock and stops after the first resumes. Every stop frame names its thread.
  */
+#include <pthread.h>
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
@@ -21,14 +26,17 @@
 
 typedef struct { uint32_t *guard; uintptr_t sp; } Frame;
 
-static Frame frames[MAX_FRAMES];
-static uint32_t depth;
+static _Thread_local Frame frames[MAX_FRAMES];
+static _Thread_local uint32_t depth;
 static uint32_t *armed[MAX_ARMED];
 static uint32_t armed_count;
 static int detached; /* host closed stdin: never stop again */
 enum { STEP_NONE, STEP_INTO, STEP_OVER, STEP_OUT };
-static int step_mode;
-static uintptr_t step_sp;
+static _Thread_local int step_mode;
+static _Thread_local uintptr_t step_sp;
+static pthread_mutex_t stop_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t next_thread_id = 1;
+static _Thread_local uint32_t thread_id; /* 1 for the thread that runs the startup hook, then in order of first stop */
 
 static inline uintptr_t get_sp(void) {
   uintptr_t sp;
@@ -157,16 +165,20 @@ static void command_loop(void) {
 }
 
 __attribute__((noinline)) static void stop(const char *reason) {
-  out_begin("stop"); out_str(reason); out_str(" "); out_num(depth);
+  pthread_mutex_lock(&stop_lock);
+  if (!thread_id) thread_id = __atomic_fetch_add(&next_thread_id, 1, __ATOMIC_SEQ_CST);
+  out_begin("stop"); out_str(reason); out_str(" "); out_num(thread_id); out_str(" "); out_num(depth);
   for (uint32_t i = depth; i-- > 0;) { out_str(" "); out_num((uintptr_t)frames[i].guard); out_str(" "); out_num(frames[i].sp); }
   out_end();
   command_loop();
+  pthread_mutex_unlock(&stop_lock);
 }
 
 void __sanitizer_cov_trace_pc_guard_init(uint32_t *start, uint32_t *end) {
   static int announced;
   if (announced) return;
   announced = 1;
+  thread_id = __atomic_fetch_add(&next_thread_id, 1, __ATOMIC_SEQ_CST);
   out_begin("hello"); out_num((uintptr_t)start); out_str(" "); out_num((uintptr_t)end); out_end();
   command_loop();
 }

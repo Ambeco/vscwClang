@@ -104,9 +104,15 @@ suite('planFromTask', () => {
 	});
 
 	test('unsandboxable flags are dropped with a note', () => {
-		const plan = planFromTask({ command: 'g++', args: ['-pthread', '-static', '-lstdc++', '-m64', '-mwindows', 'x.cpp'] }, ctx);
+		const plan = planFromTask({ command: 'g++', args: ['-static', '-lstdc++', '-m64', '-mwindows', 'x.cpp'] }, ctx);
 		assert.deepStrictEqual(plan.flags, []);
-		assert.strictEqual(plan.notes.length, 5);
+		assert.strictEqual(plan.notes.length, 4);
+	});
+
+	test('-pthread and -lpthread are kept: they select the threaded slice', () => {
+		const plan = planFromTask({ command: 'g++', args: ['-pthread', '-lpthread', 'x.cpp'] }, ctx);
+		assert.deepStrictEqual(plan.flags, ['-pthread', '-lpthread']);
+		assert.deepStrictEqual(plan.notes, []);
 	});
 
 	test('forbidden flags are rejected with did-you-mean', () => {

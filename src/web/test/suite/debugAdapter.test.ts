@@ -90,6 +90,50 @@ suite('vscwClang debug adapter (in browser)', function () {
 		assert.strictEqual(client.events('output').filter(m => m.body.category === 'stdout').map(m => m.body.output).join(''), 'r=11\n');
 	});
 
+	test('debugs a multithreaded program: a breakpoint in a thread function stops on that thread', async () => {
+		const nl = String.fromCharCode(10);
+		await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, 'threaded.cpp'), new TextEncoder().encode([
+			'#include <cstdio>', '#include <thread>',
+			'static int result = 0;',
+			'static void worker(int base) {',
+			'  int doubled = base * 2;',
+			'  if (doubled > 100)', // makes line 8 start a block, so it has a guard even without per-line guards
+			'    doubled = 0;',
+			'  result = doubled + 1;',
+			'}',
+			'int main() {',
+			'  std::thread t(worker, 20);',
+			'  t.join();',
+			'  std::printf("result=%d\\n", result);',
+			'  return result == 41 ? 0 : 1;',
+			'}', ''].join(nl)));
+		const client = newClient('threaded.cpp');
+		await client.ok('initialize', { adapterID: 'vscwclang' });
+		await client.ok('launch', { console: 'internalConsole' });
+		await client.event('initialized');
+		const path = vscode.Uri.joinPath(dir, 'threaded.cpp').toString();
+		const set = await client.ok('setBreakpoints', { source: { path }, breakpoints: [{ line: 8 }] });
+		assert.strictEqual(set.breakpoints[0].verified, true, JSON.stringify(set));
+		await client.ok('configurationDone');
+
+		const stopped = (await client.event('stopped')).body;
+		assert.strictEqual(stopped.reason, 'breakpoint');
+		assert.notStrictEqual(stopped.threadId, 1, 'the worker runs on its own thread');
+		assert.strictEqual(stopped.allThreadsStopped, false);
+		const threads = (await client.ok('threads')).threads as { id: number }[];
+		assert.ok(threads.some(t => t.id === stopped.threadId) && threads.some(t => t.id === 1), JSON.stringify(threads));
+		const frames = (await client.ok('stackTrace', { threadId: stopped.threadId })).stackFrames as { name: string; line: number }[];
+		assert.match(frames[0].name, /worker/, JSON.stringify(frames));
+		assert.strictEqual(frames[0].line, 8);
+		const doubled = (await client.ok('evaluate', { expression: 'doubled', frameId: 1, context: 'hover' })).result as string;
+		assert.match(doubled, /\(int\) doubled = 40/);
+
+		await client.ok('continue', { threadId: stopped.threadId });
+		assert.strictEqual((await client.event('exited')).body.exitCode, 0);
+		await client.event('terminated');
+		assert.strictEqual(client.events('output').filter(m => m.body.category === 'stdout').map(m => m.body.output).join(''), 'result=41\n');
+	});
+
 	const INPUT_SOURCE = [
 		'#include <iostream>',
 		'static int twice(int v) {',

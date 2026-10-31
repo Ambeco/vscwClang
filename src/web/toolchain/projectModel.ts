@@ -63,8 +63,6 @@ const LAUNCH_TYPES = new Set(['cppdbg', 'cppvsdbg', 'lldb', 'codelldb', 'vscwcla
 const SOURCE_EXTENSION = /\.(c|cc|cpp|cxx|c\+\+|cp|C)$/;
 const COLOR_FLAGS = /^(-fdiagnostics-color(=.*)?|-fcolor-diagnostics|-fansi-escape-codes|-fno-color-diagnostics|-fno-diagnostics-color)$/;
 const DROPPED_FLAGS: Record<string, string> = {
-	'-pthread': 'programs are single-threaded',
-	'-lpthread': 'programs are single-threaded',
 	'-static': 'every program is linked statically already',
 	'-static-libgcc': 'every program is linked statically already',
 	'-static-libstdc++': 'every program is linked statically already',

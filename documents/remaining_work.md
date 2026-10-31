@@ -7,7 +7,7 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 
 **Aspirational stretch goal (not scheduled, probably never reached):** compile clang itself, entirely inside this extension in VS Code for Web, with nothing installed on the desktop — and ideally run clang's own test suite there too. Unlikely to ever land, but it's a useful compass: a feature that moves toward self-hosting a real compiler (bigger builds, more complete flag/stdlib support, faster/more robust toolchain execution) is probably worth prioritizing; a feature that only serves small toy programs is less so.
 
-**Near-term plan (decided 2026-10-27, replaces the 2026-10-21 one):** in order: (1) main critical user journeys feature complete; (2) pick a large, pure, portable C++ project from GitHub (many translation units, builds without extra dependencies) as the profiling workload; (3) profile and fix the low-hanging fruit, with incremental build+test speed first (see the Priority item in Milestone 1); (4) secondary journeys feature complete; (5) Make support (pseudo, i.e. interpret the common subset); (6) Python support (partial). Multithreading (`clang-threads.wasm`, `std::thread` in user programs) is not enabled yet and changes the numbers: re-profile after it lands, and expect it to affect concurrent compiles, clangd and the threaded toolchain more than a single-file edit.
+**Near-term plan (decided 2026-10-27, replaces the 2026-10-21 one):** in order: (1) main critical user journeys feature complete; (2) pick a large, pure, portable C++ project from GitHub (many translation units, builds without extra dependencies) as the profiling workload; (3) profile and fix the low-hanging fruit, with incremental build+test speed first (see the Priority item in Milestone 1); (4) secondary journeys feature complete; (5) Make support (pseudo, i.e. interpret the common subset); (6) Python support (partial). Multithreading is on (threaded tools, clangd and user programs) and changes the numbers: re-profile, and expect it to affect concurrent compiles, clangd and the threaded toolchain more than a single-file edit.
 
 **Main critical user journeys (decided 2026-10-27), with the known gaps:**
 - Debug: view local variables, step through statements, conditional breakpoints. Gaps today: Pause and breakpoint changes while running need the custom runner (Milestone 6).
@@ -43,8 +43,8 @@ Open design questions, none decided. Analyze each answer against the extension h
 ## Milestone 1: compile in the browser
 - **Priority: incremental build+test speed (decided 2026-10-27); cold full-build speed does not matter.** Order: (1) the object cache (persistent via the Cache API; done, see the follow-ups below); (2) the prebuilt libc++ PCH (done in code, unpublished; see Distribution work); (3) measure link time with many objects (`wasm-ld` has no `--incremental`) and Run startup; (4) concurrent compiles last, since an incremental build usually has one changed file.
 - Build cache follow-ups: verify on real vscode.dev that Cache API entries survive a tab reload and a browser restart, and the real quota (test-web showed ~3.2 GB; `navigator.storage.persist()` is not requested); a size/age readout and low-storage warning; `compile_commands.json` builds with many entries are unmeasured; a negative cache for sources that fail to compile (their errors are recomputed each build).
-- Own Worker-hosted `clang.wasm` driver (spawn hook for `cc1`/`wasm-ld`, `$COLUMNS`) and concurrent per-file compiles; `toolchain.build()` compiles sequentially today.
-- User programs on the threaded slice (`wasm32-wasip1-threads`, `-pthread`, `std::thread`) are not selectable yet: `build()` still compiles for `wasm32-wasip1` (the threaded *tools* are used when the toolchain is `mtdist`). `runProgram` already passes the program's shared memory, so a hand-linked threaded program runs. Debugging a threaded program is unsupported (the stub assumes one thread).
+- Spawn hook for `cc1`/`wasm-ld` (compiles run `-fintegrated-cc1` today) and `$COLUMNS`.
+- Threaded user programs: measure the cost of the threads slice on small programs (startup, memory reserve) now that it is the default; the `wasi_threaded_io` shim sends file I/O to one thread, so heavy file I/O from threads is slow and unmeasured.
 - Cancel: terminate the Worker, then call `RunInterruptHandlers()`/`CleanupOnSignal()` from JS to remove temp files.
 - Source selection: the Build command links every matching file into one program; `vscwclang.sourceGlobs`/`files.exclude` (defaults skip IDE scratch and build dirs) are the only control. Consider a project-file or per-target selection (a `tasks.json` schema for named targets) and a prompt when several files define `main`.
 - Build still lets wasm-ld write the final `.wasm` directly (workspace or `/out` mount); consider routing it through memory (check `wasm-ld -o -`) and writing it from the host. Objects live in memory only (a persistent on-disk object cache is the Persistent build cache item above; other stores to evaluate: OPFS, IndexedDB, CacheStorage; localStorage is too small).
@@ -54,7 +54,7 @@ Open design questions, none decided. Analyze each answer against the extension h
 ## Milestone 2: tasks, build UX, run
 - Tasks: provider and `$vscwclang` matcher are covered by a test-web test (`vscode.tasks.executeTask`), but not yet seen in the Tasks UI/shortcuts or on real vscode.dev. The matcher owner and the build command's diagnostic collection are both `vscwclang`, so one may overwrite the other's Problems; rename the matcher owner if that bites. Task sources are all workspace files (no `tasks.json` schema for per-target sources yet); no default-build selection.
 - Run: a run-in-`debug`-mode choice and re-run reuse of the terminal are not done. The run command always rebuilds first.
-- Settings: toolchain version/URL, default `-std`, extra flags, threads on/off.
+- Settings: toolchain version/URL, default `-std`, extra flags.
 - Optional: run in a separate browser tab for OS-level sandboxing (open questions in the llvm-project fork's `remaining_work.md`).
 
 ## Run environment and artifacts (see design.md "Run environment", "Build artifacts", "Scope")
@@ -111,7 +111,7 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Remaining gaps:
 
 ## Milestone 6: full DAP surface
 - Breakpoints: data breakpoints and exception breakpoints (`setExceptionBreakpoints` is accepted and ignored).
-- Pause; threads (only `main` today); scopes that list locals and expandable variables (see Milestone 5); wasm traps map to a stopped state with a stack (custom runner).
+- Pause; all-stop for threads (today a stop halts only the thread that hit it, the rest run on; an all-stop needs the custom runner); scopes that list locals and expandable variables (see Milestone 5); wasm traps map to a stopped state with a stack (custom runner).
 - Debug console input, `launch` env/cwd.
 
 ## Milestone 7: release
@@ -119,7 +119,7 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Remaining gaps:
 
 ## Known risks / open questions
 - Compile speed and memory: 2 GiB max-memory per `clang.wasm` instance, times N concurrent files, in one browser tab.
-- Nested Worker limits (threads/spawn) inside the web extension host: verified in the browser test suite for threaded clang and lld (thread Workers are created by the extension host); user-program threads are not exercised in the browser yet.
+- Nested Worker limits (threads/spawn) inside the web extension host: verified in the browser test suite for threaded clang and lld (thread Workers are created by the extension host); user-program threads run in the browser suite (`build.test.ts`, `debugAdapter.test.ts`).
 - Debugging is `-O0`-only by design; DWARF frame-base for optimized code is unverified.
 
 ## Distribution work (new)
@@ -140,5 +140,5 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Remaining gaps:
 
 ## Found by the compatibility survey (2026-10-27), details in `documents/compat_survey.md`
 - `compile_commands.json` target picker: a CMake test target (fmt `format-test`) selects only its own sources, not the library/gtest targets it links, so it cannot link. Deferred (decided 2026-10-27): the Make and Python secondary journeys are expected to cover building such projects; revisit only if they do not.
-- `std::thread`/`std::mutex` are absent until the threads milestone; they block Catch2 `Sleep` tests and fmt `std.h` users (compile-test, std-test, xchar-test, format-test).
+- Re-run the survey now that `std::thread`/`std::mutex` exist: Catch2 `Sleep` tests and fmt `std.h` users (compile-test, std-test, xchar-test, format-test) were blocked by their absence.
 - Re-run `scripts/compat-survey.mjs` after the object cache/PCH/threads land to compare with the baselines; investigate fmt `chrono-test` (weekday, year_month_day fail) and the Eigen `PART_ALL` clang OOM (2 GiB cap).

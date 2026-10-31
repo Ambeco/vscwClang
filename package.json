@@ -207,6 +207,12 @@
           "minimum": 16,
           "markdownDescription": "Most megabytes of compiled objects to keep; the least recently used are deleted first. `vscwClang: Clear build cache` removes them all."
         },
+        "vscwclang.threads": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Build programs for the threaded standard library (`wasm32-wasip1-threads`), so `std::thread`, `std::mutex`, `std::async` and `pthread` work. Programs use shared memory and a larger reserved address space. `-pthread` or `-lpthread` in your flags selects it even when this is off. Turn off for a plain single-threaded build. Needs a window reload for IntelliSense.",
+          "scope": "resource"
+        },
         "vscwclang.precompiledHeaders": {
           "type": "boolean",
           "default": true,

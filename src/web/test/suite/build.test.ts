@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { createWorkerProcess } from '../../host/workerProcess';
+import { sharedMemoryLimits } from '../../host/sharedMemory';
 import { build } from '../../toolchain/toolchain';
 import { chooseArtifactDir } from '../../buildWorkspace';
 import { runProgram } from '../../runProgram';
@@ -23,8 +24,8 @@ suite('vscwClang build (in browser)', function () {
 	const uri = (name: string) => vscode.Uri.joinPath(dir, name);
 
 	async function runWasm(output: vscode.Uri): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-		const module = await WebAssembly.compile(await vscode.workspace.fs.readFile(output) as Uint8Array<ArrayBuffer>);
-		const process = await createWorkerProcess(context, { name: 'prog', module, args: [], env: {}, mounts: [] });
+		const bytes = await vscode.workspace.fs.readFile(output) as Uint8Array<ArrayBuffer>;
+		const process = await createWorkerProcess(context, { name: 'prog', module: await WebAssembly.compile(bytes), args: [], env: {}, mounts: [], memoryLimits: sharedMemoryLimits(bytes) });
 		let stdout = '', stderr = '';
 		const decoder = new TextDecoder();
 		process.stdout?.onData(d => { stdout += decoder.decode(d, { stream: true }); });
@@ -241,6 +242,38 @@ suite('vscwClang build (in browser)', function () {
 		assert.match(ran.text, /exited with code 0/);
 	});
 	}
+
+	const THREAD_SOURCE = ['#include <cstdio>', '#include <mutex>', '#include <thread>', '#include <vector>',
+		'int main() {', '  std::mutex m; int total = 0; std::vector<std::thread> threads;',
+		'  for (int t = 0; t < 4; t++) threads.emplace_back([&] { for (int i = 0; i < 1000; i++) { std::lock_guard<std::mutex> g(m); total++; } });',
+		'  for (auto& t : threads) t.join();', '  std::printf("total=%d", total); return total == 4000 ? 0 : 1; }', ''].join(String.fromCharCode(10));
+
+	test('std::thread and std::mutex build and run by default (threaded slice), also under -pthread', async () => {
+		await write('threads.cpp', THREAD_SOURCE);
+		for (const flags of [[], ['-pthread']]) {
+			const built = await build({ sources: [uri('threads.cpp')], output: uri('threads.wasm'), flags, mode: 'release' }, log, context);
+			assert.strictEqual(built.exitCode, 0, built.diagnostics);
+			const ran = await runWasm(uri('threads.wasm'));
+			assert.deepStrictEqual([ran.exitCode, ran.stdout], [0, 'total=4000'], `${flags.join(' ')} ${ran.stderr}`);
+		}
+	});
+
+	test('with vscwclang.threads off the program is single-threaded; -pthread still selects threads', async () => {
+		const config = vscode.workspace.getConfiguration('vscwclang');
+		await config.update('threads', false, vscode.ConfigurationTarget.Global);
+		try {
+			await write('plain.cpp', ['#include <cstdio>', 'int main() { std::puts("plain"); return 0; }', ''].join(String.fromCharCode(10)));
+			const single = await build({ sources: [uri('plain.cpp')], output: uri('plain.wasm'), flags: [], mode: 'release' }, log, context);
+			assert.strictEqual(single.exitCode, 0, single.diagnostics);
+			assert.strictEqual(sharedMemoryLimits(await vscode.workspace.fs.readFile(uri('plain.wasm'))), undefined, 'owns its memory');
+			const threaded = await build({ sources: [uri('plain.cpp')], output: uri('plain-t.wasm'), flags: ['-pthread'], mode: 'release' }, log, context);
+			assert.strictEqual(threaded.exitCode, 0, threaded.diagnostics);
+			assert.ok(sharedMemoryLimits(await vscode.workspace.fs.readFile(uri('plain-t.wasm'))), 'imports shared memory');
+			assert.strictEqual((await runWasm(uri('plain.wasm'))).stdout, 'plain\n');
+		} finally {
+			await config.update('threads', undefined, vscode.ConfigurationTarget.Global);
+		}
+	});
 
 	test('a failed assert exits with 134 instead of trapping', async () => {
 		const nl = String.fromCharCode(10);

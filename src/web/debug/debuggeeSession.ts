@@ -26,7 +26,7 @@ export interface DebuggeeFrame {
 }
 
 export type DebuggeeEvent =
-	| { kind: 'stopped'; reason: StopReason; frames: DebuggeeFrame[] }
+	| { kind: 'stopped'; reason: StopReason; /** 1 is the main thread; a stopped thread's frames are the only ones known. */ threadId: number; frames: DebuggeeFrame[] }
 	| { kind: 'exited'; exitCode: number }
 	| { kind: 'output'; stream: 'stdout' | 'stderr'; text: string }
 	| { kind: 'error'; message: string };

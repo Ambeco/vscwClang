@@ -7,6 +7,7 @@ import { ProgramTerminal } from '../host/programTerminal';
 import { workspacePathMapper } from './pathMapper';
 import { createGuestWorker } from '../host/workerHost';
 import { WorkerThreads } from '../host/workerThreads';
+import { sharedMemoryLimits } from '../host/sharedMemory';
 import { ReactorHost } from './reactorHost';
 import { StubDebuggee } from './stubDebuggee';
 import { scanProgram } from './wasmScan';
@@ -63,7 +64,7 @@ export class VscwClangDebugAdapter implements vscode.DebugAdapter {
 		reactor.createTarget(program);
 
 		const environment = await workerProgramEnvironment(this.context);
-		const process = await createWorkerProcess(this.context, { name, module, args: plan.args, ...environment });
+		const process = await createWorkerProcess(this.context, { name, module, args: plan.args, ...environment, memoryLimits: sharedMemoryLimits(program) });
 		let debuggee: StubDebuggee | undefined;
 		process.stdout?.onData(chunk => debuggee?.feedStdout(chunk));
 		process.stderr?.onData(chunk => debuggee?.feedStderr(chunk));

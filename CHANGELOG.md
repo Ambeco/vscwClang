@@ -8,3 +8,4 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 - Initial release
 - C++ sources compile against prebuilt standard-library headers when the flags allow it (`vscwclang.precompiledHeaders`)
+- Multithreaded programs: `std::thread`, `std::mutex`, `pthread` build and run (setting `vscwclang.threads`), and a breakpoint stops the thread that hits it

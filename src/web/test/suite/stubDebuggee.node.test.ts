@@ -121,7 +121,7 @@ suite('StubDebuggee program input (scripted stub)', () => {
 		await d.resume('continue'); // runs
 		await d.writeInput(bytes('a\n'));
 		await d.writeInput(bytes('b\n'));
-		d.feedStderr(frame('stop breakpoint 0'));
+		d.feedStderr(frame('stop breakpoint 1 0'));
 		await stopped();
 		await d.writeInput(bytes('c\n')); // typed after the stop frame, before the handed-back lines arrive
 		sent.length = 0;

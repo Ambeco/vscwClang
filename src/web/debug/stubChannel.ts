@@ -27,7 +27,7 @@ export interface StubFrame { guard: number; sp: number }
 
 export type StubMessage =
 	| { kind: 'hello'; guardStart: number; guardEnd: number }
-	| { kind: 'stop'; reason: string; frames: StubFrame[] }
+	| { kind: 'stop'; reason: string; /** 1 is the main thread. */ threadId: number; frames: StubFrame[] }
 	| { kind: 'mem'; addr: number; data: Uint8Array }
 	| { kind: 'memerr'; addr: number; len: number }
 	| { kind: 'input'; data: Uint8Array }
@@ -46,10 +46,10 @@ export function parseMessage(text: string): StubMessage {
 	switch (kind) {
 		case 'hello': { const [guardStart, guardEnd] = nums(rest); return { kind, guardStart, guardEnd }; }
 		case 'stop': {
-			const [reason, depth, ...pairs] = rest;
+			const [reason, threadId, depth, ...pairs] = rest;
 			const frames: StubFrame[] = [];
 			for (let i = 0; i < Number(depth); i++) { frames.push({ guard: Number(pairs[2 * i]), sp: Number(pairs[2 * i + 1]) }); }
-			return { kind, reason, frames };
+			return { kind, reason, threadId: Number(threadId), frames };
 		}
 		case 'mem': {
 			return { kind, addr: Number(rest[0]), data: fromHex(rest[1] ?? '') };
@@ -132,7 +132,7 @@ export class FrameDemux {
 	}
 }
 
-export interface StopEvent { reason: string; frames: StubFrame[] }
+export interface StopEvent { reason: string; threadId: number; frames: StubFrame[] }
 
 /**
  * One debug session over a transport: feed stderr bytes to `onStderr`, and the stub's commands go out through `send`.
@@ -178,8 +178,9 @@ export class StubSession {
 	async nextStop(timeoutMs = 30_000): Promise<StopEvent> {
 		const m = await this.take(x => x.kind === 'hello' || x.kind === 'stop', 'a stop', timeoutMs);
 		this.memory.clear();
-		if (m.kind === 'hello') { this.guardRange = { start: m.guardStart, end: m.guardEnd }; return { reason: 'start', frames: [] }; }
-		return { reason: (m as { reason: string }).reason, frames: (m as { frames: StubFrame[] }).frames };
+		if (m.kind === 'hello') { this.guardRange = { start: m.guardStart, end: m.guardEnd }; return { reason: 'start', threadId: 1, frames: [] }; }
+		const stop = m as Extract<StubMessage, { kind: 'stop' }>;
+		return { reason: stop.reason, threadId: stop.threadId, frames: stop.frames };
 	}
 
 	async setBreakpoints(guardAddrs: number[]): Promise<void> { await this.send(stubCommands.breakpoints(guardAddrs)); }

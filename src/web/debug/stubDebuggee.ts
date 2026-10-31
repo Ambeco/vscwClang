@@ -125,7 +125,7 @@ export class StubDebuggee implements DebuggeeSession {
 				if (!site) { throw new Error(`the debug stub reported guard ${f.guard}, which is not in the program's coverage table; did the program and debug stub drift apart?`); }
 				return { funcIndex: site.funcIndex, pc: site.pc, sp: f.sp };
 			});
-			this.emit({ kind: 'stopped', reason: stop.reason as 'start' | 'breakpoint' | 'step' | 'pause', frames });
+			this.emit({ kind: 'stopped', reason: stop.reason as 'start' | 'breakpoint' | 'step' | 'pause', threadId: stop.threadId, frames });
 		}, e => {
 			this.waiting = false;
 			if (!this.done) { this.emit({ kind: 'error', message: e instanceof Error ? e.message : String(e) }); }
