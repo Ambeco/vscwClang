@@ -4,6 +4,6 @@
  * `node scripts/make-toolchain-dist.mjs <artifacts> <outDir> --tag <tag> --pin`; empty until a toolchain is published.
  */
 export const TOOLCHAIN_PIN = {
-	baseUrl: 'https://cdn.jsdelivr.net/gh/Ambeco/llvm-artifacts@v24.0.8/mtdist',
-	manifestSha256: '56b5574cd310dbd8303690919e3680c6786877222ee67bc44016a6490d4f5f08',
+	baseUrl: 'https://cdn.jsdelivr.net/gh/Ambeco/llvm-artifacts@v24.0.9/mtdist',
+	manifestSha256: '58ec5a3262abc99f5d239995a14591b1343847398a28a1fd477d24ece34f42c8',
 };
