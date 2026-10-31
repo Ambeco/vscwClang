@@ -8,6 +8,7 @@
 # Compiler experiments
 
 - Fast loop: run `llvm-artifacts/bin/clang.wasm` / `lld.wasm` under Node `node:wasi` with preopens `/sysroot`, `/resource` (`resource/lib/clang/24`) and the project dir as `/workspace`. In Git Bash set `MSYS_NO_PATHCONV=1`, or `/workspace/...` arguments are rewritten to Windows paths.
+- After editing `src/web/debug/debugStub.c`, rebuild the stub fixtures: `MSYS_NO_PATHCONV=1 node scripts/build-debug-fixtures.mjs --release ../../llvm-project/release/<newest tag>`. `llvm-project` is a sibling of the outer working folder (`Github\llvm-project`), with `build` and `build-single-threaded` holding the wasm tools.
 - Never time clang with `-ftime-report` in the browser; it is about 10x slower there (clock reads). Use the per-file `compiled ... in N ms` lines in the `vscwclang` output channel.
 
 # Gotchas
