@@ -2,7 +2,7 @@
 // (clang-threads.wasm / lld-threads.wasm, which the dist ships as clang.wasm / lld.wasm), the wasm32-wasip1-threads
 // slice, -fintegrated-cc1, the default flags and, for C++, the prebuilt libc++ PCH. Projects come from compat-projects.mjs.
 //   node scripts/perf-bench.mjs <projectsDir> <name>[,<name>...] [--only regex] [--repeat 3] [--pch both|on|off]
-//        [--link] [--debug] [--out results.json]
+//        [--link] [--debug] [--j N] [--flags "-x -y"] [--out results.json]
 // --debug compiles like Debug mode (-O0 -g, trace-pc-guard coverage), links with the debug stub, and times the debugger's
 // wasm scan and .debug_line parse on the linked program.
 // Per unit it records the median/min/max of --repeat compiles (PCH on and off for C++), then optionally links the
@@ -36,11 +36,13 @@ const repeat = Number(opt('--repeat', '3'));
 const pchMode = opt('--pch', 'both');
 const doLink = flag('--link');
 const debug = flag('--debug');
+const jobs = Number(opt('--j', '1'));
+const extraFlags = (opt('--flags', '') ?? '').split(' ').filter(Boolean);
 const [projectsDir, names] = argv;
 if (!projectsDir || !names) { throw new Error('usage: node scripts/perf-bench.mjs <projectsDir> <name>[,<name>...] [--only regex] [--repeat 3] [--pch both|on|off] [--link] [--out file]'); }
 
 const bytesOf = {}, moduleOf = {};
-const load = async name => { bytesOf[name] ??= readFileSync(join(artifacts, 'bin', name)); return moduleOf[name] ??= await WebAssembly.compile(bytesOf[name]); };
+const load = async name => { bytesOf[name] ??= readFileSync(name === 'clang-threads.wasm' && process.env.PERF_CLANG_WASM ? process.env.PERF_CLANG_WASM : join(artifacts, 'bin', name)); return moduleOf[name] ??= await WebAssembly.compile(bytesOf[name]); };
 const clang = async (args, preopens) => runWasi(await load('clang-threads.wasm'), [args[0], '-fintegrated-cc1', ...args.slice(1)], preopens, bytesOf['clang-threads.wasm']);
 const lld = async (args, preopens) => runWasi(await load('lld-threads.wasm'), args, preopens, bytesOf['lld-threads.wasm']);
 
@@ -76,7 +78,9 @@ async function benchProject(name, project) {
 	console.log(`== ${name}: ${units.length} units, ${repeat} repeats, slice ${SLICE}, toolchain ${artifacts}`);
 	const report = { name, units: [], link: undefined };
 	const objects = [];
-	for (const [i, u] of units.entries()) {
+	let nextUnit = 0;
+	const wallStart = performance.now();
+	const compileOne = async (i, u) => {
 		const isC = u.file.endsWith('.c');
 		const driver = isC ? 'clang' : 'clang++';
 		const variants = isC ? [false] : pchMode === 'both' ? [true, false] : [pchMode === 'on'];
@@ -85,7 +89,7 @@ async function benchProject(name, project) {
 			const times = [];
 			for (let r = 0; r < repeat; r++) {
 				const args = [driver, ...COMPILE, '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics', ...DEFAULT_COMPILE_FLAGS, ...(isC ? DEFAULT_C_COMPILE_FLAGS : []), ...(debug ? DEBUG_FLAGS : []),
-					...(usePch ? ['-include-pch', `/pch/${pch.file}`, '-fvalidate-ast-input-files-content'] : []), ...project.flags, ...(u.flags ?? []), '-c', u.abs ?? `/workspace/${u.file}`, '-o', '-'];
+					...(usePch ? ['-include-pch', `/pch/${pch.file}`, '-fvalidate-ast-input-files-content'] : []), ...project.flags, ...extraFlags, ...(u.flags ?? []), '-c', u.abs ?? `/workspace/${u.file}`, '-o', '-'];
 				const res = await clang(args, preopens);
 				if (res.code !== 0) { rec.ok = false; rec.error = firstError(res.stderr); break; }
 				if (r === 0 && usePch === variants[variants.length - 1]) { writeFileSync(join(objDir, `${i}.o`), res.stdout); objects[i] = `/obj/${i}.o`; }
@@ -96,7 +100,10 @@ async function benchProject(name, project) {
 		}
 		report.units.push(rec);
 		console.log(`  ${rec.ok ? 'ok  ' : 'FAIL'} ${u.file}  ${rec.pchMs ? `pch ${rec.pchMs.median} ms (${rec.pchMs.min}-${rec.pchMs.max})  ` : ''}${rec.noPchMs ? `no-pch ${rec.noPchMs.median} ms (${rec.noPchMs.min}-${rec.noPchMs.max})` : ''}${rec.error ? '  -> ' + rec.error : ''}`);
-	}
+	};
+	await Promise.all(Array.from({ length: jobs }, async () => { while (nextUnit < units.length) { const i = nextUnit++; await compileOne(i, units[i]); } }));
+	report.compileWallMs = Math.round(performance.now() - wallStart);
+	console.log(`  compile wall ${report.compileWallMs} ms at --j ${jobs}`);
 	if (doLink) {
 		const selected = objects.filter(Boolean);
 		const times = [];

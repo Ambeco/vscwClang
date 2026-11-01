@@ -45,3 +45,11 @@ Single-threaded clangd.wasm from the fork (`build-single-threaded`), `-backgroun
 - The shipped threaded `clangd.wasm` (dist `clangd.zip`) never exits `--check` under `runWasi` (even for a 100-line C file and with `-background-index=false`); unexplained, so these figures use the single-threaded build.
 
 Not measured yet: background-index time and memory on a large project (needs a live vscode.dev pass or an LSP-driven harness with the threaded build), program run startup, and the debug launch-to-breakpoint and step latency in the browser.
+
+## Compile-time experiments (2026-10-31)
+Per-file compile is single-threaded inside clang and split roughly half Sema/parse (`-fsyntax-only` takes 6.4 of 12.4 s on fmt `core-test.cc`) and half IR/machine code at `-O0`.
+- Parallel units (Catch2 library, 108 files, PCH): 113 s at `--j 1`, 40 s at 4 (2.8x), 33 s at 8 (3.4x). The extension's cap of 4 already gets most of it; raising it buys ~18% on 8+ core machines at several hundred MB per compile.
+- A project-level PCH chained on the libc++ one (gmock headers, 7 MB, built in 3 s) saves only ~15% on `core-test.cc` (12.7 to 10.8 s): the time is the test bodies' template instantiation, not header parsing. Not worth an automatic project PCH.
+- No effect: `-w`, `-mllvm -fast-isel`. `-fno-builtin` is rejected with the PCH (it records the setting).
+- Process floor: ~140 ms per tool invocation (instantiate plus run of an empty C file), which is a third of Lua's 34 small files.
+- Toolchain build: `clang.wasm` is built `MinSizeRel` (`-Os`, `build.bat`). `wasm-opt -O3` (binaryen 132, 30 min for the 66 MB clang) shrinks it to 52 MB; `--all-features` output is not loadable by Node 24 (`unknown import kind 0x7e`), so use an explicit feature list.
