@@ -121,6 +121,7 @@ async function benchProject(name, project) {
 			await build({ stdin: { contents: "export { parseModule, scanProgram } from './src/web/debug/wasmScan.ts'; export { parseLineTable } from './src/web/debug/dwarfLines.ts';", resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', outfile: bundle, logLevel: 'error' });
 			const { parseModule, scanProgram, parseLineTable } = await import(pathToFileURL(bundle).href);
 			const bytes = new Uint8Array(readFileSync(join(outDir, 'a.wasm')));
+			if (process.env.PERF_BENCH_KEEP_WASM) { copyFileSync(join(outDir, 'a.wasm'), process.env.PERF_BENCH_KEEP_WASM); }
 			const t = f => { const t0 = performance.now(); const v = f(); return [performance.now() - t0, v]; };
 			const med = f => { const ts = []; let v; for (let k = 0; k < repeat; k++) { const [ms, x] = t(f); ts.push(ms); v = x; } return [stats(ts), v]; };
 			const [modMs, info] = med(() => parseModule(bytes));

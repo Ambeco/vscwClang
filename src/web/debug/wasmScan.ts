@@ -189,6 +189,9 @@ export function scanProgram(bytes: Uint8Array, hookImport = HOOK_IMPORT): ScanRe
 		const nLocalGroups = r.u32();
 		for (let i = 0; i < nLocalGroups; i++) { r.skipLeb(); r.skip(1); }
 		const recent: { op: number; imm: number | undefined }[] = [];
+		// A guard address clang kept in locals (`i32.const A; local.set X; i32.const B; local.set Y; local.get X; local.get Y; i32.add; local.set L; local.get L; call hook`) resolves once the body is read.
+		const localDefs = new Map<number, LocalDef>();
+		const viaLocal: { local: number; at: number; recent: string }[] = [];
 		let prologueLocal: number | undefined;
 		let sincePrologue = 0;
 		while (r.pos < body.end) {
@@ -201,11 +204,22 @@ export function scanProgram(bytes: Uint8Array, hookImport = HOOK_IMPORT): ScanRe
 			else { imm = readImmediates(r, op); }
 			if (op === 0x10 && imm === hookIndex) {
 				const [p1, p2, p3] = [last(recent, 1), last(recent, 2), last(recent, 3)];
-				let guard: number;
+				let guard: number | undefined;
 				if (p1?.op === 0x41) { guard = p1.imm!; }
 				else if (p1?.op === 0x6a && p2?.op === 0x41 && p3?.op === 0x41) { guard = p3.imm! + p2.imm!; }
+				else if (p1?.op === 0x20 && p1.imm !== undefined) { viaLocal.push({ local: p1.imm, at, recent: recent.map(x => '0x' + x.op.toString(16)).join(', ') }); }
 				else { throw new Error(`hook call at wasm offset 0x${at.toString(16)} has an unrecognized guard-address sequence (previous opcodes: ${recent.map(x => '0x' + x.op.toString(16)).join(', ')})`); }
-				guardSites.set(guard >>> 0, { pc: at - mod.codeStart, funcIndex });
+				if (guard !== undefined) { guardSites.set(guard >>> 0, { pc: at - mod.codeStart, funcIndex }); }
+			}
+			if (local !== undefined) {
+				const def = localDefs.get(local) ?? { count: 0, value: undefined };
+				def.count++;
+				const [p1, p2, p3] = [last(recent, 1), last(recent, 2), last(recent, 3)];
+				if (p1?.op === 0x41) { def.value = { constant: p1.imm! }; }
+				else if (p1?.op === 0x6a && p2?.op === 0x20 && p3?.op === 0x20) { def.value = { sum: [p3.imm!, p2.imm!] }; }
+				else if (p1?.op === 0x6a && p2?.op === 0x41 && p3?.op === 0x41) { def.value = { constant: p3.imm! + p2.imm! }; }
+				else { def.value = undefined; }
+				localDefs.set(local, def);
 			}
 			// Prologue: global.get __stack_pointer; i32.const N; i32.sub; local.set/tee <frame base>
 			if (local !== undefined && !frameBaseLocals.has(funcIndex)
@@ -223,8 +237,27 @@ export function scanProgram(bytes: Uint8Array, hookImport = HOOK_IMPORT): ScanRe
 			recent.push({ op, imm });
 			if (recent.length > 3) { recent.shift(); }
 		}
+		for (const site of viaLocal) {
+			const guard = constantOfLocal(localDefs, site.local);
+			if (guard === undefined) {
+				throw new Error(`hook call at wasm offset 0x${site.at.toString(16)} reads its guard address from local ${site.local}, which is not set exactly once from a constant or a sum of such locals (previous opcodes: ${site.recent}); did you mean to build with -O0?`);
+			}
+			guardSites.set(guard >>> 0, { pc: site.at - mod.codeStart, funcIndex });
+		}
 	});
 	return { guardSites, frameBaseLocals, module: mod };
+}
+
+/** What a local was last set from: a constant, or the sum of two other locals. */
+interface LocalDef { count: number; value: { constant: number } | { sum: [number, number] } | undefined }
+
+/** The constant a local holds, when it is set exactly once, from a constant or a sum of such locals; otherwise undefined. */
+function constantOfLocal(defs: Map<number, LocalDef>, local: number, depth = 0): number | undefined {
+	const def = defs.get(local);
+	if (def?.count !== 1 || def.value === undefined || depth > 4) { return undefined; }
+	if ('constant' in def.value) { return def.value.constant; }
+	const [a, b] = def.value.sum.map(l => constantOfLocal(defs, l, depth + 1));
+	return a === undefined || b === undefined ? undefined : (a + b) | 0;
 }
 
 export interface ShadowEntry { funcIndex: number; pc: number; sp: number }

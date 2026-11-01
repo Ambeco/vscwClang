@@ -26,7 +26,7 @@ Catch2 library, 108 objects (PCH on, one run): per-unit compile median 0.83 s, p
 
 ## Debug builds (`-O0 -g`, trace-pc-guard coverage, debug stub linked)
 Compile is 2-5x release: sqlite3.c 28.9 s (release 5.9), shell.c 5.0 s (1.7), fmt core-test.cc 19.3 s with PCH (8.9), gmock-gtest-all.cc 14.6 s (6.3), format.cc 4.4 s (2.1). Link of 7 fmt objects 375 ms, 11 MB (6 MB of it `.debug_*`). Debugger launch analysis on that program: `parseModule` 9 ms, `scanProgram` 86 ms, `parseLineTable` 58 ms (156k rows); sqlite3.c alone: `parseLineTable` 103 ms (209k rows). All cheap next to the compile.
-- Bug: `scanProgram` throws `hook call at wasm offset 0x38a32 has an unrecognized guard-address sequence (previous opcodes: 0x41, 0x21, 0x20)` on a debug build of SQLite (sqlite3.c + shell.c), so F5 on it would fail at launch.
+- `scanProgram` used to throw on SQLite debug builds (clang keeps the guard address in `-O0` locals: `i32.const A; local.set X; i32.const B; local.set Y; local.get X; local.get Y; i32.add; local.set L; local.get L; call hook`); fixed, it now takes 252 ms there.
 
 ## clangd (cold, `clangd --check`, Node WASI)
 Single-threaded clangd.wasm from the fork (`build-single-threaded`), `-background-index=false -check-locations=false`, one file per process, so every figure is a cold preamble. AST time is the first parse of the main file after the preamble.
