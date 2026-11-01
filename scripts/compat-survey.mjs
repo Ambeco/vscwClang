@@ -23,7 +23,8 @@ if (!isMainThread) {
 }
 
 const root = resolve(import.meta.dirname, '..');
-const artifacts = join(root, 'llvm-artifacts');
+const { artifactsRoot, artifactResource } = await import('../src/web/test/artifacts.ts');
+const artifacts = artifactsRoot() ?? join(root, 'llvm-artifacts');
 const flags = JSON.parse(readFileSync(join(artifacts, 'compile-flags.json'), 'utf8'));
 const sub = f => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource');
 const COMPILE = flags.compile['wasm32-wasip1'].map(sub);
@@ -80,7 +81,7 @@ async function survey(project, projectsDir) {
 	const stubDir = join(objDir, 'stubs'); mkdirSync(stubDir);
 	for (const [name, text] of Object.entries(project.stubs ?? {})) { mkdirSync(dirname(join(stubDir, name)), { recursive: true }); writeFileSync(join(stubDir, name), text); }
 	for (const [name, from] of Object.entries(project.stubFiles ?? {})) { mkdirSync(dirname(join(stubDir, name)), { recursive: true }); copyFileSync(from, join(stubDir, name)); }
-	const preopens = { '/sysroot': join(artifacts, 'sysroot'), '/resource': join(artifacts, 'resource'), '/workspace': rootDir, '/stubs': stubDir };
+	const preopens = { '/sysroot': join(artifacts, 'sysroot'), '/resource': artifactResource(), '/workspace': rootDir, '/stubs': stubDir };
 	const report = { name: project.name, flags: project.flags, units: [], link: [], runs: [], policy: [] };
 	const policy = checkUserFlags([...project.flags, ...(project.linkFlags ?? [])]);
 	report.policy = policy;
