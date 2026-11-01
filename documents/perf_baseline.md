@@ -21,4 +21,27 @@ Findings
 - The earlier survey numbers (compat_survey.md) used single-threaded tools without PCH; those fmt/Catch2/json runs hit a different toolchain and are not comparable.
 - Variance: first run of a unit is often the max (gmock-gtest-all.cc no-PCH max 25.9 s once); use medians.
 
-Not measured yet: many-object link (Catch2 SelfTest, 166 objects), program run startup, debug-mode compile/link and `.debug_line` parse, clangd (`--check` timings and background-index time/memory need Node WASI clangd or a live vscode.dev pass), debug launch-to-breakpoint and step latency (browser).
+## Link with many objects
+Catch2 library, 108 objects (PCH on, one run): per-unit compile median 0.83 s, p90 1.8 s, max 4.3 s, total 113 s; link 851 ms, 4.8 MB. Link stays under 1 s, so incremental builds are compile-bound.
+
+## Debug builds (`-O0 -g`, trace-pc-guard coverage, debug stub linked)
+Compile is 2-5x release: sqlite3.c 28.9 s (release 5.9), shell.c 5.0 s (1.7), fmt core-test.cc 19.3 s with PCH (8.9), gmock-gtest-all.cc 14.6 s (6.3), format.cc 4.4 s (2.1). Link of 7 fmt objects 375 ms, 11 MB (6 MB of it `.debug_*`). Debugger launch analysis on that program: `parseModule` 9 ms, `scanProgram` 86 ms, `parseLineTable` 58 ms (156k rows); sqlite3.c alone: `parseLineTable` 103 ms (209k rows). All cheap next to the compile.
+- Bug: `scanProgram` throws `hook call at wasm offset 0x38a32 has an unrecognized guard-address sequence (previous opcodes: 0x41, 0x21, 0x20)` on a debug build of SQLite (sqlite3.c + shell.c), so F5 on it would fail at launch.
+
+## clangd (cold, `clangd --check`, Node WASI)
+Single-threaded clangd.wasm from the fork (`build-single-threaded`), `-background-index=false -check-locations=false`, one file per process, so every figure is a cold preamble. AST time is the first parse of the main file after the preamble.
+
+| File | Preamble (size) | AST |
+|---|---|---|
+| Lua lstring.c / lvm.c | 0.21 / 0.29 s | 0.13 / 0.39 s |
+| SQLite shell.c | 0.05 s | 1.26 s |
+| fmt format.cc / core-test.cc | 2.7 / 4.2 s (9 / 17 MB) | 0.08 / 0.84 s |
+| Catch2 catch_session.cpp | 3.3 s (12 MB) | 0.25 s |
+| json unit.cpp | 3.4 s (13 MB) | 0.08 s |
+| Eigen basicstuff.cpp | 5.6 s (20 MB) | 4.8 s |
+
+- Preamble dominates for C++ with standard headers (3-6 s here; the browser's ~14 s first preamble in remaining_work is the same work under threads and the extension host). After it, per-edit AST rebuilds are 0.1-0.8 s except template-heavy Eigen (~5 s).
+- Without `-check-locations=false`, `--check` runs a completion/hover probe at every token and a 1,900-line C file took minutes; do not drop the flag.
+- The shipped threaded `clangd.wasm` (dist `clangd.zip`) never exits `--check` under `runWasi` (even for a 100-line C file and with `-background-index=false`); unexplained, so these figures use the single-threaded build.
+
+Not measured yet: background-index time and memory on a large project (needs a live vscode.dev pass or an LSP-driven harness with the threaded build), program run startup, and the debug launch-to-breakpoint and step latency in the browser.

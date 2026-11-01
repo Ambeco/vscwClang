@@ -2,7 +2,9 @@
 // (clang-threads.wasm / lld-threads.wasm, which the dist ships as clang.wasm / lld.wasm), the wasm32-wasip1-threads
 // slice, -fintegrated-cc1, the default flags and, for C++, the prebuilt libc++ PCH. Projects come from compat-projects.mjs.
 //   node scripts/perf-bench.mjs <projectsDir> <name>[,<name>...] [--only regex] [--repeat 3] [--pch both|on|off]
-//        [--link] [--out results.json]
+//        [--link] [--debug] [--out results.json]
+// --debug compiles like Debug mode (-O0 -g, trace-pc-guard coverage), links with the debug stub, and times the debugger's
+// wasm scan and .debug_line parse on the linked program.
 // Per unit it records the median/min/max of --repeat compiles (PCH on and off for C++), then optionally links the
 // objects of the selected units. Needs VSCWCLANG_ARTIFACTS (or the newest ../../llvm-project/release/<tag>) and
 // llvm-artifacts/dist for the PCH zip. Use Windows-style paths (C:/...) for --out and <projectsDir>.
@@ -10,6 +12,7 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync, c
 import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { runWasi } from './clang-wasi.mjs';
 
 const root = resolve(import.meta.dirname, '..');
@@ -20,6 +23,7 @@ if (!artifacts) { throw new Error('no toolchain found; set VSCWCLANG_ARTIFACTS t
 const SLICE = 'wasm32-wasip1-threads';
 const flagsJson = JSON.parse(readFileSync(join(artifacts, 'compile-flags.json'), 'utf8'));
 const sub = f => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource');
+const DEBUG_FLAGS = ['-O0', '-g', '-fsanitize-coverage=trace-pc-guard,no-prune', ...(flagsJson.debugCoverage ?? [])];
 const COMPILE = flagsJson.compile[SLICE].map(sub);
 const LINK = flagsJson.link[SLICE].map(sub);
 
@@ -31,6 +35,7 @@ const only = opt('--only', undefined);
 const repeat = Number(opt('--repeat', '3'));
 const pchMode = opt('--pch', 'both');
 const doLink = flag('--link');
+const debug = flag('--debug');
 const [projectsDir, names] = argv;
 if (!projectsDir || !names) { throw new Error('usage: node scripts/perf-bench.mjs <projectsDir> <name>[,<name>...] [--only regex] [--repeat 3] [--pch both|on|off] [--link] [--out file]'); }
 
@@ -79,7 +84,7 @@ async function benchProject(name, project) {
 		for (const usePch of variants) {
 			const times = [];
 			for (let r = 0; r < repeat; r++) {
-				const args = [driver, ...COMPILE, '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics', ...DEFAULT_COMPILE_FLAGS, ...(isC ? DEFAULT_C_COMPILE_FLAGS : []),
+				const args = [driver, ...COMPILE, '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics', ...DEFAULT_COMPILE_FLAGS, ...(isC ? DEFAULT_C_COMPILE_FLAGS : []), ...(debug ? DEBUG_FLAGS : []),
 					...(usePch ? ['-include-pch', `/pch/${pch.file}`, '-fvalidate-ast-input-files-content'] : []), ...project.flags, ...(u.flags ?? []), '-c', u.abs ?? `/workspace/${u.file}`, '-o', '-'];
 				const res = await clang(args, preopens);
 				if (res.code !== 0) { rec.ok = false; rec.error = firstError(res.stderr); break; }
@@ -96,11 +101,35 @@ async function benchProject(name, project) {
 		const selected = objects.filter(Boolean);
 		const times = [];
 		let size = 0, error;
+		let stub = [];
+		if (debug) {
+			const r = await clang(['clang', ...COMPILE, ...DEFAULT_COMPILE_FLAGS, '-O2', '-c', '/stubsrc/debugStub.c', '-o', '-'], { ...preopens, '/stubsrc': join(root, 'src', 'web', 'debug') });
+			if (r.code !== 0) { throw new Error('debug stub failed to compile: ' + r.stderr.slice(0, 300)); }
+			writeFileSync(join(objDir, 'stub.o'), r.stdout);
+			stub = ['/obj/stub.o', '--export=__sanitizer_cov_trace_pc_guard'];
+		}
 		for (let r = 0; r < repeat; r++) {
-			const res = await lld(['wasm-ld', LINK[0], ...selected, ...DEFAULT_LINK_FLAGS, ...(project.linkFlags ?? []), ...LINK.slice(1), '-o', '/out/a.wasm'], preopens);
+			const res = await lld(['wasm-ld', LINK[0], ...selected, ...stub, ...DEFAULT_LINK_FLAGS, ...(project.linkFlags ?? []), ...LINK.slice(1), '-o', '/out/a.wasm'], preopens);
 			if (res.code !== 0) { error = firstError(res.stderr) || res.stderr.slice(0, 250); break; }
 			times.push(res.ms);
 			size = statSync(join(outDir, 'a.wasm')).size;
+		}
+		if (debug && !error) {
+			// The debugger modules use TS syntax Node cannot strip (parameter properties), so bundle them first.
+			const { build } = await import('esbuild');
+			const bundle = join(work, 'debugModules.mjs');
+			await build({ stdin: { contents: "export { parseModule, scanProgram } from './src/web/debug/wasmScan.ts'; export { parseLineTable } from './src/web/debug/dwarfLines.ts';", resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', outfile: bundle, logLevel: 'error' });
+			const { parseModule, scanProgram, parseLineTable } = await import(pathToFileURL(bundle).href);
+			const bytes = new Uint8Array(readFileSync(join(outDir, 'a.wasm')));
+			const t = f => { const t0 = performance.now(); const v = f(); return [performance.now() - t0, v]; };
+			const med = f => { const ts = []; let v; for (let k = 0; k < repeat; k++) { const [ms, x] = t(f); ts.push(ms); v = x; } return [stats(ts), v]; };
+			const [modMs, info] = med(() => parseModule(bytes));
+			let scanMs, scan;
+			try { [scanMs, scan] = med(() => scanProgram(bytes)); } catch (e) { report.debugAnalysis = { scanProgramError: String(e.message) }; console.log('  debug analysis: scanProgram FAILED: ' + e.message); scan = { guardSites: new Map() }; scanMs = { median: -1 }; }
+			const [lineMs, rows] = med(() => parseLineTable(bytes, info.customSections));
+			const dbg = [...info.customSections].filter(([n]) => n.startsWith('.debug')).reduce((a, [, r]) => a + r.end - r.start, 0);
+			report.debugAnalysis = { ...report.debugAnalysis, debugBytes: dbg, parseModuleMs: modMs, scanProgramMs: scanMs, parseLineTableMs: lineMs, lineRows: rows.length, guards: scan.guardSites.size };
+			console.log(`  debug analysis: parseModule ${modMs.median} ms, scanProgram ${scanMs.median} ms, parseLineTable ${lineMs.median} ms (${rows.length} rows), .debug_* ${dbg} bytes`);
 		}
 		report.link = error ? { objects: selected.length, error } : { objects: selected.length, size, ms: stats(times) };
 		console.log(`  link ${selected.length} objects: ${error ? 'FAIL ' + error : `${report.link.ms.median} ms (${report.link.ms.min}-${report.link.ms.max}), ${size} bytes`}`);
