@@ -10,12 +10,14 @@ import { GUEST_WORKSPACE, TOOLCHAIN_SCHEME, fromGuestPath, isToolchainGuestPath,
 import { ToolchainFileSystem } from '../toolchain/toolchainFileSystem';
 import { clangdLogLevel, compileCommandsPath, logsClangdStderr } from '../toolchain/cppToolsSettings';
 import { intelliSenseEnabled, loggingLevel, projectSettings, userFlags } from '../projectConfig';
-import { GUEST_CACHE, OVERLAY_BATCH_SIZE, batches, clangdArgs, clangdThreadCount, compilationDatabaseChanges, shardMountPoint } from './clangdConfig';
+import { GUEST_CACHE, GUEST_CONFIG, OVERLAY_BATCH_SIZE, batches, clangdArgs, clangdThreadCount, compilationDatabaseChanges, shardMountPoint } from './clangdConfig';
 import { discoverWorkspaceSources, findCompilationDatabaseDir } from './compileOverlay';
 import { ClangdStatus } from './clangdStatus';
+import { clangdUserConfig, headersAreCpp, mapClangdSettings } from './clangdSettings';
 
 const CLANGD_TMP = 'clangd-tmp';
 const CLANGD_CACHE = 'clangd-cache';
+const CLANGD_CONFIG = 'clangd-config';
 /**
  * Starts clangd.wasm as a long-lived process on the Worker host and wires it to VS Code's language-client
  * machinery, so completion/hover/go-to-definition/diagnostics come from clangd instead of nothing.
@@ -44,7 +46,8 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 
 	const toolchain = getToolchainStore(context, log);
 	const [bits, sysrootFiles, flags] = await Promise.all([toolchain.getFile('clangd.wasm'), loadSysrootFiles(toolchain), loadCompileFlags(toolchain)]);
-	const extraFlags = userFlags(log, true).flags;
+	const mappedFlags = userFlags(log, true);
+	const extraFlags = mappedFlags.flags;
 	// The same slice Build picks, or <thread> and <mutex> would be errors here but not there.
 	const compileFlags = flags.compile[chooseSlice(Object.keys(flags.compile), vscode.workspace.getConfiguration('vscwclang').get<boolean>('threads', true), [extraFlags])].map(f => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource'));
 	const module = await WebAssembly.compile(bits);
@@ -61,16 +64,43 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	const databaseDir = await findCompilationDatabaseDir(folder, configured);
 	const shardMount = databaseDir === undefined ? undefined : shardMountPoint(databaseDir);
 
-	const args = clangdArgs(clangdLogLevel(level), clangdThreadCount(globalThis.navigator?.hardwareConcurrency));
+	// Without a database every file runs on fallback flags, so the language of `.h` and the per-language -std need a user config.
+	const sources = databaseDir === undefined ? await discoverWorkspaceSources() : [];
+	const cpptools = projectSettings('C_Cpp');
+	const mapped = mapClangdSettings({
+		includeHeader: cpptools.get('refactoring.includeHeader'),
+		clangTidyEnabled: cpptools.get('codeAnalysis.clangTidy.enabled'),
+		tidyChecksEnabled: cpptools.get('codeAnalysis.clangTidy.checks.enabled'),
+		tidyChecksDisabled: cpptools.get('codeAnalysis.clangTidy.checks.disabled'),
+		tidyHeaderFilter: cpptools.get('codeAnalysis.clangTidy.headerFilter'),
+		tidyConfig: cpptools.get('codeAnalysis.clangTidy.config'),
+		tidyFallbackConfig: cpptools.get('codeAnalysis.clangTidy.fallbackConfig'),
+		tidyArgs: cpptools.get('codeAnalysis.clangTidy.args'),
+	});
+	mapped.notes.forEach(n => log.appendLine(`[vscwclang] ${n}`));
+	const userSetsStd = extraFlags.some(f => f.startsWith('-std=') || f.startsWith('--std='));
+	const useStd = databaseDir === undefined && !userSetsStd;
+	const configDir = vscode.Uri.joinPath(context.globalStorageUri, CLANGD_CONFIG);
+	await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(configDir, 'clangd'));
+	await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(configDir, 'clangd', 'config.yaml'), new TextEncoder().encode(clangdUserConfig({
+		headersAsCpp: databaseDir === undefined && headersAreCpp(sources.map(u => u.path)),
+		cppStd: useStd ? mappedFlags.cpp[0] : undefined,
+		cStd: useStd ? mappedFlags.c[0] : undefined,
+		tidyAdd: mapped.tidyAdd,
+		tidyRemove: mapped.tidyRemove,
+	})));
+
+	const args = clangdArgs(clangdLogLevel(level), clangdThreadCount(globalThis.navigator?.hardwareConcurrency), mapped.args);
 	const sysroot = await loadSysrootGuestFs(toolchain);
 	const process = await createWorkerProcess(context, {
-		name: 'clangd', module, args, env: { XDG_CACHE_HOME: GUEST_CACHE }, memoryLimits,
+		name: 'clangd', module, args, env: { XDG_CACHE_HOME: GUEST_CACHE, XDG_CONFIG_HOME: GUEST_CONFIG }, memoryLimits,
 		mounts: [
 			{ guestPath: GUEST_WORKSPACE, uri: folder },
 			{ guestPath: '/sysroot', fs: sysroot.sysroot },
 			{ guestPath: '/resource', fs: sysroot.resource },
 			{ guestPath: '/tmp', uri: tmpDir },
 			{ guestPath: GUEST_CACHE, uri: cacheDir },
+			{ guestPath: GUEST_CONFIG, uri: configDir },
 			...(shardMount ? [{ guestPath: shardMount, uri: cacheDir }] : []),
 		],
 	});
@@ -132,7 +162,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	void (async () => {
 		try {
 			if (databaseDir !== undefined) { return; }
-			await sendOverlay(await discoverWorkspaceSources());
+			await sendOverlay(sources);
 		} catch (e) {
 			log.appendLine(`[vscwclang] clangd: could not register workspace sources for background indexing: ${errorText(e)}`);
 		}

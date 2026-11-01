@@ -1,6 +1,8 @@
 import { GUEST_WORKSPACE } from '../toolchain/guestPaths';
 
 export const GUEST_CACHE = '/cache';
+/** Where clangd's user config lives (`XDG_CONFIG_HOME`), so `/config/clangd/config.yaml` is read. */
+export const GUEST_CONFIG = '/config';
 
 /**
  * Where clangd writes index shards for a compilation database in `databaseDir` (workspace-relative, '' for the
@@ -19,8 +21,8 @@ export function clangdThreadCount(hardwareConcurrency: number | undefined): numb
 }
 
 /** clangd's startup arguments; its real background indexer needs the threaded build. */
-export function clangdArgs(logLevel: string, jobs: number): string[] {
-	return ['-background-index', `-j=${jobs}`, '-resource-dir=/resource', `-log=${logLevel}`];
+export function clangdArgs(logLevel: string, jobs: number, extra: readonly string[] = []): string[] {
+	return ['-background-index', `-j=${jobs}`, '-resource-dir=/resource', `-log=${logLevel}`, ...extra];
 }
 
 export interface CompilationDatabaseChanges {

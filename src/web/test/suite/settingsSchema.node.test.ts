@@ -31,7 +31,7 @@ suite('package.json setting scopes', () => {
 	});
 
 	test('every C_Cpp setting the extension reads is registered', () => {
-		const read = ['default.defines', 'default.includePath', 'default.compilerArgs', 'default.cppStandard', 'default.cStandard', 'default.compileCommands', 'files.exclude', 'loggingLevel', 'intelliSenseEngine'];
+		const read = ['default.defines', 'default.includePath', 'default.compilerArgs', 'default.cppStandard', 'default.cStandard', 'default.compileCommands', 'files.exclude', 'loggingLevel', 'intelliSenseEngine', 'refactoring.includeHeader', 'codeAnalysis.clangTidy.enabled', 'codeAnalysis.clangTidy.checks.enabled', 'codeAnalysis.clangTidy.checks.disabled', 'codeAnalysis.clangTidy.headerFilter', 'codeAnalysis.clangTidy.config', 'codeAnalysis.clangTidy.fallbackConfig', 'codeAnalysis.clangTidy.args'];
 		assert.deepStrictEqual(read.filter(k => !props[`C_Cpp.${k}`]).map(k => `C_Cpp.${k} is read but not contributed`), []);
 	});
 });

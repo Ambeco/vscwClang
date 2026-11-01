@@ -96,6 +96,55 @@
           "scope": "resource",
           "markdownDescription": "cpptools-compatible. Merged into `vscwclang.files.exclude` unless `vscwclang.useCppToolsSettings` is off."
         },
+        "C_Cpp.refactoring.includeHeader": {
+          "type": ["string","null"],
+          "default": null,
+          "enum": ["always", "ifNeeded", "never", null],
+          "scope": "resource",
+          "markdownDescription": "cpptools-compatible. `never` becomes clangd's `-header-insertion=never`; `always` and `ifNeeded` use clangd's default (insert the `#include` of an accepted completion when it is missing). Reload the window to apply."
+        },
+        "C_Cpp.codeAnalysis.clangTidy.enabled": {
+          "type": ["boolean","null"],
+          "default": null,
+          "scope": "resource",
+          "markdownDescription": "cpptools-compatible. `false` starts clangd with `-clang-tidy=false`. Otherwise clangd runs clang-tidy with the checks in the workspace's `.clang-tidy` plus `checks.enabled`. Reload the window to apply."
+        },
+        "C_Cpp.codeAnalysis.clangTidy.checks.enabled": {
+          "type": ["array","null"],
+          "default": null,
+          "scope": "resource",
+          "markdownDescription": "cpptools-compatible. Check globs (such as `bugprone-*`) added to clangd's clang-tidy checks. Reload the window to apply."
+        },
+        "C_Cpp.codeAnalysis.clangTidy.checks.disabled": {
+          "type": ["array","null"],
+          "default": null,
+          "scope": "resource",
+          "markdownDescription": "cpptools-compatible. Check globs removed from clangd's clang-tidy checks. Reload the window to apply."
+        },
+        "C_Cpp.codeAnalysis.clangTidy.headerFilter": {
+          "type": ["string","null"],
+          "default": null,
+          "scope": "resource",
+          "markdownDescription": "Not supported (clangd reads clang-tidy options only from `.clang-tidy` files); a note is logged when it is set."
+        },
+        "C_Cpp.codeAnalysis.clangTidy.config": {
+          "type": ["string","null"],
+          "default": null,
+          "scope": "resource",
+          "markdownDescription": "Not supported (clangd reads clang-tidy options only from `.clang-tidy` files); a note is logged when it is set."
+        },
+        "C_Cpp.codeAnalysis.clangTidy.fallbackConfig": {
+          "type": ["string","null"],
+          "default": null,
+          "scope": "resource",
+          "markdownDescription": "Not supported (clangd reads clang-tidy options only from `.clang-tidy` files); a note is logged when it is set."
+        },
+        "C_Cpp.codeAnalysis.clangTidy.args": {
+          "type": ["array","null"],
+          "default": null,
+          "scope": "resource",
+          "markdownDescription": "Not supported (clangd reads clang-tidy options only from `.clang-tidy` files); a note is logged when it is set."
+        },
         "C_Cpp.loggingLevel": {
           "type": "string",
           "default": "Error",

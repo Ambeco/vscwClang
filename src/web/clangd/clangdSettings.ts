@@ -1,0 +1,106 @@
+/** The `C_Cpp.*` values clangd can honor; each is `undefined` when unset. */
+export interface CppToolsClangdSettings {
+	includeHeader?: unknown;
+	clangTidyEnabled?: unknown;
+	tidyChecksEnabled?: unknown;
+	tidyChecksDisabled?: unknown;
+	tidyHeaderFilter?: unknown;
+	tidyConfig?: unknown;
+	tidyFallbackConfig?: unknown;
+	tidyArgs?: unknown;
+}
+
+export interface ClangdSettingsMapping {
+	/** Extra clangd command-line arguments. */
+	args: string[];
+	tidyAdd: string[];
+	tidyRemove: string[];
+	notes: string[];
+}
+
+function strings(value: unknown): string[] {
+	return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string' && v.trim() !== '').map(v => v.trim()) : [];
+}
+
+const hasText = (value: unknown): boolean => (typeof value === 'string' && value.trim() !== '') || (Array.isArray(value) && value.length > 0);
+
+/**
+ * clangd arguments and clang-tidy checks equivalent to cpptools' `C_Cpp.refactoring.includeHeader` and
+ * `C_Cpp.codeAnalysis.clangTidy.*` settings.
+ *
+ * `includeHeader: never` becomes `-header-insertion=never` (the others are clangd's default `iwyu`). The tidy
+ * `enabled: false` becomes `-clang-tidy=false`; the enabled and disabled check lists become the user config's
+ * `ClangTidy: Add/Remove`. `headerFilter`, `config`, `fallbackConfig` and `args` have no clangd equivalent (clangd
+ * reads `.clang-tidy` files itself), so they are reported in `notes`.
+ */
+export function mapClangdSettings(settings: CppToolsClangdSettings): ClangdSettingsMapping {
+	const args: string[] = [];
+	const notes: string[] = [];
+	if (settings.includeHeader === 'never') { args.push('-header-insertion=never'); }
+	else if (settings.includeHeader !== undefined && settings.includeHeader !== null && settings.includeHeader !== 'ifNeeded' && settings.includeHeader !== 'always') {
+		notes.push(`C_Cpp.refactoring.includeHeader '${String(settings.includeHeader)}' is not one of always, ifNeeded or never, so clangd's default (insert when needed) is used.`);
+	}
+	if (settings.clangTidyEnabled === false) { args.push('-clang-tidy=false'); }
+	const tidyOff = settings.clangTidyEnabled === false;
+	const tidyAdd = tidyOff ? [] : strings(settings.tidyChecksEnabled);
+	const tidyRemove = tidyOff ? [] : strings(settings.tidyChecksDisabled);
+	if (tidyOff && (tidyAdd.length > 0 || hasText(settings.tidyChecksEnabled))) { notes.push('C_Cpp.codeAnalysis.clangTidy.checks.enabled is ignored because clangTidy.enabled is false.'); }
+	const unsupported: [string, unknown][] = [
+		['headerFilter', settings.tidyHeaderFilter], ['config', settings.tidyConfig], ['fallbackConfig', settings.tidyFallbackConfig], ['args', settings.tidyArgs],
+	];
+	for (const [name, value] of unsupported) {
+		if (hasText(value)) { notes.push(`C_Cpp.codeAnalysis.clangTidy.${name} is not supported: clangd reads clang-tidy options only from .clang-tidy files. Did you mean to put it in a .clang-tidy file in the workspace?`); }
+	}
+	return { args, tidyAdd, tidyRemove, notes };
+}
+
+/** C++ source and header extensions clangd already treats as C++ (`.h` is the ambiguous one). */
+const CPP_EXTENSIONS = ['cc', 'cpp', 'cxx', 'C', 'hh', 'hpp', 'hxx'];
+
+/**
+ * Whether a plain `.h` should be analyzed as C++: unless the workspace has C sources and no C++ ones, as cpptools'
+ * default association does. Without this clangd reads every `.h` as C, so `class` and `<vector>` are errors.
+ */
+export function headersAreCpp(sourcePaths: readonly string[]): boolean {
+	const lower = sourcePaths.map(p => p.toLowerCase());
+	const hasC = lower.some(p => p.endsWith('.c'));
+	const hasCpp = lower.some(p => /\.(cc|cpp|cxx)$/.test(p));
+	return hasCpp || !hasC;
+}
+
+export interface ClangdUserConfigInput {
+	headersAsCpp: boolean;
+	/** `-std=` for C++ and C files; omit for files that already have a command from a database or the user's flags. */
+	cppStd?: string;
+	cStd?: string;
+	tidyAdd: readonly string[];
+	tidyRemove: readonly string[];
+}
+
+// Single-quoted scalars have no escapes, which clangd's YAML reader mishandles for `\` in double quotes.
+const yamlString = (text: string): string => `'${text.replace(/'/g, "''")}'`;
+const yamlList = (items: readonly string[]): string => `[${items.map(yamlString).join(', ')}]`;
+
+/**
+ * The text of clangd's user `config.yaml` (read from `$XDG_CONFIG_HOME/clangd/`): file-type specific flags for files
+ * with no compile command, which clangd's single `fallbackFlags` list cannot express, plus clang-tidy checks.
+ *
+ * `.h` becomes `-xc++-header` when `headersAsCpp`. Each language's standard is added only to its own files.
+ */
+export function clangdUserConfig(input: ClangdUserConfigInput): string {
+	const fragments: string[] = [];
+	const fragment = (pathMatch: string, flags: string[]) => {
+		if (flags.length > 0) { fragments.push(`If:\n  PathMatch: ${yamlString(pathMatch)}\nCompileFlags:\n  Add: ${yamlList(flags)}`); }
+	};
+	if (input.headersAsCpp) { fragment('.*\\.h', ['-xc++-header']); }
+	const cppExts = [...CPP_EXTENSIONS, ...(input.headersAsCpp ? ['h'] : [])].join('|');
+	if (input.cppStd) { fragment(`.*\\.(${cppExts})`, [input.cppStd]); }
+	if (input.cStd) { fragment(`.*\\.(c${input.headersAsCpp ? '' : '|h'})`, [input.cStd]); }
+	if (input.tidyAdd.length > 0 || input.tidyRemove.length > 0) {
+		const lines = ['Diagnostics:', '  ClangTidy:'];
+		if (input.tidyAdd.length > 0) { lines.push(`    Add: ${yamlList(input.tidyAdd)}`); }
+		if (input.tidyRemove.length > 0) { lines.push(`    Remove: ${yamlList(input.tidyRemove)}`); }
+		fragments.push(lines.join('\n'));
+	}
+	return `# Generated by vscwClang from its settings; edits are overwritten.\n${fragments.map(f => f + '\n').join('---\n')}`;
+}
