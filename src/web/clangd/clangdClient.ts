@@ -10,7 +10,7 @@ import { GUEST_WORKSPACE, TOOLCHAIN_SCHEME, fromGuestPath, isToolchainGuestPath,
 import { ToolchainFileSystem } from '../toolchain/toolchainFileSystem';
 import { clangdLogLevel, compileCommandsPath, logsClangdStderr } from '../toolchain/cppToolsSettings';
 import { intelliSenseEnabled, loggingLevel, projectSettings, userFlags } from '../projectConfig';
-import { GUEST_CACHE, GUEST_CONFIG, OVERLAY_BATCH_SIZE, batches, clangdArgs, clangdThreadCount, compilationDatabaseChanges, shardMountPoint } from './clangdConfig';
+import { GUEST_CACHE, GUEST_CONFIG, OVERLAY_BATCH_SIZE, SEMANTIC_TOKENS_MAX_LINES, batches, clangdArgs, clangdThreadCount, compilationDatabaseChanges, shardMountPoint } from './clangdConfig';
 import { discoverWorkspaceSources, findCompilationDatabaseDir } from './compileOverlay';
 import { ClangdStatus } from './clangdStatus';
 import { clangdUserConfig, headersAreCpp, mapClangdSettings } from './clangdSettings';
@@ -145,6 +145,10 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 		uriConverters: { code2Protocol, protocol2Code },
 		initializationOptions: { fallbackFlags: overlayFlags, clangdFileStatus: true },
 		synchronize: { fileEvents: sourceWatcher },
+		middleware: {
+			provideDocumentSemanticTokens: (document, token, next) => document.lineCount > SEMANTIC_TOKENS_MAX_LINES ? null : next(document, token),
+			provideDocumentSemanticTokensEdits: (document, resultId, token, next) => document.lineCount > SEMANTIC_TOKENS_MAX_LINES ? null : next(document, resultId, token),
+		},
 	};
 	client = new LanguageClient('vscwclangClangd', 'vscwClang clangd', () => Promise.resolve(transports), clientOptions);
 	try {

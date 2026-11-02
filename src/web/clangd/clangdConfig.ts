@@ -20,6 +20,9 @@ export function clangdThreadCount(hardwareConcurrency: number | undefined): numb
 	return Math.max(2, Math.min(4, (hardwareConcurrency ?? 4) - 1));
 }
 
+/** Above this many lines semantic tokens are skipped: clangd takes ~0.23 ms per line (wasm) to compute them on every edit. */
+export const SEMANTIC_TOKENS_MAX_LINES = 10_000;
+
 /** clangd's startup arguments; its real background indexer needs the threaded build. */
 export function clangdArgs(logLevel: string, jobs: number, extra: readonly string[] = []): string[] {
 	return ['-background-index', `-j=${jobs}`, '-resource-dir=/resource', `-log=${logLevel}`, ...extra];
