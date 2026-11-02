@@ -42,7 +42,7 @@ const [projectsDir, names] = argv;
 if (!projectsDir || !names) { throw new Error('usage: node scripts/perf-bench.mjs <projectsDir> <name>[,<name>...] [--only regex] [--repeat 3] [--pch both|on|off] [--link] [--out file]'); }
 
 const bytesOf = {}, moduleOf = {};
-const load = async name => { bytesOf[name] ??= readFileSync(name === 'clang-threads.wasm' && process.env.PERF_CLANG_WASM ? process.env.PERF_CLANG_WASM : join(artifacts, 'bin', name)); return moduleOf[name] ??= await WebAssembly.compile(bytesOf[name]); };
+const load = async name => { bytesOf[name] ??= readFileSync((name === 'clang-threads.wasm' && process.env.PERF_CLANG_WASM) || (name === 'lld-threads.wasm' && process.env.PERF_LLD_WASM) || join(artifacts, 'bin', name)); return moduleOf[name] ??= await WebAssembly.compile(bytesOf[name]); };
 const clang = async (args, preopens) => runWasi(await load('clang-threads.wasm'), [args[0], '-fintegrated-cc1', ...args.slice(1)], preopens, bytesOf['clang-threads.wasm']);
 const lld = async (args, preopens) => runWasi(await load('lld-threads.wasm'), args, preopens, bytesOf['lld-threads.wasm']);
 
@@ -91,7 +91,8 @@ async function benchProject(name, project) {
 				const args = [driver, ...COMPILE, '-fno-crash-diagnostics', '-fno-color-diagnostics', '-fno-caret-diagnostics', ...DEFAULT_COMPILE_FLAGS, ...(isC ? DEFAULT_C_COMPILE_FLAGS : []), ...(debug ? DEBUG_FLAGS : []),
 					...(usePch ? ['-include-pch', `/pch/${pch.file}`, '-fvalidate-ast-input-files-content'] : []), ...project.flags, ...extraFlags, ...(u.flags ?? []), '-c', u.abs ?? `/workspace/${u.file}`, '-o', '-'];
 				const res = await clang(args, preopens);
-				if (res.code !== 0) { rec.ok = false; rec.error = firstError(res.stderr); break; }
+				if (res.code !== 0) { rec.ok = false; rec.error = firstError(res.stderr); if (process.env.PERF_BENCH_STDERR) console.log(`exit ${res.code}
+${res.stderr.slice(-1500)}`); break; }
 				if (r === 0 && usePch === variants[variants.length - 1]) { writeFileSync(join(objDir, `${i}.o`), res.stdout); objects[i] = `/obj/${i}.o`; }
 				times.push(res.ms);
 			}

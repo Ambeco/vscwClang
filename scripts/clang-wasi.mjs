@@ -9,6 +9,7 @@ import { Worker, isMainThread, workerData, parentPort } from 'node:worker_thread
 import { openSync, closeSync, readFileSync, writeFileSync, mkdtempSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 
 /**
  * Min/max pages and sharedness of the module's imported `env.memory`, parsed from the raw import section because
@@ -108,10 +109,17 @@ function traceImports(imports, label) {
 	};
 }
 
+/** Guest environment from VSCWCLANG_WASI_ENV (JSON); `%N` in a value becomes a fresh random id (unique PGO profile names). */
+function guestEnv() {
+	const raw = process.env.VSCWCLANG_WASI_ENV;
+	if (!raw) { return {}; }
+	return Object.fromEntries(Object.entries(JSON.parse(raw)).map(([k, v]) => [k, String(v).replace(/%N/g, () => randomUUID())]));
+}
+
 /** Builds the import object for the main instance or a thread; `spawn` is the `wasi.thread-spawn` implementation. */
 function makeImports(config, memory, tidCounter) {
 	const { module, preopens, stdoutFd, stderrFd } = config;
-	const wasi = new WASI({ version: 'preview1', args: config.args, returnOnExit: true, preopens, stdout: stdoutFd, stderr: stderrFd, env: {} });
+	const wasi = new WASI({ version: 'preview1', args: config.args, returnOnExit: true, preopens, stdout: stdoutFd, stderr: stderrFd, env: guestEnv() });
 	const imports = wasi.getImportObject();
 	const report = TRACE ? traceImports(imports, memory ? `thread ${config.tid ?? 0}` : 'main (unthreaded)') : () => {};
 	if (!memory) { return { wasi, imports, report }; }
@@ -182,7 +190,7 @@ export async function runWasi(module, args, preopens, bytes) {
 		const outPath = join(dir, 'out'), errPath = join(dir, 'err');
 		const stdoutFd = openSync(outPath, 'w'), stderrFd = openSync(errPath, 'w');
 		const started = performance.now();
-		const worker = new Worker(new URL(import.meta.url), { workerData: { clangWasi: true, t0: performance.timeOrigin + performance.now(), module, bytes, args, preopens, stdoutFd, stderrFd } });
+		const worker = new Worker(new URL(import.meta.url), { workerData: { clangWasi: true, t0: performance.timeOrigin + performance.now(), module, bytes, args, preopens: process.env.PERF_PROFILE_DIR ? { ...preopens, '/prof': process.env.PERF_PROFILE_DIR } : preopens, stdoutFd, stderrFd } });
 		const code = await new Promise((resolve, reject) => {
 			worker.once('message', m => resolve(m.code));
 			worker.once('error', reject);
