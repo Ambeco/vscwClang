@@ -31,6 +31,11 @@ const stubDir = join(work, 'stubs'); mkdirSync(stubDir);
 for (const [n, text] of Object.entries(project.stubs ?? {})) { writeFileSync(join(stubDir, n), text); }
 const db = units.map(u => ({ directory: '/workspace', file: `/workspace/${u.file}`, arguments: [u.file.endsWith('.c') ? 'clang' : 'clang++', ...COMPILE, ...DEFAULT_COMPILE_FLAGS, ...project.flags, ...(u.flags ?? []), `/workspace/${u.file}`] }));
 writeFileSync(join(work, 'cfg', 'compile_commands.json'), JSON.stringify(db));
+if (process.env.PERF_CLANGD_CONFIG) { // clangd config.yaml text, read from XDG_CONFIG_HOME=/cfg
+	mkdirSync(join(work, 'cfg', 'clangd'), { recursive: true });
+	writeFileSync(join(work, 'cfg', 'clangd', 'config.yaml'), process.env.PERF_CLANGD_CONFIG);
+	process.env.VSCWCLANG_WASI_ENV = JSON.stringify({ XDG_CONFIG_HOME: '/cfg' });
+}
 const preopens = { '/sysroot': join(cache, 'sysroot'), '/resource': artifactResource(), '/workspace': rootDir, '/stubs': stubDir, '/cfg': join(work, 'cfg'), '/tmp': join(work, 'tmp') };
 for (const u of units) {
 	for (let r = 0; r < repeat; r++) {
