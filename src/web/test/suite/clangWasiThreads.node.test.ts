@@ -27,6 +27,18 @@ suite('scripts/clang-wasi.mjs with the threaded clang.wasm', function () {
 		assert.ok(existsSync(join(dir, 'work', 't.o')));
 	});
 
+	test('threaded clangd --check runs its worker threads and exits', async function () {
+		const clangd = artifactBin('clangd.wasm');
+		if (!existsSync(clangd) || !existsSync(artifactPath('sysroot'))) { return this.skip(); }
+		const { runWasi } = await import(pathToFileURL(resolve('scripts/clang-wasi.mjs')).href) as { runWasi: RunWasi };
+		mkdirSync(join(dir, 'work'));
+		writeFileSync(join(dir, 'work', 'a.c'), 'int add(int a, int b) { return a + b; }\n');
+		const bytes = readFileSync(clangd);
+		const result = await runWasi(await WebAssembly.compile(bytes), ['clangd', '--check=/work/a.c', '-check-locations=false', '-background-index=false', '-resource-dir=/resource', '-log=verbose'], { '/sysroot': artifactPath('sysroot'), '/resource': artifactResource(), '/work': join(dir, 'work') }, bytes);
+		assert.strictEqual(result.code, 0, result.stderr);
+		assert.match(result.stderr, /Built preamble/);
+	});
+
 	test('without -fintegrated-cc1 the threaded driver says it needs a spawn hook', async function () {
 		if (!existsSync(CLANG_THREADS) || !existsSync(artifactPath('sysroot'))) { return this.skip(); }
 		const { runWasi } = await import(pathToFileURL(resolve('scripts/clang-wasi.mjs')).href) as { runWasi: RunWasi };

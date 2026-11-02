@@ -138,7 +138,8 @@ function makeImports(config, memory, tidCounter) {
 	return { wasi, imports, report };
 }
 
-if (!isMainThread && workerData?.clangWasi) {
+// A thread Worker's workerData is spread from its parent's, so it carries clangWasi too; test the thread flag first.
+if (!isMainThread && workerData?.clangWasi && !workerData.clangWasiThread) {
 	const { module, bytes, stderrFd } = workerData;
 	let code;
 	try {
