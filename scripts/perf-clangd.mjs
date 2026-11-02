@@ -34,7 +34,7 @@ writeFileSync(join(work, 'cfg', 'compile_commands.json'), JSON.stringify(db));
 const preopens = { '/sysroot': join(cache, 'sysroot'), '/resource': artifactResource(), '/workspace': rootDir, '/stubs': stubDir, '/cfg': join(work, 'cfg'), '/tmp': join(work, 'tmp') };
 for (const u of units) {
 	for (let r = 0; r < repeat; r++) {
-		const res = await runWasi(module, ['clangd', `--check=/workspace/${u.file}`, '--compile-commands-dir=/cfg', '-resource-dir=/resource', '-log=verbose', '-background-index=false', '-check-locations=false'], preopens, bytes);
+		const res = await runWasi(module, ['clangd', `--check=/workspace/${u.file}`, '--compile-commands-dir=/cfg', '-resource-dir=/resource', '-log=verbose', '-background-index=false', '-check-locations=false', ...(process.env.PERF_CLANGD_ARGS?.split(' ') ?? [])], preopens, bytes);
 		const text = res.stderr;
 		const t = re => { const m = text.match(re); return m ? (+m[1] * 3600 + +m[2] * 60 + +m[3]) : undefined; };
 		const ts = re => t(new RegExp(String.raw`[IV]\[(\d+):(\d+):([\d.]+)\] ` + re));
