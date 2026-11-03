@@ -38,12 +38,13 @@ export const OVERLAY_BATCH_SIZE = 200;
 /**
  * Per-file compile commands for clangd's `workspace/didChangeConfiguration` `compilationDatabaseChanges`, which
  * is how clangd's background indexer learns of files when the project has no `compile_commands.json`.
+ * `perFileFlags` (keyed by guest path) follow the shared `flags`, so a task's own `-D`/`-I`/`-std` win.
  */
-export function compilationDatabaseChanges(guestPaths: readonly string[], flags: readonly string[]): CompilationDatabaseChanges {
+export function compilationDatabaseChanges(guestPaths: readonly string[], flags: readonly string[], perFileFlags: Readonly<Record<string, readonly string[]>> = {}): CompilationDatabaseChanges {
 	const changes: CompilationDatabaseChanges = {};
 	for (const guestPath of guestPaths) {
 		const driver = guestPath.toLowerCase().endsWith('.c') ? 'clang' : 'clang++';
-		changes[guestPath] = { workingDirectory: GUEST_WORKSPACE, compilationCommand: [driver, ...flags, guestPath] };
+		changes[guestPath] = { workingDirectory: GUEST_WORKSPACE, compilationCommand: [driver, ...flags, ...(perFileFlags[guestPath] ?? []), guestPath] };
 	}
 	return changes;
 }

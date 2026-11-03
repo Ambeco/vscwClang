@@ -9,9 +9,10 @@ import { chooseSlice } from '../toolchain/threadSlice';
 import { GUEST_WORKSPACE, TOOLCHAIN_SCHEME, fromGuestPath, isToolchainGuestPath, toGuestPath } from '../toolchain/guestPaths';
 import { ToolchainFileSystem } from '../toolchain/toolchainFileSystem';
 import { clangdLogLevel, compileCommandsPath, logsClangdStderr } from '../toolchain/cppToolsSettings';
-import { intelliSenseEnabled, loggingLevel, projectSettings, userFlags } from '../projectConfig';
+import { intelliSenseEnabled, loggingLevel, projectSettings, userFlags, workspaceRelativeGlobs } from '../projectConfig';
+import { indexTargetsFromTasks } from '../toolchain/indexTargets';
 import { GUEST_CACHE, GUEST_CONFIG, OVERLAY_BATCH_SIZE, SEMANTIC_TOKENS_MAX_LINES, batches, clangdArgs, clangdThreadCount, compilationDatabaseChanges, shardMountPoint } from './clangdConfig';
-import { discoverWorkspaceSources, findCompilationDatabaseDir } from './compileOverlay';
+import { discoverTargetSources, discoverWorkspaceSources, findCompilationDatabaseDir } from './compileOverlay';
 import { ClangdStatus } from './clangdStatus';
 import { clangdUserConfig, headersAreCpp, mapClangdSettings } from './clangdSettings';
 
@@ -65,7 +66,16 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	const shardMount = databaseDir === undefined ? undefined : shardMountPoint(databaseDir);
 
 	// Without a database every file runs on fallback flags, so the language of `.h` and the per-language -std need a user config.
-	const sources = databaseDir === undefined ? await discoverWorkspaceSources() : [];
+	// Files to index, each with the flags of the tasks.json build that compiles it; with no buildable task, every workspace source on fallback flags.
+	const resolveSources = async () => {
+		const { targets, notes } = indexTargetsFromTasks(vscode.workspace.getConfiguration('tasks', folder).get<unknown[]>('tasks'), folder.path.slice(folder.path.lastIndexOf('/') + 1), workspaceRelativeGlobs('sourceGlobs', ['**/*.{c,cc,cpp,cxx}']));
+		const fromTasks = await discoverTargetSources(targets);
+		return { fromTasks: fromTasks.length > 0, notes, sources: fromTasks.length > 0 ? fromTasks : (await discoverWorkspaceSources()).map(uri => ({ uri, flags: [] as string[] })) };
+	};
+	const initial = databaseDir === undefined ? await resolveSources() : { fromTasks: false, notes: [] as string[], sources: [] };
+	initial.notes.forEach(n => log.appendLine(`[vscwclang] clangd: ${n}`));
+	if (initial.fromTasks) { log.appendLine(`[vscwclang] clangd: indexing the ${initial.sources.length} file(s) that tasks.json builds, with each task's flags`); }
+	const sources = initial.sources.map(s => s.uri);
 	const cpptools = projectSettings('C_Cpp');
 	const mapped = mapClangdSettings({
 		includeHeader: cpptools.get('refactoring.includeHeader'),
@@ -127,19 +137,30 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	};
 	let client!: LanguageClient;
 	const overlayFlags = fallbackFlags(compileFlags, extraFlags);
-	const sendOverlay = async (uris: readonly vscode.Uri[]) => {
-		const guestPaths = uris.flatMap(u => toGuestPath(folder.path, u.path) ?? []);
-		for (const batch of batches(guestPaths, OVERLAY_BATCH_SIZE)) {
-			await client.sendNotification('workspace/didChangeConfiguration', { settings: { compilationDatabaseChanges: compilationDatabaseChanges(batch, overlayFlags) } });
+	const sendOverlay = async (entries: readonly { uri: vscode.Uri; flags: readonly string[] }[]) => {
+		const perFileFlags: Record<string, readonly string[]> = {};
+		for (const { uri, flags } of entries) { const guest = toGuestPath(folder.path, uri.path); if (guest !== undefined) { perFileFlags[guest] = flags; } }
+		for (const batch of batches(Object.keys(perFileFlags), OVERLAY_BATCH_SIZE)) {
+			await client.sendNotification('workspace/didChangeConfiguration', { settings: { compilationDatabaseChanges: compilationDatabaseChanges(batch, overlayFlags, perFileFlags) } });
 		}
 	};
+	// A new file is indexed only if the build tasks (when there are any) would compile it.
+	const registerCreated = async (uri: vscode.Uri) => {
+		const { sources: current } = await resolveSources();
+		const entry = current.find(s => s.uri.toString() === uri.toString());
+		if (entry) { await sendOverlay([entry]); }
+	};
 	const sourceWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, '**/*.{c,cc,cpp,cxx}'));
-	const createdSub = sourceWatcher.onDidCreate(uri => { void sendOverlay([uri]).catch(e => log.appendLine(`[vscwclang] clangd: could not register ${uri.path} for indexing: ${errorText(e)}`)); });
+	const createdSub = sourceWatcher.onDidCreate(uri => { void registerCreated(uri).catch(e => log.appendLine(`[vscwclang] clangd: could not register ${uri.path} for indexing: ${errorText(e)}`)); });
 	const statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
 	const status = new ClangdStatus(statusItem);
 	status.setActive(vscode.window.activeTextEditor && code2Protocol(vscode.window.activeTextEditor.document.uri));
 	const editorSub = vscode.window.onDidChangeActiveTextEditor(editor => status.setActive(editor && code2Protocol(editor.document.uri)));
-	const disposeWatchers = () => { createdSub.dispose(); sourceWatcher.dispose(); editorSub.dispose(); statusItem.dispose(); };
+	const tasksSub = vscode.workspace.onDidChangeConfiguration(e => {
+		if (databaseDir !== undefined || !e.affectsConfiguration('tasks', folder)) { return; }
+		void resolveSources().then(r => sendOverlay(r.sources)).catch(err => log.appendLine(`[vscwclang] clangd: could not re-register sources after a tasks.json change: ${errorText(err)}`));
+	});
+	const disposeWatchers = () => { createdSub.dispose(); tasksSub.dispose(); sourceWatcher.dispose(); editorSub.dispose(); statusItem.dispose(); };
 	const clientOptions: LanguageClientOptions = {
 		documentSelector: [{ language: 'c' }, { language: 'cpp' }, { scheme: TOOLCHAIN_SCHEME }],
 		uriConverters: { code2Protocol, protocol2Code },
@@ -166,7 +187,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	void (async () => {
 		try {
 			if (databaseDir !== undefined) { return; }
-			await sendOverlay(sources);
+			await sendOverlay(initial.sources);
 		} catch (e) {
 			log.appendLine(`[vscwclang] clangd: could not register workspace sources for background indexing: ${errorText(e)}`);
 		}

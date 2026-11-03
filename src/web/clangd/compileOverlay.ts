@@ -1,22 +1,55 @@
 import * as vscode from 'vscode';
 import { sourceExcluder, workspaceRelativeGlobs } from '../projectConfig';
+import type { IndexTarget } from '../toolchain/indexTargets';
 import { OUTPUT_FOLDER_MARKERS, makeSourceExcluder, outputFolderExclude } from '../toolchain/sourceFilter';
 
 /**
  * Workspace sources matching `vscwclang.sourceGlobs`, minus `vscwclang.files.exclude`, minus detected build output
  * (folders holding CMake/Ninja marker files), so the background indexer does not parse build products. `.gitignore`
- * is deliberately not used: ignored files are often generated sources the project needs indexed.
+ * is deliberately not used: ignored files are often generated sources the project needs indexed. Used only when
+ * `tasks.json` names no buildable sources (`discoverTargetSources`).
  */
 export async function discoverWorkspaceSources(): Promise<vscode.Uri[]> {
-	const isExcluded = sourceExcluder();
 	const found = new Map<string, vscode.Uri>();
 	for (const glob of workspaceRelativeGlobs('sourceGlobs', ['**/*.{c,cc,cpp,cxx}'])) {
 		for (const uri of await vscode.workspace.findFiles(glob, '**/node_modules/**')) { found.set(uri.toString(), uri); }
 	}
 	const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
 	if (!folder) { return [...found.values()]; }
+	const isExcluded = await workspaceExcluder(folder);
+	return [...found.values()].filter(uri => !isExcluded(uri.path.slice(folder.path.length)));
+}
+
+/** A source a `tasks.json` build compiles, with the flags that build gives it. */
+export interface TargetSource {
+	uri: vscode.Uri;
+	flags: string[];
+}
+
+/**
+ * The files the workspace's build tasks compile, each with the flags of the first task that names it. Globs are
+ * excluded like `discoverWorkspaceSources` does; a task naming a file without wildcards always includes it.
+ */
+export async function discoverTargetSources(targets: readonly IndexTarget[]): Promise<TargetSource[]> {
+	const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
+	const isExcluded = folder ? await workspaceExcluder(folder) : () => false;
+	const found = new Map<string, TargetSource>();
+	for (const target of targets) {
+		for (const glob of target.sources) {
+			const wildcard = /[*?[\]{}]/.test(glob);
+			for (const uri of await vscode.workspace.findFiles(glob, '**/node_modules/**')) {
+				if (found.has(uri.toString()) || (wildcard && folder && isExcluded(uri.path.slice(folder.path.length)))) { continue; }
+				found.set(uri.toString(), { uri, flags: target.flags });
+			}
+		}
+	}
+	return [...found.values()];
+}
+
+async function workspaceExcluder(folder: vscode.Uri): Promise<(relativePath: string) => boolean> {
+	const isExcluded = sourceExcluder();
 	const isGenerated = makeSourceExcluder(await detectedOutputExclude(folder));
-	return [...found.values()].filter(uri => { const relative = uri.path.slice(folder.path.length); return !isExcluded(relative) && !isGenerated(relative); });
+	return relative => isExcluded(relative) || isGenerated(relative);
 }
 
 async function detectedOutputExclude(folder: vscode.Uri): Promise<Record<string, boolean>> {
