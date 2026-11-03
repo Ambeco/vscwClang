@@ -1,7 +1,12 @@
 import * as vscode from 'vscode';
 import { sourceExcluder, workspaceRelativeGlobs } from '../projectConfig';
+import { OUTPUT_FOLDER_MARKERS, makeSourceExcluder, outputFolderExclude } from '../toolchain/sourceFilter';
 
-/** Workspace sources matching `vscwclang.sourceGlobs`, minus `vscwclang.files.exclude`. */
+/**
+ * Workspace sources matching `vscwclang.sourceGlobs`, minus `vscwclang.files.exclude`, minus detected build output
+ * (folders holding CMake/Ninja marker files), so the background indexer does not parse build products. `.gitignore`
+ * is deliberately not used: ignored files are often generated sources the project needs indexed.
+ */
 export async function discoverWorkspaceSources(): Promise<vscode.Uri[]> {
 	const isExcluded = sourceExcluder();
 	const found = new Map<string, vscode.Uri>();
@@ -9,7 +14,14 @@ export async function discoverWorkspaceSources(): Promise<vscode.Uri[]> {
 		for (const uri of await vscode.workspace.findFiles(glob, '**/node_modules/**')) { found.set(uri.toString(), uri); }
 	}
 	const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
-	return [...found.values()].filter(uri => !folder || !isExcluded(uri.path.slice(folder.path.length)));
+	if (!folder) { return [...found.values()]; }
+	const isGenerated = makeSourceExcluder(await detectedOutputExclude(folder));
+	return [...found.values()].filter(uri => { const relative = uri.path.slice(folder.path.length); return !isExcluded(relative) && !isGenerated(relative); });
+}
+
+async function detectedOutputExclude(folder: vscode.Uri): Promise<Record<string, boolean>> {
+	const markers = await vscode.workspace.findFiles(`**/{${OUTPUT_FOLDER_MARKERS.join(',')}}`, '**/node_modules/**');
+	return outputFolderExclude(markers.map(uri => uri.path.slice(folder.path.length)));
 }
 
 /**

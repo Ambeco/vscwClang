@@ -33,6 +33,7 @@ src/web/
       joinArgs
     sourceFilter.ts
       makeSourceExcluder       # files.exclude globs
+      outputFolderExclude      # exclude globs for folders with CMake/Ninja marker files
     threadSlice.ts
       chooseSlice              # wasip1 vs wasip1-threads
     toolchainDownload.ts

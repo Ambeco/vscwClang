@@ -63,3 +63,16 @@ Per-file compile is single-threaded inside clang and split roughly half Sema/par
 Browser-suite A/B, old v24.0.8 dist vs v24.0.10, one run each: first diagnostic 852 vs 1206 ms, hover/go-to-definition 4198 vs 4638 ms, background indexing 4219/4318 vs 4873/4902 ms. Startup-bound, so the larger `clangd.wasm` (50 MB vs 34 MB) costs about 10-15%. The old clangd crashed ("memory access out of bounds") on the large-completion test; the new one passes (8.3 s). Warm parse speed, `perf-clangd.mjs` best of 3 (cold preamble + AST per process, threaded clangd, `-sync` not needed any more), old v24.0.8 clangd vs PGO v24.0.10: Lua lvm.c 758 to 648 ms (-15%), fmt format.cc 1919 to 1619 (-16%), core-test.cc 3785 to 3020 (-20%), json unit-conversions1 4750 to 3779 (-20%), Eigen basicstuff 7371 to 5597 (-24%). The startup cost above is real but small next to that once a file is edited.
 
 Config knobs (`PERF_CLANGD_CONFIG` writes `config.yaml` read through `XDG_CONFIG_HOME=/cfg`): `InlayHints.Enabled: No` plus `Diagnostics.UnusedIncludes/MissingIncludes: None` changes lvm 666 to 640, format 1620 to 1597, core-test 3050 to 2969, json 3777 to 3704, Eigen 5596 to 5585 ms: 0-4%, near the noise, not worth a setting. wasm-opt -O3 on the PGO clangd is neutral (666/1620/3050/3777/5596 vs 702/1597/2999/3697/5499 ms) and saves 6 MB (44 vs 50), unlike clang where it hurts. `--check` spends 9 s of shell.c's 10.8 s in semantic highlighting (40k lines, about 0.23 ms per line) and 0.5 s in inlay hints; both are requested by the editor on every edit of an open file, so the real cost for large files is semantic tokens, not parsing.
+## clangd background indexing (PGO v24.0.10, `scripts/perf-clangd-index.mjs`, 2026-11-02)
+The harness runs the threaded clangd as an LSP server (stdin piped through a child process), feeds it the sources the way the extension does (`didChangeConfiguration` `compilationDatabaseChanges`, shards under `XDG_CACHE_HOME=/cache`) and times until every unit has a shard. `/workspace/build` and `/workspace/.cache` are shadowed so a project's own `compile_commands.json` is ignored and nothing is written into it. 12-core box, idle.
+
+| Project (units) | -j 1 | -j 2 | -j 4 | -j 8 |
+|---|---|---|---|---|
+| Lua (33 C files) | 3.5 s | 2.3 s | 1.9 s | hung at 32/33 |
+| Catch2 (166 files) | 202 s | 117 s | 79 s | 68 s |
+| fmt (27 files) | | | 29 s | |
+
+Scaling is 1.7x at `-j 2`, 2.5x at `-j 4`, 3.0x at `-j 8` (Catch2), so the extension's cap of 4 gets most of it; 8 adds about 14% more.
+- Occasionally a worker thread traps ("memory access out of bounds") under the Node harness and its file is never indexed (Lua `-j 8` never finished; one or two traps also appear at `-j 4`, with the old clangd too). Not seen in the browser suite; unexplained.
+- libc++ PCH: clangd silently drops `-include-pch` (a nonexistent PCH path produces no error and no speed change: fmt 27.2 s plain vs 27.9 s with the PCH), so it cannot speed up indexing.
+- `-fmodules -fimplicit-module-maps -fmodules-cache-path=...`: the file indexes ("Failed to compile ..., index may be incomplete"), with far fewer symbols (os.cc 1785 vs 3852) and more time (5.5 s vs 1.2 s for one file, including building the std module). Not viable.

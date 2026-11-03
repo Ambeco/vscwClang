@@ -118,8 +118,8 @@ function guestEnv() {
 
 /** Builds the import object for the main instance or a thread; `spawn` is the `wasi.thread-spawn` implementation. */
 function makeImports(config, memory, tidCounter) {
-	const { module, preopens, stdoutFd, stderrFd } = config;
-	const wasi = new WASI({ version: 'preview1', args: config.args, returnOnExit: true, preopens, stdout: stdoutFd, stderr: stderrFd, env: guestEnv() });
+	const { module, preopens, stdoutFd, stderrFd, stdinFd } = config;
+	const wasi = new WASI({ version: 'preview1', args: config.args, returnOnExit: true, preopens, stdout: stdoutFd, stderr: stderrFd, ...(stdinFd !== undefined ? { stdin: stdinFd } : {}), env: guestEnv() });
 	const imports = wasi.getImportObject();
 	const report = TRACE ? traceImports(imports, memory ? `thread ${config.tid ?? 0}` : 'main (unthreaded)') : () => {};
 	if (!memory) { return { wasi, imports, report }; }
@@ -182,16 +182,17 @@ if (!isMainThread && workerData?.clangWasiThread) {
 
 /**
  * Runs `args` (argv[0] first) in `module` with the guest-path -> host-directory `preopens`. `bytes` is the module's
- * binary; it is needed only for a threaded module (to read its memory limits).
+ * binary; it is needed only for a threaded module (to read its memory limits). `stdinFd` (e.g. 0) feeds the
+ * guest's stdin from a host descriptor, for LSP servers; without it the guest has no usable stdin.
  * Resolves to { code, stdout (Buffer), stderr (string), ms }.
  */
-export async function runWasi(module, args, preopens, bytes) {
+export async function runWasi(module, args, preopens, bytes, { stdinFd } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), 'clang-wasi-'));
 	try {
 		const outPath = join(dir, 'out'), errPath = join(dir, 'err');
 		const stdoutFd = openSync(outPath, 'w'), stderrFd = openSync(errPath, 'w');
 		const started = performance.now();
-		const worker = new Worker(new URL(import.meta.url), { workerData: { clangWasi: true, t0: performance.timeOrigin + performance.now(), module, bytes, args, preopens: process.env.PERF_PROFILE_DIR ? { ...preopens, '/prof': process.env.PERF_PROFILE_DIR } : preopens, stdoutFd, stderrFd } });
+		const worker = new Worker(new URL(import.meta.url), { workerData: { clangWasi: true, t0: performance.timeOrigin + performance.now(), module, bytes, args, preopens: process.env.PERF_PROFILE_DIR ? { ...preopens, '/prof': process.env.PERF_PROFILE_DIR } : preopens, stdoutFd, stderrFd, stdinFd } });
 		const code = await new Promise((resolve, reject) => {
 			worker.once('message', m => resolve(m.code));
 			worker.once('error', reject);

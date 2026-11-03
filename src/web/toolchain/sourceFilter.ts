@@ -48,3 +48,22 @@ export function makeSourceExcluder(exclude: Readonly<Record<string, unknown>>): 
 		return false;
 	};
 }
+
+/** Files a build system writes only into its output folder; their directory is generated output, not sources. */
+export const OUTPUT_FOLDER_MARKERS = ['CMakeCache.txt', 'build.ninja', '.ninja_log', 'cmake_install.cmake'];
+
+/**
+ * Exclude globs for the build output folders implied by marker files found in them (`OUTPUT_FOLDER_MARKERS`), so a
+ * folder named `cmake-build-debug` or `_out` is skipped like `build/`. Paths are workspace-relative; a marker at
+ * the workspace root is ignored, since the whole workspace cannot be output.
+ *
+ * @helper
+ */
+export function outputFolderExclude(markerPaths: readonly string[]): Record<string, boolean> {
+	const exclude: Record<string, boolean> = {};
+	for (const path of markerPaths) {
+		const segments = path.replace(/\\/g, '/').split('/').filter(s => s !== '');
+		if (segments.length > 1) { exclude[segments.slice(0, -1).join('/')] = true; }
+	}
+	return exclude;
+}

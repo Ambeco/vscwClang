@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { DEFAULT_EXCLUDE, makeSourceExcluder } from '../../toolchain/sourceFilter';
+import { DEFAULT_EXCLUDE, makeSourceExcluder, outputFolderExclude } from '../../toolchain/sourceFilter';
 
 suite('makeSourceExcluder', () => {
 	const defaults = makeSourceExcluder(DEFAULT_EXCLUDE);
@@ -64,5 +64,15 @@ suite('makeSourceExcluder', () => {
 	test('empty object and unbalanced braces do not throw', () => {
 		assert.strictEqual(makeSourceExcluder({})('a.cpp'), false);
 		assert.doesNotThrow(() => makeSourceExcluder({ '**/{a,b': true })('x'));
+	});
+});
+
+suite('detected build output', () => {
+	test('a folder holding CMake or Ninja markers is excluded, at any depth, but a marker at the root is not', () => {
+		const x = makeSourceExcluder(outputFolderExclude(['cmake-build-debug/CMakeCache.txt', '/sub/_out/build.ninja', '.ninja_log', 'CMakeCache.txt']));
+		assert.strictEqual(x('cmake-build-debug/gen/a.cpp'), true);
+		assert.strictEqual(x('sub/_out/a.cpp'), true);
+		assert.strictEqual(x('sub/src/a.cpp'), false);
+		assert.strictEqual(x('main.cpp'), false);
 	});
 });
