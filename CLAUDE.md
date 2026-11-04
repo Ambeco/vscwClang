@@ -19,6 +19,10 @@
 - Before touching host code, mounts, environment variables or working directories, read `documents/design.md` "Three environments" and check the change against the extension host, the tool guests and the user-program guests separately.
 - The git repo root is the nested `vsclang\vsclang` folder, not the outer working directory. Glob results are prefixed `vsclang\`, so paths built from the outer directory double up (`...\vsclang\vsclang\vsclang\...`); `cd` into the repo (or use absolute paths) before running git or npm.
 
+# Remaining work upkeep
+
+- Before every commit, scan `documents/remaining_work.md` for items the change finished or touched: delete finished items whole (line plus child bullets), and never append "done"/"verified"/"live-checked" status to an item. A note worth keeping goes in `documents/notes.md`.
+
 # Code map and helpers
 
 - A reusable exported function/class gets `@helper` in its JSDoc and a line in `documents/helpers.md`; `design.md` "Layout" lists the main folders. `npm run test-node` (`codeMap.node.test.ts`) fails with the exact line to add or remove when they drift.
