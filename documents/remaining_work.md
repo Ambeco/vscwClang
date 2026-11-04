@@ -126,7 +126,6 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Remaining gaps:
 
 ## Distribution work (new)
 - Time a threaded program against the v24.0.9 PCHs (now include the thread headers; published and pinned).
-- PGO: retrain the profile including `--debug` compiles (debug builds gained only 10.9% against 23.5% for release), then rebuild clang/lld/clangd/lldb (`llvm-project/documents/profiling.md`). Weigh the ~10-15% slower clangd startup from its larger module (wasm-opt -O3 on clangd is speed-neutral and saves 6 MB, so shipping it that way is an option).
 - Investigate the occasional worker-thread trap ('memory access out of bounds') when the threaded clangd indexes under Node (`scripts/perf-clangd-index.mjs --j 8`); check whether it can happen in the browser, since a trapped thread silently drops its file.
 - Index in priority order: open files, then the files of their build targets, then dependency targets, then upstream targets, then the rest (today every task-built file is sent at once, `toolchain/indexTargets.ts`). Needs a target dependency graph, so it waits on (partial) makefile support; Makefile targets should become `IndexTarget`s too. Untested live: indexing from `tasks.json` flags in a real session.
 - Background indexing ideas not yet tried: `-j` above 4 on machines with 8+ cores (+14% at 8), a faster allocator (wasi dlmalloc locks per call).
