@@ -1,0 +1,124 @@
+# Build systems, CPython and test runners: feasibility and MVP plan
+
+Question: can this extension build Make, CMake (and Ninja/Meson) projects, run CPython, and run GoogleTest-style suites, all inside the browser? Researched 2026-11-03 from the repo docs, the `llvm-project` fork's `js-host-contract.md`, and web searches.
+
+Confidence tags: **[checked]** read in this repo or on a fetched page; **[search]** from search snippets only; **[memory]** from model knowledge, verify before relying; **[spike]** unknown until a small experiment is done.
+
+## Summary
+
+- Almost nothing here is infeasible; the costs differ by an order of magnitude. Genuinely infeasible or not worth it: `fork()` in general, autotools `./configure`, shared libraries / `dlopen`, anything needing sockets (FetchContent/`file(DOWNLOAD)` of arbitrary URLs).
+- `tasks.json` + `launch.json` cannot be the target format. A task maps to one `build()` call: one program from a flat list of sources. Make and CMake projects have many targets (libraries, tests, generated files, custom commands). Use an internal **build graph** (nodes: compile, archive, link, copy, run) and treat `tasks.json` export as a convenience for the simple single-program case.
+- The key trick is **classify-and-map instead of execute**. Ninja files, Make dry-run output and CMake custom commands are lists of shell lines. Most lines are `cc`/`c++`/`ar`/`ranlib`/`mkdir`/`cp`/`rm`/`cmake -E`/`python`. Recognise the tool, map it to what we already have (`toolchain.build` pieces, `llvm-ar`, TS builtins, a wasm tool run by the host) and fail loudly on anything else. This needs a small shell parser, **not** a guest process model.
+- Real guest-side process spawning (`posix_spawn`, pipes, `waitpid`) is only needed for running tools that spawn things themselves (real `make` running recipes, `subprocess` in Python, `execute_process` in CMake). It is a separate, larger step that can come later; the fork already has a proven spawn-hook shape (`js-host-contract.md`, proof of concept under Node).
+- GoogleTest already builds and runs when its sources are in the build (the survey ran fmt's bundled gtest). What is missing is project structure (multi-target builds) and a test UI.
+- Recommended order: build graph + `build.ninja`/File API/`compile_commands.json` ingestion and mini-shell (MVP A), real GNU make in dry-run mode (MVP B), CMake with no guest spawn (MVP C), CPython (MVP D), Meson on top of D. Details and sizes below.
+
+Sizes: S = days, M = 1-3 weeks, L = 1-3 months, XL = research-grade/open-ended (assuming Claude-assisted development; treat as relative, not promises).
+
+## What the project already has (relevant parts)
+
+- `toolchain.build(request)`: compile each source (parallel, object cache keyed by args, source and header hashes), then `wasm-ld`. One program per call. [checked: design.md "Host", "Build artifacts"]
+- `compile_commands.json` reader with per-entry flags and a CMake target picker that cannot link a target's library dependencies (fmt `format-test`). [checked: design.md "Project model", compat_survey.md (c)]
+- Worker host with WASI preview 1, shared-memory threads, sync RPC to the extension host, `llvm-ar` shipped. No processes, pipes, `/bin/sh`, `/dev/null`; `system()`/`popen` are link errors. [checked: design.md "Three environments"]
+- The fork's spawn hook: the wasm exports `__wasi_shim_set_spawn_hook`; the host installs a table-indirect callback that blocks the caller (`Atomics.wait`) while a child wasm instance runs in a new Worker. Works under Node; "a real extension should follow the same shape with a browser Worker". Used for `cc1`/`wasm-ld`; not yet wired in this extension. [checked: llvm-project `documents/js-host-contract.md`]
+- Design stance today: Make/CMake/Meson belong in a *separate* extension that emits `compile_commands.json` (Plan A); a CMake subset inside this extension is Plan B. [checked: design.md "Scope"] This document argues the link graph cannot be expressed in `compile_commands.json`, so the integration must be richer than Plan A assumed; see "Where it lives".
+
+## Shared building blocks
+
+1. **Build graph IR + executor (M).** Nodes: compile (source, flags), archive (`llvm-ar`), link (objects, archives, `-l`), copy/mkdir/remove, run-program (e.g. a generator built earlier, stdout to a file), phony. Executes through the existing compile/link code, object cache and parallelism. Everything else is a front end that produces this graph.
+2. **Command classifier + mini-shell (M).** Parses one shell line: quoting, `&&` `||` `;`, redirects (`>`, `>>`, `2>&1`, `/dev/null`), `VAR=x cmd`, `cd d && ...`, simple pipelines (buffered between steps), `$(...)`/backticks, `$VAR`, globs; `if`/`for` loops only if a corpus needs them (L for a near-complete POSIX sh). Dispatches to: toolchain builtins (`cc`, `c++`, `gcc`, `g++`, `clang*`, `ar`, `ranlib`, `ld`), TS coreutils (`mkdir`, `rm`, `cp`, `mv`, `touch`, `cat`, `echo`, `printf`, `test`, `true`, `false`, `pwd`, `uname`), `cmake -E ...` (the common subcommands), wasm tools (`python`, `make`), and user-built wasm programs. Unknown command: error naming the command plus a did-you-mean, with an opt-in "skip unknown with warning" setting. Tools like `sed`, `awk`, `grep`, `install`, `tar` are the long tail: add on demand, or ship a wasm multicall pack (uutils coreutils builds for `wasm32-wasip1`, though several utilities are skipped in its CI and sed/grep/awk are separate projects) [search].
+3. **Spawn hook / process model (M-L, optional until MVP D/E).** Host imports for `posix_spawn(p)`, `waitpid`, `pipe`, `dup2`/fd redirection, `poll` on pipe fds, plus a patched wasi-libc so `system()`/`popen()` stop being link errors. `fork()` is not implementable (no way to clone a wasm call stack); the `fork`+`exec` idiom can map to spawn only inside specific programs. Spawn resolves `argv[0]` through the same program registry as the shell (TS builtin, wasm tool, user program), so guest-initiated and executor-initiated runs share one code path.
+4. **Dependency overrides (S).** Network access from guests is not available, and `FetchContent_Declare(googletest URL https://github.com/google/googletest/archive/...zip)` is the most common way tutorials pull GoogleTest. Fix: a table of well-known names (googletest, catch2, fmt, nlohmann_json, doctest, benchmark) resolved to bundled or CDN-mirrored copies (jsDelivr/`raw.githubusercontent.com` send the CORS headers; GitHub archive redirects to `codeload`, which likely does not [memory]). Overlaps with the "library pack" idea in `remaining_work.md`.
+
+## Per-tool analysis
+
+### Ninja (`build.ninja`)
+- Format is small: rules, build edges, variables, `$in`/`$out`, `depfile`, `include`/`subninja`, `phony`, pools. A TS reader plus the graph executor is S-M and needs no wasm tool. samurai (C99, Ninja 1.9 language, uses `posix_spawn`) or Ninja itself could be compiled to wasm, but then every command goes through a guest spawn and `/bin/sh`; no benefit over the TS route. [checked samurai page: C99, `posix_spawn`, no WASI mention]
+- Value is as the **common IR**: CMake (Ninja generator), Meson, GN and others all emit it. Consuming a `build.ninja` that already exists in the folder (generated on desktop, in CI, or by an in-browser CMake/Meson later) covers all of them with one front end.
+- Caveats: absolute host paths inside the file (reuse `inferHostRoot` rebasing from `compile_commands.json`), `/usr/bin/c++`-style compiler paths (classifier maps by basename), depfiles (we already track headers via `-H`), and `cmake -E cmake_echo_color`/`cmake_symlink_library`-style commands (symlinks do not exist; map to no-ops with a note).
+
+### GNU Make
+Routes, best first:
+- **M1: real GNU make as `make.wasm`, dry-run + classify-and-map (S-M port, M integration).** GNU make is plain C and autotools-built (cross-compile `--host=wasm32-wasi`) [memory]. Run `make -n -B -k` (print recipes, do not run them) to get the full ordered command list with exact GNU semantics for variables, functions, pattern rules, includes, conditionals, VPATH, secondary expansion. Feed the lines through the classifier. Only needs spawn for `$(shell ...)` and recursive `$(MAKE)` lines (executed even under `-n`); route both to the executor through a minimal hook, or stub `$(shell)` for a short list of commands (`uname`, `pwd`, `ls`, `pkg-config` -> "not found") in the first cut. Parallelism: execute consecutive independent compile lines concurrently (no line consumes another's `-o`).
+  - Weak spots: dry-run cannot know about files that recipes generate and later `include` (needs a second pass: run, re-run `-n`), and `$(shell)` heavy Makefiles; autotools projects are out (see below).
+- **M2: real `make` running recipes through the spawn hook (L).** Needs MVP E (spawn + `/bin/sh`). GNU make 4.3+ uses `posix_spawn` where available and has pipe or fifo jobserver styles [memory, verify in NEWS]; run `-j1` inside and let the executor parallelise. Exact semantics for free, but strictly dependent on the process model and shell.
+- **M3: mini-make in TypeScript (M for common subset, then a long tail).** No wasm, no spawn, instant. Needs the GNU function set (~40 functions), pattern/static/implicit rules, `include`, conditionals, automatic variables, target-specific variables, `.PHONY`, order-only prerequisites, `$(shell)`. Accurate enough for student and small-library Makefiles, silently wrong on exotic ones (the risk is subtle mis-evaluation, so unknown functions/directives must throw). The 2026-10-07 note in `notes.md` leans this way. Choose M3 only if the `make.wasm` port proves harder than expected; the dry-run route gets exactness for less code. Google's `kati` (GNU-make-compatible Makefile -> Ninja converter, C++) is an existing example of the same idea [memory]; it spawns `/bin/sh` for `$(shell)`, so it would need the same stubs.
+- Output as `tasks.json`: possible for the single-binary case (one `vscwclang` task with flags and sources); not for multi-target projects.
+
+### CMake
+Routes:
+- **C1: consume artifacts from a real CMake run (M).** Read the CMake File API reply (`.cmake/api/v1/reply/codemodel-v2-*.json` plus per-target files: sources, flags, defines, link dependencies, artifacts), or `build.ninja`, or the existing `compile_commands.json`. Solves the fmt `format-test` gap without running CMake. Requires that someone ran CMake already (desktop, CI, or a Dropbox-synced folder). Do this first; it is also the only route that is fully faithful on day one.
+- **C2: real `cmake.wasm`, configure+generate with *no guest spawn* (L, high value, **[spike]**).** Cross-compile CMake with the fork's clang on the developer machine and publish the binary plus a trimmed `Modules/` tree in the toolchain pack. Key observations:
+  - CMake ships an (empty) `Platform/WASI.cmake`, so `CMAKE_SYSTEM_NAME=WASI` is recognised [checked]; toolchain files such as wasi-sdk's and IREE's set it [search].
+  - Compiler detection is the main reason CMake spawns processes. Pre-seeding the compiler identification variables (what the deprecated `CMakeForceCompiler` did: `CMAKE_C_COMPILER_ID_RUN`, `CMAKE_C_COMPILER_ID`, `..._FORCED`) [search], or shipping pre-generated `CMakeFiles/<ver>/CMake{C,CXX}Compiler.cmake` and `CMakeSystem.cmake` files, may let configure and generate (Ninja or Makefile generator) run with zero spawns. **[spike]**: confirm on desktop CMake with a wrapper compiler, then in wasm.
+  - libuv has no WASI backend and its maintainers say they would accept only one with stubs returning `UV_ENOSYS` [search]. CMake's bundled libuv is used for process handling and fs operations; stub the process parts (or link a stub libuv exposing only the symbols CMake uses). Other bundled libraries (zlib, libarchive, expat, jsoncpp, rhash, zstd) are portable C/C++; curl can be disabled.
+  - `chdir`/`getcwd` are used throughout CMake; our linked `chdir` shim must cover it (design.md "Run environment").
+  - What breaks without spawn: `try_compile`, `check_*` modules (`check_cxx_source_compiles`, `CheckIncludeFile`, ...), `execute_process`, `find_package(Python)` probing, `gtest_discover_tests` (runs the test binary at build time), `ctest`. Fail loudly; later attach to the hook (MVP E) and answer compile probes through our toolchain.
+  - Size and time: CMake plus Modules is on the order of 10-20 MB zipped [memory, unverified]; configure of a small project natively is ~1 s, expect several times that in wasm, dominated by parsing Modules.
+  - After configure, the generated `build.ninja` goes through the Ninja front end above.
+- **C3: CMake subset interpreter in TypeScript (L, then endless).** Plan B in design.md. Covers hobby projects (`project`, `add_executable/library`, `target_*`, `set/option/if/foreach/function/macro`, `add_subdirectory`, `file(GLOB)`, `configure_file`, `add_test`) with instant start and no download, but CMake is a large language (generator expressions, policies, scoping, list/string/file sub-commands, `find_package` modules, transitive usage requirements). Expect silent divergence on real projects. If chosen, use CMake's own `Tests/RunCMake` language tests as the conformance corpus and throw on every unknown command or generator expression.
+- **C4: run CMake remotely.** Contradicts the north star (nothing installed, no servers); rejected.
+- Shared libraries: map `SHARED`/`MODULE` to `STATIC` with a warning (no dynamic linking). `install`, `CPack`, packaging: ignore with a note.
+
+### Meson
+- Meson is pure Python. Running it needs CPython (MVP D) with a working `subprocess` for compiler probing (`cc --version`, a sanity compile, `ninja --version`, `pkg-config`), so it needs the spawn hook (MVP E); a cross file selects `wasm32` and skips running test executables. Output is `build.ninja` + `compile_commands.json` + introspection JSON (`meson-info/intro-targets.json` lists targets, sources, flags). Ingest of existing Meson output is free via the Ninja front end.
+- Meson wraps (dependency downloads) have the same network problem as FetchContent.
+- Lower value than CMake for C++ users and about the same cost as MVP D+E, so do it last, or never if demand is low.
+
+### CPython (`python.wasm`)
+- CPython supports `wasm32-wasip1` as tier 2 (PEP 11) and builds with wasi-sdk 16+ via the devguide's WASI instructions [checked: Tools/wasm/README (3.13); search]. I could not fetch the exact WASI limitations list; from memory: no `fork`/`subprocess`/`os.system` (ENOSYS), no sockets, no `ctypes`/dynamic extension loading (extensions are built in statically via `Modules/Setup`), limited or experimental threads, no signals, `select` limited. **[spike]**: build with the fork's clang/sysroot (wasm EH, threads slice) and run `import json, re, os, sys, argparse, pathlib, tempfile` plus a ~50-line script.
+- Build is done once on the developer machine (needs a native Python of the same version for cross-building) and published like `clang.wasm`. Stdlib ships as a read-only zip/in-memory mount (`/usr/lib/python3.x`), trimmed (no tests, `idlelib`, `tkinter`, `ensurepip`); size order 10-15 MB zipped [memory].
+- Environment fit: needs `HOME`, `/tmp`, a stdlib mount, `getcwd` (our shim), and a PATH for `shutil.which`; no `/dev`/`/etc` beyond the entries design.md already lists as cheap.
+- Capability tiers: (1) pure scripts that do not spawn (test drivers, code generators): S-M once the build exists, no spawn needed; (2) `subprocess`/`os.system`/`os.posix_spawn` routed to the spawn hook through a small C module and a patched `subprocess` (M, depends on the hook, plus in-memory pipes for `capture_output`); (3) `multiprocessing`: not supported.
+- Why bother: CMake `add_custom_command(COMMAND python gen.py)`, Meson, test runners, Make recipes calling `python`.
+
+### GoogleTest, Catch2, doctest and test running
+- Building: the survey built fmt's bundled gtest and Catch2 with flags only (`-DGTEST_HAS_PTHREAD=0` before the threads slice existed, `mkstemp` shim, `-DCATCH_CONFIG_NO_POSIX_SIGNALS`, doctest one-token patch). Death tests (`fork`) and crash-signal handlers are impossible; gtest disables death tests on unknown platforms [memory], verify. With the threads slice available, retry with pthread on. **[spike, S]**: add GoogleTest (googletest 1.15+) to `compat-projects.mjs` and run its own `googletest-*-test` programs.
+- Running: `vscwclang.runWithArgs` already passes `--gtest_filter=...`. A headless runner (no `ProgramTerminal`, capture stdout/exit code) plus the VS Code **Testing API** (`TestController`) is the missing piece: discover with `--gtest_list_tests` (Catch2: `--list-tests`, doctest: `--list-test-cases`), run one or all, parse `--gtest_output=json:/tmp/r.json` (or console output), and offer a *Debug* profile that launches our debug adapter on the same binary. Cost M, needs MVP A (multi-target builds), because test binaries link a library target and a gtest target. This reverses the earlier "no Testing-view integration" non-goal; cpptools has none, but it is a clear user-facing win and cheap once binaries can be built.
+- CTest: read `CTestTestfile.cmake` (real CMake output) or the File API `ctest` info and run each `add_test` through the headless runner (S-M); `ctest` itself needs spawn.
+
+### Wasmer SDK / WASIX as a shortcut
+- Wasmer's JS SDK runs WASIX packages (bash, coreutils, python) in the browser with threads, subprocesses and `fork` implemented on Workers; browsers need cross-origin isolation [search]. It would supply the whole process model plus a shell and Python.
+- Cons: a second runtime and ABI (WASIX, not preview 1) next to our own host; our `clang.wasm` and its sysroot use WASI preview 1 and the fork's spawn hook, so the two worlds need a bridge; packages come from Wasmer's registry (CORS, supply chain, and offline use to be checked); no evidence found that it runs inside the VS Code web extension host Worker. **[spike, S-M]** only if the in-house process model (MVP E) looks too costly. Treat as a fallback and as a design reference (it shows `fork` is done by re-instantiating and copying memory, which is research-grade here).
+
+## Honestly infeasible, or deliberately out
+
+- General `fork()` (no cloneable call stack). `fork`+`exec` inside specific programs can be mapped to spawn.
+- Autotools `./configure`, `config.status`, libtool: thousands of spawns and heavy `sh`/`sed`/`awk`/`expr` use; even with MVP E it is a project of its own and slow. Out. Prefer projects with checked-in generated files or CMake/Make/Meson.
+- Shared libraries, plugins, `dlopen` (no dynamic linking in our host).
+- Sockets and arbitrary downloads from guests. Dependency overrides (building block 4) are the substitute.
+- Real shells beyond a POSIX subset; interactive tools; anything needing a TTY beyond line mode.
+- Eigen-class translation units exceeding the 2 GiB cap stay failing (compat_survey.md (d)); unrelated to build systems.
+
+## MVP plan
+
+Each stage ships on its own and each later stage reuses the earlier ones.
+
+**MVP A: build graph + ingest (no new binaries; M-L total).**
+1. Build graph IR and executor over the existing compile/link path (multi-target: compile, `llvm-ar`, link with libraries, copy, run).
+2. Command classifier and mini-shell.
+3. Front ends: CMake File API reply, `build.ninja`, and the existing `compile_commands.json` (target picker replaced by a real target graph; "all", a chosen target, or a test target with its dependencies).
+4. "Export tasks.json" command for single-program graphs.
+5. Gate: build fmt `format-test`, Catch2 SelfTest and a GoogleTest project from a pre-generated CMake build dir; then Lua and SQLite from a `build.ninja` converted by hand.
+
+**MVP A+: tests (M).** Headless runner, Testing API discovery/run/debug for GoogleTest, Catch2, doctest and CTest files; dependency overrides for FetchContent'd test frameworks.
+
+**MVP B: GNU make (M after A).** Port `make.wasm` (dry-run), `$(shell)` stubs, recursive make, parallel batching, generated-include second pass. Gate: Lua, SQLite and a student-style Makefile corpus (write ~10 covering `wildcard`, pattern rules, `-include`, `.PHONY`, variables with `+=`). Decide M1 versus M3 after the port attempt (S timebox).
+
+**MVP C: CMake with no guest spawn (L after A; start with a 1-week spike).** Spike questions: (1) does a pre-seeded compiler/platform file set make configure+generate spawn-free on desktop CMake? (2) does CMake build for `wasm32-wasip1` with a stub libuv process layer? (3) wall-clock configure time of a small project in wasm. If (1) or (2) fails, fall back to C3 (TS subset) for the simple-project 80% and keep C1 for everything else.
+
+**MVP D: CPython (M after the spike).** Build, publish, run scripts without spawn; hook into the program registry (`python`, `python3`). Then spawn hook (MVP E) for `subprocess`.
+
+**MVP E: spawn hook + libc patch (M-L).** Shared by real make (M2), `execute_process`, `subprocess`, `system()`. After E, Meson (on D) and CMake probing become possible.
+
+## Where it lives
+
+The user asked for optional features of this extension, which supersedes design.md's "separate extension" Plan A for two reasons: a separate extension would need an exported API into the toolchain host (none exists), and the link graph cannot travel through `compile_commands.json`. Proposal: ship build-system support as optional downloadable packs (`buildsystems` pack with `make.wasm`, later `cmake.wasm` + Modules, `python.wasm` + stdlib) fetched on first use through the existing manifest/pin machinery, so the base download does not grow. If the user agrees, update design.md "Scope" and the Plan A/Plan B text, and keep a thin `compile_commands.json` export so other extensions and clangd still work.
+
+## Decisions needed from the owner
+
+1. Confirm the stance above (in-extension optional packs instead of a separate extension).
+2. Order: MVP A first (recommended), or start with a CMake/CPython spike to retire the biggest unknowns early?
+3. Testing API integration: wanted (recommended) or keep as a non-goal?
+4. Is a TS shell with a short builtin list acceptable (recommended), or should a wasm userland pack (uutils) be planned from the start?
+5. Budget for a Wasmer-SDK spike as insurance against the process-model cost.
