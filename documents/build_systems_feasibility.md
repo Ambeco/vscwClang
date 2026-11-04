@@ -6,6 +6,7 @@ Confidence tags: **[checked]** read in this repo or on a fetched page; **[search
 
 ## Summary
 
+- **Nothing was built or run for this report.** No `make.wasm`, `cmake.wasm` or `python.wasm` exists yet, so every go/no-go below is reasoned from documentation and is unverified. The first follow-up should be the CMake configure spike (MVP C, question 1): it is the biggest unknown and the cheapest to test on desktop CMake.
 - Almost nothing here is infeasible; the costs differ by an order of magnitude. Genuinely infeasible or not worth it: `fork()` in general, autotools `./configure`, shared libraries / `dlopen`, anything needing sockets (FetchContent/`file(DOWNLOAD)` of arbitrary URLs).
 - `tasks.json` + `launch.json` cannot be the target format. A task maps to one `build()` call: one program from a flat list of sources. Make and CMake projects have many targets (libraries, tests, generated files, custom commands). Use an internal **build graph** (nodes: compile, archive, link, copy, run) and treat `tasks.json` export as a convenience for the simple single-program case.
 - The key trick is **classify-and-map instead of execute**. Ninja files, Make dry-run output and CMake custom commands are lists of shell lines. Most lines are `cc`/`c++`/`ar`/`ranlib`/`mkdir`/`cp`/`rm`/`cmake -E`/`python`. Recognise the tool, map it to what we already have (`toolchain.build` pieces, `llvm-ar`, TS builtins, a wasm tool run by the host) and fail loudly on anything else. This needs a small shell parser, **not** a guest process model.
@@ -39,7 +40,7 @@ Sizes: S = days, M = 1-3 weeks, L = 1-3 months, XL = research-grade/open-ended (
 
 ### GNU Make
 Routes, best first:
-- **M1: real GNU make as `make.wasm`, dry-run + classify-and-map (S-M port, M integration).** GNU make is plain C and autotools-built (cross-compile `--host=wasm32-wasi`) [memory]. Run `make -n -B -k` (print recipes, do not run them) to get the full ordered command list with exact GNU semantics for variables, functions, pattern rules, includes, conditionals, VPATH, secondary expansion. Feed the lines through the classifier. Only needs spawn for `$(shell ...)` and recursive `$(MAKE)` lines (executed even under `-n`); route both to the executor through a minimal hook, or stub `$(shell)` for a short list of commands (`uname`, `pwd`, `ls`, `pkg-config` -> "not found") in the first cut. Parallelism: execute consecutive independent compile lines concurrently (no line consumes another's `-o`).
+- **M1: real GNU make as `make.wasm`, dry-run + classify-and-map (port size unknown until a timebox is spent; M integration).** GNU make is plain C and autotools-built (cross-compile `--host=wasm32-wasi`) [memory]; `job.c` uses `fork`/`posix_spawn`, signals and `getloadavg`, which must be stubbed. Run `make -n -B -k` (print recipes, do not run them) to get the full ordered command list with exact GNU semantics for variables, functions, pattern rules, includes, conditionals, VPATH, secondary expansion. Feed the lines through the classifier. Only needs spawn for `$(shell ...)` and recursive `$(MAKE)` lines (executed even under `-n`); route both to the executor through a minimal hook, or stub `$(shell)` for a short list of commands (`uname`, `pwd`, `ls`, `pkg-config` -> "not found") in the first cut. Parallelism: plain `-n` yields an ordered list without target attribution, so check whether `-n -B --trace` (target per recipe) or `-p` (rule database) gives real dependency edges **[spike]**; fall back to running consecutive compile lines concurrently only when no line consumes another's `-o`.
   - Weak spots: dry-run cannot know about files that recipes generate and later `include` (needs a second pass: run, re-run `-n`), and `$(shell)` heavy Makefiles; autotools projects are out (see below).
 - **M2: real `make` running recipes through the spawn hook (L).** Needs MVP E (spawn + `/bin/sh`). GNU make 4.3+ uses `posix_spawn` where available and has pipe or fifo jobserver styles [memory, verify in NEWS]; run `-j1` inside and let the executor parallelise. Exact semantics for free, but strictly dependent on the process model and shell.
 - **M3: mini-make in TypeScript (M for common subset, then a long tail).** No wasm, no spawn, instant. Needs the GNU function set (~40 functions), pattern/static/implicit rules, `include`, conditionals, automatic variables, target-specific variables, `.PHONY`, order-only prerequisites, `$(shell)`. Accurate enough for student and small-library Makefiles, silently wrong on exotic ones (the risk is subtle mis-evaluation, so unknown functions/directives must throw). The 2026-10-07 note in `notes.md` leans this way. Choose M3 only if the `make.wasm` port proves harder than expected; the dry-run route gets exactness for less code. Google's `kati` (GNU-make-compatible Makefile -> Ninja converter, C++) is an existing example of the same idea [memory]; it spawns `/bin/sh` for `$(shell)`, so it would need the same stubs.
@@ -79,7 +80,7 @@ Routes:
 
 ### Wasmer SDK / WASIX as a shortcut
 - Wasmer's JS SDK runs WASIX packages (bash, coreutils, python) in the browser with threads, subprocesses and `fork` implemented on Workers; browsers need cross-origin isolation [search]. It would supply the whole process model plus a shell and Python.
-- Cons: a second runtime and ABI (WASIX, not preview 1) next to our own host; our `clang.wasm` and its sysroot use WASI preview 1 and the fork's spawn hook, so the two worlds need a bridge; packages come from Wasmer's registry (CORS, supply chain, and offline use to be checked); no evidence found that it runs inside the VS Code web extension host Worker. **[spike, S-M]** only if the in-house process model (MVP E) looks too costly. Treat as a fallback and as a design reference (it shows `fork` is done by re-instantiating and copying memory, which is research-grade here).
+- Cons: a second runtime and ABI (WASIX, not preview 1) next to our own host; our `clang.wasm` and its sysroot use WASI preview 1 and the fork's spawn hook, so the two worlds need a bridge; packages come from Wasmer's registry (CORS, supply chain, and offline use to be checked); no evidence found that it runs inside the VS Code web extension host Worker. **[spike, S-M]** only if the in-house process model (MVP E) looks too costly. Treat as a fallback and as a design reference (WASIX's `fork` is reportedly implemented by copying instance memory [memory]; that would be research-grade here).
 
 ## Honestly infeasible, or deliberately out
 
@@ -98,7 +99,7 @@ Each stage ships on its own and each later stage reuses the earlier ones.
 1. Build graph IR and executor over the existing compile/link path (multi-target: compile, `llvm-ar`, link with libraries, copy, run).
 2. Command classifier and mini-shell.
 3. Front ends: CMake File API reply, `build.ninja`, and the existing `compile_commands.json` (target picker replaced by a real target graph; "all", a chosen target, or a test target with its dependencies).
-4. "Export tasks.json" command for single-program graphs.
+4. "Export tasks.json and launch.json" command: one `vscwclang` task per target and one `launch.json` configuration per executable or test target (the link graph itself stays in the graph; tasks reference targets by name or `dependsOn`).
 5. Gate: build fmt `format-test`, Catch2 SelfTest and a GoogleTest project from a pre-generated CMake build dir; then Lua and SQLite from a `build.ninja` converted by hand.
 
 **MVP A+: tests (M).** Headless runner, Testing API discovery/run/debug for GoogleTest, Catch2, doctest and CTest files; dependency overrides for FetchContent'd test frameworks.
@@ -122,3 +123,15 @@ The user asked for optional features of this extension, which supersedes design.
 3. Testing API integration: wanted (recommended) or keep as a non-goal?
 4. Is a TS shell with a short builtin list acceptable (recommended), or should a wasm userland pack (uutils) be planned from the start?
 5. Budget for a Wasmer-SDK spike as insurance against the process-model cost.
+
+## Sources
+
+- samurai: https://github.com/michaelforney/samurai
+- CPython WASI notes (3.13): https://raw.githubusercontent.com/python/cpython/3.13/Tools/wasm/README.md
+- CMake `Platform/WASI.cmake`: https://gitlab.kitware.com/cmake/cmake/-/raw/master/Modules/Platform/WASI.cmake
+- libuv WASM discussion: https://github.com/libuv/libuv/discussions/4281
+- Wasmer JS SDK docs: https://docs.wasmer.io/runtime/js and https://wasmer.io/posts/introducing-the-wasmer-js-sdk
+- uutils WASI CI and playground: https://docs.rs/crate/coreutils/0.11.0/source/.github/workflows/wasi.yml and https://uutils.github.io/blog/2025-04-playground
+- `CMakeForceCompiler` (deprecated): https://fuchsia.googlesource.com/third_party/cmake/+/refs/heads/main/Modules/CMakeForceCompiler.cmake
+- wasi-sdk CMake toolchain files: https://github.com/WebAssembly/wasi-sdk
+- Local: `llvm-project/documents/js-host-contract.md`, this repo's `design.md`, `compat_survey.md`, `notes.md`
