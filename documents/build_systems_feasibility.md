@@ -116,12 +116,14 @@ Each stage ships on its own and each later stage reuses the earlier ones.
 
 Decided by the owner: Make/CMake/CPython live in this extension as optional wrappers around a self-sufficient core (clang, lld, lldb reactor, clangd), loosely coupled and not tightly integrated. design.md "Scope" records this. Why not a separate extension: it would need an exported API into the toolchain host (none exists), and the link graph cannot travel through `compile_commands.json`. Proposal: ship them as optional downloadable packs (`buildsystems` pack with `make.wasm`, later `cmake.wasm` + Modules, `python.wasm` + stdlib) fetched on first use through the existing manifest/pin machinery, so the base download does not grow. The wrappers call only the core's public build/run entry points (the build graph executor is such an entry point), and a thin `compile_commands.json` export keeps other extensions and clangd working.
 
-## Decisions needed from the owner
+## Decisions from the owner
 
-2. Order: MVP A first (recommended), or start with a CMake/CPython spike to retire the biggest unknowns early?
-3. Testing API integration: wanted (recommended) or keep as a non-goal?
-4. Is a TS shell with a short builtin list acceptable (recommended), or should a wasm userland pack (uutils) be planned from the start?
-5. Budget for a Wasmer-SDK spike as insurance against the process-model cost.
+- Order: MVP A first.
+- Testing API: wanted eventually (goal: open, build and test GitHub repos), but running tests comes after CMake works.
+- Shell: TS mini-shell with a short builtin list, just enough to run CMake/compile/test several GitHub repos; no uutils pack for now.
+
+Open:
+- Budget for a Wasmer-SDK spike as insurance against the process-model cost.
 
 ## Sources
 
