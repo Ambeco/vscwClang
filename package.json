@@ -239,6 +239,26 @@
           "default": [],
           "markdownDescription": "Arguments for `vscwClang: Build and Run`. A `launch.json` configuration (`cppdbg`, `cppvsdbg`, `lldb`, `codelldb`) that has `args` takes precedence. `vscwClang: Build and Run with Arguments...` asks each time instead (pre-filled with the last answer).  `${workspaceFolder}` (as `/workspace`), `${workspaceFolderBasename}`, `${file}` and the other file variables are expanded; `${env:}`, `${command:}` and `${input:}` are not supported."
         },
+        "vscwclang.run.host": {
+          "scope": "resource",
+          "type": "string",
+          "enum": [
+            "worker",
+            "wasmer"
+          ],
+          "enumDescriptions": [
+            "Run programs on the extension's own WebAssembly host (the default; also used by Debug).",
+            "Run programs in a Wasmer (WASIX) sandbox. Needs `vscwclang.wasmerSdkUrl`. The workspace is copied into the sandbox when the program starts and changed files are copied back when it ends; `/tmp` is the sandbox's own and there is no persistent `/home/user`. Experimental."
+          ],
+          "default": "worker",
+          "markdownDescription": "Which host runs Build and Run's program. Debug always uses the extension's own host."
+        },
+        "vscwclang.wasmerSdkUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "markdownDescription": "URL of a folder serving `@wasmer/sdk` (its `dist/` and `pkg/` folders), used when `vscwclang.run.host` is `wasmer`. The host must send CORS and `Cross-Origin-Resource-Policy: cross-origin` headers. Experimental."
+        },
         "vscwclang.run.env": {
           "scope": "resource",
           "type": "object",

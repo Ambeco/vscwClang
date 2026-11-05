@@ -92,6 +92,11 @@ export function runArgsSetting(): string[] {
 	return resolveSettingStrings(projectSettings('vscwclang').get<string[]>('run.args', []), 'vscwclang.run.args');
 }
 
+/** Which host runs the built program (`vscwclang.run.host`); Debug always uses the Worker host. */
+export function runHostSetting(): 'worker' | 'wasmer' {
+	return projectSettings('vscwclang').get<string>('run.host', 'worker') === 'wasmer' ? 'wasmer' : 'worker';
+}
+
 /** `vscwclang.run.env` with variables expanded in its values (`null`, which removes a default, is kept). */
 export function runEnvSetting(): Record<string, string | null> {
 	const env = projectSettings('vscwclang').get<Record<string, string | null>>('run.env', {});

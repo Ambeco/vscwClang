@@ -9,6 +9,8 @@ src/web/
   host/
     sharedMemory.ts
       createSharedMemory       # imported shared memory of a wasi-threads module
+    workspaceSync.ts
+      skipDefaultFolders       # .git, node_modules, .vscwclang
   projectConfig.ts
     projectSettings            # settings read per workspace folder
     isUserSet                  # user value vs extension default

@@ -3,6 +3,7 @@
 - Node tests find the toolchain via `src/web/test/artifacts.ts`: `VSCWCLANG_ARTIFACTS`, else `./llvm-artifacts`, else the newest `../../llvm-project/release/<tag>`. The browser suite needs `llvm-artifacts/dist`, which can be a junction to the publish repo's `dist`.
 - `npm run test-node` runs the fast, vscode-free tests (`*.node.test.ts`). `npm test` runs the in-browser suite under `@vscode/test-web`: it opens a visible Chromium window, needs `llvm-artifacts/` locally, and builds `llvm-artifacts/dist` first if it is missing. Port 3000 must be free.
 - `npm run package-web` makes the production bundle; `npx @vscode/vsce package --no-dependencies` makes the VSIX. The extension is browser-only and cannot run on desktop VS Code (see `documents/notes.md`).
+- Wasmer host tests: `npm install @wasmer/sdk` in a scratch folder outside the repo, set `VSCWCLANG_WASMER_SDK=<that folder>` for the real-SDK node tests, and copy its `dist/`, `pkg/` and `LICENSE` to `llvm-artifacts/wasmer-sdk/` for `wasmerHost.test.ts` (both skip when missing). `npm test`'s `pretest` needs `llvm-artifacts/MANIFEST`; otherwise run `npm run compile-web` (check it really rebuilt) and `npx vscode-test-web --browserType=chromium --coi --extensionDevelopmentPath=. --extensionTestsPath=dist/web/test/suite/extensionTests.js src/web/test/fixtures/workspace`.
 - Try a local build on vscode.dev: serve the repo with `npx serve --cors -l 5000`, then "Developer: Install Extension from Location..." (reload the tab after rebuilding).
 
 # Compiler experiments
