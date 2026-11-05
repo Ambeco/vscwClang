@@ -22,7 +22,7 @@ Sizes: S = days, M = 1-3 weeks, L = 1-3 months, XL = research-grade/open-ended (
 - `compile_commands.json` reader with per-entry flags and a CMake target picker that cannot link a target's library dependencies (fmt `format-test`). [checked: design.md "Project model", compat_survey.md (c)]
 - Worker host with WASI preview 1, shared-memory threads, sync RPC to the extension host, `llvm-ar` shipped. No processes, pipes, `/bin/sh`, `/dev/null`; `system()`/`popen` are link errors. [checked: design.md "Three environments"]
 - The fork's spawn hook: the wasm exports `__wasi_shim_set_spawn_hook`; the host installs a table-indirect callback that blocks the caller (`Atomics.wait`) while a child wasm instance runs in a new Worker. Works under Node; "a real extension should follow the same shape with a browser Worker". Used for `cc1`/`wasm-ld`; not yet wired in this extension. [checked: llvm-project `documents/js-host-contract.md`]
-- Design stance today: Make/CMake/Meson belong in a *separate* extension that emits `compile_commands.json` (Plan A); a CMake subset inside this extension is Plan B. [checked: design.md "Scope"] This document argues the link graph cannot be expressed in `compile_commands.json`, so the integration must be richer than Plan A assumed; see "Where it lives".
+- Design stance: Make/CMake/CPython are optional wrappers inside this extension around a self-sufficient core (owner decision; design.md "Scope"). This document argues the link graph cannot be expressed in `compile_commands.json`, so the integration is richer than the old separate-extension plan assumed; see "Where it lives".
 
 ## Shared building blocks
 
@@ -114,11 +114,10 @@ Each stage ships on its own and each later stage reuses the earlier ones.
 
 ## Where it lives
 
-The user asked for optional features of this extension, which supersedes design.md's "separate extension" Plan A for two reasons: a separate extension would need an exported API into the toolchain host (none exists), and the link graph cannot travel through `compile_commands.json`. Proposal: ship build-system support as optional downloadable packs (`buildsystems` pack with `make.wasm`, later `cmake.wasm` + Modules, `python.wasm` + stdlib) fetched on first use through the existing manifest/pin machinery, so the base download does not grow. If the user agrees, update design.md "Scope" and the Plan A/Plan B text, and keep a thin `compile_commands.json` export so other extensions and clangd still work.
+Decided by the owner: Make/CMake/CPython live in this extension as optional wrappers around a self-sufficient core (clang, lld, lldb reactor, clangd), loosely coupled and not tightly integrated. design.md "Scope" records this. Why not a separate extension: it would need an exported API into the toolchain host (none exists), and the link graph cannot travel through `compile_commands.json`. Proposal: ship them as optional downloadable packs (`buildsystems` pack with `make.wasm`, later `cmake.wasm` + Modules, `python.wasm` + stdlib) fetched on first use through the existing manifest/pin machinery, so the base download does not grow. The wrappers call only the core's public build/run entry points (the build graph executor is such an entry point), and a thin `compile_commands.json` export keeps other extensions and clangd working.
 
 ## Decisions needed from the owner
 
-1. Confirm the stance above (in-extension optional packs instead of a separate extension).
 2. Order: MVP A first (recommended), or start with a CMake/CPython spike to retire the biggest unknowns early?
 3. Testing API integration: wanted (recommended) or keep as a non-goal?
 4. Is a TS shell with a short builtin list acceptable (recommended), or should a wasm userland pack (uutils) be planned from the start?
