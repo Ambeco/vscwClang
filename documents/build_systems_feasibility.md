@@ -82,6 +82,13 @@ Routes:
 - Wasmer's JS SDK runs WASIX packages (bash, coreutils, python) in the browser with threads, subprocesses and `fork` implemented on Workers; browsers need cross-origin isolation [search]. It would supply the whole process model plus a shell and Python.
 - Cons: a second runtime and ABI (WASIX, not preview 1) next to our own host; our `clang.wasm` and its sysroot use WASI preview 1 and the fork's spawn hook, so the two worlds need a bridge; packages come from Wasmer's registry (CORS, supply chain, and offline use to be checked); no evidence found that it runs inside the VS Code web extension host Worker. **[spike, S-M]** only if the in-house process model (MVP E) looks too costly. Treat as a fallback and as a design reference (WASIX's `fork` is reportedly implemented by copying instance memory [memory]; that would be research-grade here).
 
+#### Spike result (2026-11-05, @wasmer/sdk 0.19.1, @vscode/test-web localhost, headless Chromium)
+- **Works in the VS Code web extension host Worker** (cross-origin isolated, as with `--coi`): `wasmer/bash` (`echo`, pipes, `cat`, `ls | wc -l`), `python/python@=3.13.20` with a real `subprocess.run(['echo',...])`, and spawning of 6 nested Workers. Packages download from the Wasmer registry at runtime (first sandbox ~7 s, ~2.5 s once cached).
+- **Our debug stub runs unchanged under WASIX.** `progstub.wasm` (preview 1 module, WASI imports only) loaded with `wasmer.packages.load(bytes)` and run with piped stdin/stderr: the `hello` frame arrived on stderr, `vscw into` produced a `stop` frame, `vscw mem` returned the bytes, `vscw go` ran it to its exit code (11). The debug channel is plain stdio, so a `DebuggeeSession` over a Wasmer process is plausible. Not tried: real breakpoints with a DWARF-matched binary, the DAP adapter on top, threads.
+- **Filesystem:** each sandbox has its own in-memory FS. The host reads and writes it with `sandbox.fs` (`readFile/writeFile/readDir/stat/mkdir/remove/rename`) and seeds it with `files:`. Guest and host see each other's writes. It is NOT `vscode.workspace.fs`; the workspace must be copied in and changed files copied back (or synced) per run. Not tried: the SDK's `host-filesystem` module.
+- **Required workaround:** VS Code's extension-host `Worker` patch wraps every worker URL in a classic `importScripts(url)` blob, which fails for the SDK's module worker (`Module scripts don't support importScripts()`). Fix used: replace `self.Worker` with a subclass that, for `{type:'module'}`, makes a classic blob whose body is `import("<url>")` (buffering `message` events until the import resolves) and passes `type:'classic'`. The probe lived outside the repo and was deleted; recreate from this paragraph.
+- **Not verified:** real vscode.dev or github.dev (extension CDN origin and CORS for importing the SDK ESM and wasm; the registry's CORS from that origin), cost of bundling the SDK (`import.meta.url` loading of `pkg/*.wasm` and `browser-worker.js` means it cannot be esbuilt into one file), offline use (package fetch is from `registry.wasmer.io`), running our `clang.wasm`/`lld.wasm` under it, and performance versus our own host. Packages and a third-party runtime on the critical path conflict with the "nothing installed, no servers" north star, so treat it as an optional pack only.
+
 ## Honestly infeasible, or deliberately out
 
 - General `fork()` (no cloneable call stack). `fork`+`exec` inside specific programs can be mapped to spawn.
@@ -123,7 +130,7 @@ Decided by the owner: Make/CMake/CPython live in this extension as optional wrap
 - Shell: TS mini-shell with a short builtin list, just enough to run CMake/compile/test several GitHub repos; no uutils pack for now.
 
 Open:
-- Budget for a Wasmer-SDK spike as insurance against the process-model cost.
+- Next Wasmer-SDK steps (first spike passed, see above): check on real vscode.dev, then a DAP session over a Wasmer process.
 
 ## Sources
 
