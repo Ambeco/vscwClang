@@ -102,6 +102,59 @@ suite('wasmerProcess (fake SDK)', () => {
 		assert.strictEqual(started, false);
 	});
 
+	/** A wasmer whose spawn() waits for `release`, and whose process blocks in wait() until terminated. */
+	function gatedWasmer(gate: Promise<void>, hooks: { onTerminate?: () => void; onWrite?: (text: string) => Promise<void> } = {}): WasmerLike {
+		let stop!: (r: { exitCode: number; reason: string }) => void;
+		const stopped = new Promise<{ exitCode: number; reason: string }>(r => { stop = r; });
+		const process: WasmerProcessLike = {
+			stdin: { write: async d => { await hooks.onWrite?.(decoder.decode(d)); }, close: async () => undefined },
+			stdout: asyncChunks(), stderr: asyncChunks(),
+			wait: () => stopped,
+			terminate: async () => { hooks.onTerminate?.(); stop({ exitCode: 137, reason: 'terminated' }); },
+		};
+		return {
+			packages: { load: async () => ({ commands: ['main'], entrypoint: 'main', command: (n: string) => n }) },
+			createSandbox: async () => ({ ...fakeSandbox(() => process, new Map()), command: () => ({ spawn: async () => { await gate; return process; } }) }),
+		};
+	}
+
+	test('terminate() while spawn is still pending stops the process once it exists, instead of hanging', async () => {
+		let release!: () => void;
+		let terminations = 0;
+		const p = createWasmerProcess(gatedWasmer(new Promise<void>(r => { release = r; }), { onTerminate: () => { terminations++; } }), base);
+		const running = p.run();
+		await new Promise(r => setTimeout(r, 20));
+		await p.terminate();
+		release();
+		assert.strictEqual(await Promise.race([running, new Promise<string>(r => setTimeout(() => r('hung'), 2000))]), 130);
+		assert.strictEqual(terminations, 1);
+	});
+
+	test('input queued before the start and typed while it is flushed arrives in order', async () => {
+		const received: string[] = [];
+		let p!: ReturnType<typeof createWasmerProcess>;
+		let typedMidFlush = false;
+		const wasmer = gatedWasmer(Promise.resolve(), {
+			onWrite: async text => {
+				received.push(text);
+				if (!typedMidFlush) { typedMidFlush = true; void p.stdin.write('c\n'); }
+				await new Promise(r => setTimeout(r, 10));
+				if (text === 'c\n') { void p.terminate(); }
+			},
+		});
+		p = createWasmerProcess(wasmer, base);
+		await p.stdin.write('a\n');
+		await p.stdin.write('b\n');
+		await p.run();
+		assert.deepStrictEqual(received, ['a\n', 'b\n', 'c\n']);
+	});
+
+	test('a timeout reason from the SDK is a failure that names the time limit, not an exit code', async () => {
+		const outcome = await createWasmerProcess(fakeWasmer({ reason: 'timeout', exitCode: 137 }), base).runToOutcome();
+		assert.strictEqual(outcome.kind, 'failed');
+		assert.match((outcome as { message: string }).message, /time limit/);
+	});
+
 	test('a terminated reason from the SDK is 130', async () => {
 		assert.strictEqual(await createWasmerProcess(fakeWasmer({ reason: 'terminated', exitCode: 137 }), base).run(), 130);
 	});

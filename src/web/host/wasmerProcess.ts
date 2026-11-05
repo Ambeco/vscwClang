@@ -129,12 +129,19 @@ export function createWasmerProcess(wasmer: WasmerLike, options: WasmerProcessOp
 				snapshot = await pushWorkspace(options.workspace.tree, tree, options.workspace.sync);
 			}
 			if (terminated) { return { kind: 'terminated' }; }
-			proc = await sandbox.command(pkg.command(pkg.entrypoint ?? pkg.commands[0]), options.args, { cwd: options.cwd, env: options.env }).spawn({ stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' });
-			for (const item of pendingInput.splice(0)) { await forward(item); }
-			const pumps = Promise.all([pump(proc.stdout, stdout), pump(proc.stderr, stderr)]);
+			const spawned = await sandbox.command(pkg.command(pkg.entrypoint ?? pkg.commands[0]), options.args, { cwd: options.cwd, env: options.env }).spawn({ stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' });
+			// `proc` is published only once the queue is empty, so a line typed meanwhile cannot overtake the queued
+			// ones; a terminate() before that point found no process to stop, hence the check after publishing.
+			for (let item = pendingInput.shift(); item !== undefined; item = pendingInput.shift()) {
+				if (item === 'end') { await spawned.stdin?.close(); } else { await spawned.stdin?.write(item); }
+			}
+			proc = spawned;
+			if (terminated) { await spawned.terminate().catch(() => undefined); }
+			const pumps = Promise.all([pump(spawned.stdout, stdout), pump(spawned.stderr, stderr)]);
 			let outcome: ProcessOutcome;
 			try {
-				const result = await proc.wait({ check: false });
+				const result = await spawned.wait({ check: false });
+				if (result.reason === 'timeout' && !terminated) { return { kind: 'failed', message: 'the Wasmer sandbox stopped the program at its time limit' }; }
 				outcome = result.reason === 'terminated' || terminated ? { kind: 'terminated' } : { kind: 'exit', code: result.exitCode };
 			} catch (e) {
 				const trap = wasmerTrapMessage(e);

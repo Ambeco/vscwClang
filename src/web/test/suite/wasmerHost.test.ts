@@ -77,7 +77,24 @@ suite('vscwClang Run on the Wasmer host (in browser)', function () {
 		assert.ok(ran.text.includes('[hello.wasm exited with code 3]'), ran.text);
 	});
 
-	test('typed lines are echoed and delivered to the program', async () => {
+	test('a line typed right after Run opens, while the sandbox is still starting, reaches the program', async () => {
+		let quit = false;
+		const ran = await runFixture('echo', [], {
+			onOpen: pty => { setTimeout(() => pty.handleInput!('hi\r'), 200); },
+			onOutput: (text, pty) => { if (!quit && text.includes('got: hi')) { quit = true; pty.handleInput!('quit\r'); } },
+		});
+		assert.strictEqual(ran.exitCode, 0);
+		assert.ok(ran.text.includes('got: hi'), ran.text);
+		assert.ok(ran.text.includes('bye'), ran.text);
+	});
+
+	test('Ctrl+C right after Run opens, while the sandbox is still starting, ends the run instead of hanging', async () => {
+		const ran = await runFixture('echo', [], { onOpen: pty => { setTimeout(() => pty.handleInput!('\u0003'), 300); } });
+		assert.strictEqual(ran.exitCode, 130);
+		assert.ok(ran.text.includes('[echo.wasm terminated]'), ran.text);
+	});
+
+	test('typed lines are echoed and delivered to a program that is already running', async () => {
 		let quit = false;
 		const ran = await runFixture('echo', [], {
 			onOpen: pty => { setTimeout(() => pty.handleInput!('hi\r'), 5000); },
