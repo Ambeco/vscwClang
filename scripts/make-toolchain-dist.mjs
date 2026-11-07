@@ -1,21 +1,20 @@
 // Builds the stripped, zipped, chunked, hashed toolchain layout the extension downloads (design.md "Distribution")
 // straight from the llvm-project build trees.
 //
-// usage: node scripts/make-toolchain-dist.mjs --release <packageReleaseDir> [--llvm <llvm-project>] [--dist <outDir>]
-//          [--mtdist <outDir>] [--tag <tag>] [--chunk-mib 16] [--pin] [--if-missing] [--no-pch]
+// usage: node scripts/make-toolchain-dist.mjs --release <packageReleaseDir> --mtdist <outDir> [--llvm <llvm-project>]
+//          [--tag <tag>] [--chunk-mib 16] [--pin] [--if-missing] [--no-pch]
 //   --release     output of llvm-project/wasi-tests/package_release.mjs (supplies sysroot/, resource/, compile-flags.json)
-//   --llvm        llvm-project checkout (default ../../llvm-project relative to this repo)
-//   --dist        single-threaded layout: build-single-threaded/bin/{clang,lld,llvm-ar}.wasm,
-//                 build-clangd-threads/bin/clangd.wasm,
-//                 build-lldb-single-threaded/bin/lldb-wasm-reactor.wasm
-//   --mtdist      multithreaded layout: build/bin/{clang,lld}.wasm, build-lldb/bin/lldb-wasm-reactor.wasm (imports
-//                 wasi.thread-spawn; the extension host runs its threads in Workers, see workerThreads.ts); llvm-ar is the
-//                 single-threaded build
-//   --pin         write the manifest SHA-256 and the jsDelivr baseUrl (@<tag>/<layout>) into src/web/toolchain/toolchainPin.ts;
-//                 the layout is --mtdist when given (what the extension runs), else --dist
-//   --if-missing  skip a layout whose <outDir>/manifest.json already exists
+//   --llvm        llvm-project checkout (default ../../llvm-project relative to this repo), or a staging folder with the same
+//                 bin paths. The shipped tools are the PGO builds (llvm-project/pgo/*-variant.bat), not the trees' own bat output,
+//                 so a release stages them into such a folder (see documents/notes.md "v24.0.11 release method").
+//   --mtdist      the only layout: build/bin/{clang,lld}.wasm, build-clangd-threads/bin/clangd.wasm,
+//                 build-lldb/bin/lldb-wasm-reactor.wasm (all import wasi.thread-spawn; the extension host runs their threads in
+//                 Workers, see workerThreads.ts) and build-single-threaded/bin/llvm-ar.wasm (llvm-ar spawns no threads)
+//   --pin         write the manifest SHA-256 and the jsDelivr baseUrl (@<tag>/mtdist) into src/web/toolchain/toolchainPin.ts
+//   --if-missing  skip the layout if <outDir>/manifest.json already exists
 //   --no-pch      skip the libc++ precompiled headers (a PCH per -std and -O level, each built by the layout's own clang.wasm, ~6 s each)
 // A payload larger than --chunk-mib is split into <name>.000, .001, ...; at most that size is served per file.
+// Zips embed timestamps, so every run changes every chunk hash even for identical content; keep the old zips for unchanged files.
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync, mkdtempSync, utimesSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -31,27 +30,23 @@ const flag = (name) => args.includes(name);
 const option = (name, fallback) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : fallback; };
 const release = option('--release');
 const llvm = resolve(option('--llvm', join(import.meta.dirname, '..', '..', '..', 'llvm-project')));
+if (args.includes('--dist')) {
+	throw new Error('--dist (the single-threaded layout) was removed: the extension only runs the multithreaded layout. Did you mean --mtdist <outDir>?');
+}
 const layouts = [
-	{ outDir: option('--dist'), name: 'dist', pchSlices: ['wasm32-wasip1'], driverFlags: [], binaries: [
-		['clang.wasm', 'build-single-threaded/bin/clang.wasm'],
-		['lld.wasm', 'build-single-threaded/bin/lld.wasm'],
-		['clangd.wasm', 'build-clangd-threads/bin/clangd.wasm'], // threaded in both layouts: real background indexing
-		['lldb-wasm-reactor.wasm', 'build-lldb-single-threaded/bin/lldb-wasm-reactor.wasm'],
-		['llvm-ar.wasm', 'build-single-threaded/bin/llvm-ar.wasm'],
-	] },
 	// PCHs come from this layout's own (threaded) clang.wasm, one set per slice, since a PCH must come from the clang that uses it.
 	// -fintegrated-cc1: the threaded driver spawns cc1 as a subprocess otherwise, which clang-wasi.mjs does not provide.
 	{ outDir: option('--mtdist'), name: 'mtdist', pchSlices: ['wasm32-wasip1', 'wasm32-wasip1-threads'], driverFlags: ['-fintegrated-cc1'], binaries: [
 		['clang.wasm', 'build/bin/clang.wasm'],
 		['lld.wasm', 'build/bin/lld.wasm'],
-		['clangd.wasm', 'build-clangd-threads/bin/clangd.wasm'], // threaded in both layouts: real background indexing
+		['clangd.wasm', 'build-clangd-threads/bin/clangd.wasm'],
 		['lldb-wasm-reactor.wasm', 'build-lldb/bin/lldb-wasm-reactor.wasm'],
 		['llvm-ar.wasm', 'build-single-threaded/bin/llvm-ar.wasm'], // no threaded variant: llvm-ar spawns no threads
 	] },
 ].filter((l) => l.outDir);
 if (!release || layouts.length === 0) {
-	console.error('usage: node scripts/make-toolchain-dist.mjs --release <packageReleaseDir> [--llvm <llvm-project>] [--dist <outDir>] [--mtdist <outDir>] [--tag <tag>] [--chunk-mib 16] [--pin] [--if-missing] [--no-pch]\n' +
-		'(--release is the output of llvm-project/wasi-tests/package_release.mjs; pass at least one of --dist/--mtdist)');
+	console.error('usage: node scripts/make-toolchain-dist.mjs --release <packageReleaseDir> --mtdist <outDir> [--llvm <llvm-project>] [--tag <tag>] [--chunk-mib 16] [--pin] [--if-missing] [--no-pch]\n' +
+		'(--release is the output of llvm-project/wasi-tests/package_release.mjs)');
 	process.exit(1);
 }
 const chunkBytes = Number(option('--chunk-mib', '16')) * 1024 * 1024;
@@ -136,7 +131,6 @@ async function buildPchs(clangBytes, layout, slice, driverFlags) {
 	}
 }
 
-const pinLayout = layouts.some((l) => l.name === 'mtdist') ? 'mtdist' : 'dist';
 for (const { outDir, name: layout, binaries, pchSlices, driverFlags } of layouts) {
 	if (flag('--if-missing') && existsSync(join(outDir, 'manifest.json'))) {
 		console.log(`${outDir}/manifest.json exists; skipping ${layout}.`);
@@ -182,7 +176,7 @@ for (const { outDir, name: layout, binaries, pchSlices, driverFlags } of layouts
 	const manifestSha = sha256(Buffer.from(manifestText));
 	console.log(`[${layout}] manifest.json (tag ${tag}) sha256 ${manifestSha}`);
 
-	if (flag('--pin') && layout === pinLayout) {
+	if (flag('--pin') && layout === 'mtdist') {
 		const pinFile = 'src/web/toolchain/toolchainPin.ts';
 		const text = readFileSync(pinFile, 'utf8');
 		const updated = text

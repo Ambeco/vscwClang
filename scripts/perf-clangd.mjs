@@ -1,7 +1,7 @@
 // Times clangd's cold preamble and AST build per file under Node WASI with the shipped threaded clangd.wasm, via
 // `clangd --check=<file>` (it also probes completion/hover, whose timings are logged but not summarized here).
 //   node scripts/perf-clangd.mjs <projectsDir> <name> [--only regex] [--limit N] [--repeat 1]
-// Needs VSCWCLANG_ARTIFACTS (sysroot, resource) and clangd.wasm in $VSCWCLANG_BENCH_CACHE/clangd (extract dist/clangd.zip there).
+// Needs VSCWCLANG_ARTIFACTS (sysroot, resource) and clangd.wasm in $VSCWCLANG_BENCH_CACHE/clangd (extract mtdist/clangd.zip there).
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';

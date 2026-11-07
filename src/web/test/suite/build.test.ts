@@ -40,7 +40,7 @@ suite('vscwClang build (in browser)', function () {
 		const extension = vscode.extensions.getExtension('undefined_publisher.vscwclang') ?? vscode.extensions.all.find(e => e.id.endsWith('.vscwclang'));
 		assert.ok(extension, 'vscwclang extension is not loaded');
 		// The toolchain is served over HTTP from the extension dir (`npm run toolchain-dist`) and downloaded into a fresh storage dir.
-		toolchainUrl = `${extension.extensionUri.toString().replace(/\/$/, '')}/llvm-artifacts/dist`;
+		toolchainUrl = `${extension.extensionUri.toString().replace(/\/$/, '')}/llvm-artifacts/mtdist`;
 		await vscode.workspace.getConfiguration('vscwclang').update('toolchainUrl', toolchainUrl, vscode.ConfigurationTarget.Global);
 		context = { extensionUri: extension.extensionUri, globalStorageUri: vscode.Uri.joinPath(dir, 'storage') } as vscode.ExtensionContext;
 	});

@@ -7,7 +7,7 @@
 // wasm scan and .debug_line parse on the linked program.
 // Per unit it records the median/min/max of --repeat compiles (PCH on and off for C++), then optionally links the
 // objects of the selected units. Needs VSCWCLANG_ARTIFACTS (or the newest ../../llvm-project/release/<tag>) and
-// llvm-artifacts/dist for the PCH zip. Use Windows-style paths (C:/...) for --out and <projectsDir>.
+// llvm-artifacts/mtdist for the PCH zip. Use Windows-style paths (C:/...) for --out and <projectsDir>.
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync, copyFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -53,7 +53,7 @@ function shipped() {
 	if (!existsSync(join(base, 'pch', file)) || !existsSync(join(base, 'sysroot', 'vscwclang', 'pch.h'))) {
 		mkdirSync(join(base, 'pch'), { recursive: true });
 		const py = 'import sys,zipfile;[zipfile.ZipFile(sys.argv[1+2*i]).extractall(sys.argv[2+2*i]) for i in range(2)]';
-		execFileSync('python', ['-c', py, join(root, 'llvm-artifacts', 'dist', 'sysroot.zip'), base, join(root, 'llvm-artifacts', 'dist', 'pch-gnupp17-threads.zip'), join(base, 'pch')]);
+		execFileSync('python', ['-c', py, join(root, 'llvm-artifacts', 'mtdist', 'sysroot.zip'), base, join(root, 'llvm-artifacts', 'mtdist', 'pch-gnupp17-threads.zip'), join(base, 'pch')]);
 	}
 	return { sysroot: join(base, 'sysroot'), pchDir: join(base, 'pch'), file };
 }

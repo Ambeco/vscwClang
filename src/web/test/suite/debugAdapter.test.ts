@@ -35,7 +35,7 @@ suite('vscwClang debug adapter (in browser)', function () {
 		dir = vscode.Uri.joinPath(folder, 'debug-test');
 		const extension = vscode.extensions.all.find(e => e.id.endsWith('.vscwclang'));
 		assert.ok(extension, 'vscwclang extension is not loaded');
-		await vscode.workspace.getConfiguration('vscwclang').update('toolchainUrl', `${extension.extensionUri.toString().replace(/\/$/, '')}/llvm-artifacts/dist`, vscode.ConfigurationTarget.Global);
+		await vscode.workspace.getConfiguration('vscwclang').update('toolchainUrl', `${extension.extensionUri.toString().replace(/\/$/, '')}/llvm-artifacts/mtdist`, vscode.ConfigurationTarget.Global);
 		context = { extensionUri: extension.extensionUri, globalStorageUri: vscode.Uri.joinPath(dir, 'storage') } as vscode.ExtensionContext;
 		await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, 'main.cpp'), new TextEncoder().encode(SOURCE));
 	});

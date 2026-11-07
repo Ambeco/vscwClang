@@ -14,7 +14,7 @@ import { sharedMemoryLimits } from '../../host/sharedMemory';
  * one-shot `run-to-completion` model `build()`/`runProgram()` use) carry a real LSP session, and does clangd's own
  * background indexer (real wasi-threads Workers) make closed files' symbols resolvable from other files.
  *
- * clangd.wasm comes from the toolchain at `llvm-artifacts/dist` (published from the fork's `build-clangd-threads`
+ * clangd.wasm comes from the toolchain at `llvm-artifacts/mtdist` (published from the fork's `build-clangd-threads`
  * by `scripts/make-toolchain-dist.mjs`); the suite skips when that directory is missing.
  *
  * Needs a workspace folder and --coi (see the `test` script in package.json).
@@ -49,7 +49,7 @@ suite('vscwClang clangd (in browser)', function () {
 		await vscode.workspace.fs.createDirectory(shardDir);
 		const extension = vscode.extensions.getExtension('undefined_publisher.vscwclang') ?? vscode.extensions.all.find(e => e.id.endsWith('.vscwclang'));
 		assert.ok(extension, 'vscwclang extension is not loaded');
-		const toolchainUrl = `${extension.extensionUri.toString().replace(/\/$/, '')}/llvm-artifacts/dist`;
+		const toolchainUrl = `${extension.extensionUri.toString().replace(/\/$/, '')}/llvm-artifacts/mtdist`;
 		await vscode.workspace.getConfiguration('vscwclang').update('toolchainUrl', toolchainUrl, vscode.ConfigurationTarget.Global);
 		context = { extensionUri: extension.extensionUri, globalStorageUri: vscode.Uri.joinPath(dir, 'storage') } as vscode.ExtensionContext;
 		const toolchain = getToolchainStore(context, log);

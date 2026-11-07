@@ -1,9 +1,9 @@
-// Serves a toolchain dist folder (llvm-artifacts/dist) with the CORS and CORP headers vscode.dev's COEP needs, and logs
+// Serves a toolchain dist folder (llvm-artifacts/mtdist) with the CORS and CORP headers vscode.dev's COEP needs, and logs
 // each requested path. Set vscwclang.toolchainUrl to http://localhost:5001 to test local binaries before publishing.
 //
-//   node scripts/serve-dist.cjs llvm-artifacts/dist [--slow]    # --slow: ~2.5 MB/s, to catch the download Cancel button
+//   node scripts/serve-dist.cjs llvm-artifacts/mtdist [--slow]    # --slow: ~2.5 MB/s, to catch the download Cancel button
 const http = require('http'), fs = require('fs'), path = require('path');
-const root = path.resolve(process.argv[2] || 'llvm-artifacts/dist');
+const root = path.resolve(process.argv[2] || 'llvm-artifacts/mtdist');
 const slow = process.argv.includes('--slow');
 http.createServer((q, r) => {
   console.log(q.url);
