@@ -251,8 +251,8 @@ suite('vscwClang debug adapter (in browser)', function () {
 		assert.strictEqual((await client.event('exited')).body.exitCode, 0);
 	});
 
-	// Skipped: any `throw` in a debug build ends in `unreachable` (exit 139) because `-fsanitize-coverage=...,no-prune` breaks
-	// wasm EH; a fork compiler bug (remaining_work.md "Debug build breaks C++ exceptions"). Un-skip once fixed.
+	// Skipped until the toolchain has the fork fix: a `throw` in a debug build ends in `unreachable` (exit 139) because guard calls in EH pads lack
+	// the funclet bundle (remaining_work.md "Debug build breaks C++ exceptions").
 	test.skip('debugs a program that throws and catches: a breakpoint in the handler stops, and the run ends normally', async () => {
 		const nl = String.fromCharCode(10);
 		await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, 'throws.cpp'), new TextEncoder().encode([

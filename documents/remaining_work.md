@@ -106,7 +106,7 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Remaining gaps:
 - Open: traps as stopped states need the custom runner. Pause and live breakpoint edits (shared memory) work on vscode.dev; a non-threaded debug build still queues edits to the next stop. The debug terminal has no end-of-file key and no Ctrl+C.
 - Open: the browser test for a program that throws and catches (`debugAdapter.test.ts`, currently `test.skip`) needs the compiler fix in "Debug build breaks C++ exceptions".
 
-- **Debug build breaks C++ exceptions (fork compiler bug):** any `throw` in a program built with `-fsanitize-coverage=trace-pc-guard,no-prune` + `-fwasm-exceptions` ends in `unreachable` (exit 139), with or without breakpoints. Reproduced in plain Node WASI: `-O0 -g` alone works, `trace-pc-guard` without `no-prune` works, `no-prune` fails at -O0 and -O1. Suspect a guard inserted into an EH pad / cleanup block (`llvm/lib/Transforms/Instrumentation/SanitizerCoverage.cpp` `shouldInstrumentBlock`); fix in the `llvm-project` fork, republish a toolchain, then un-skip the test.
+- **Debug build breaks C++ exceptions:** fixed in the `llvm-project` fork (`SanitizerCoverage.cpp` adds the `funclet` bundle to guard calls in EH pads), verified in Node on the MinSizeRel `build/bin/clang.wasm`. Still to do: rebuild the PGO `clang.wasm` (`pgo/*-variant.bat`), publish a new tag, rebuild the debug fixtures, then un-skip the throw/catch test in `debugAdapter.test.ts` and check it passes in the browser. A fork lit test for the pass is not written.
 
 ## Milestone 6: full DAP surface
 - Breakpoints: data breakpoints and exception breakpoints (`setExceptionBreakpoints` is accepted and ignored).
