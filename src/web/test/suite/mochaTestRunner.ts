@@ -89,6 +89,8 @@ export function run(): Promise<void> {
 			});
 			runner.on('test', test => console.log(`${stamp()} [test] start: ${test.fullTitle()}`));
 			runner.on('test end', test => console.log(`${stamp()} [test] end: ${test.title} (${test.duration ?? '?'} ms)`));
+				// Mocha's own failure report is lost when the run is cut short, so log each failure as it happens.
+				runner.on('fail', (test, err) => console.log(`${stamp()} [test] FAILED: ${test.title}: ${JSON.stringify(err, Object.getOwnPropertyNames(Object(err))).slice(0, 1500)}`));
 		} catch (err) {
 			console.error(err);
 			e(err);

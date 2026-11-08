@@ -104,9 +104,8 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Remaining gaps:
 - Open: outer frames show the line of their last guard, not the call line (true call-site pcs need the custom runner's `captureWasmFrames`).
 - Open: `demangle.ts` decodes plain, nested, constructor/destructor and operator names only; templates and substitutions (`St`, `S_`) stay mangled, as do `std` frames. `launch.json` `program` is ignored (Debug always rebuilds), `.debug_line` is parsed for every launch (unmeasured on large programs), and the line index and breakpoint resolution have no cache. Conditions have no function calls, casts, `*p`, `&x` or strings (lldb's reactor formats variable paths only).
 - Open: traps as stopped states need the custom runner. Pause and live breakpoint edits (shared memory) work on vscode.dev; a non-threaded debug build still queues edits to the next stop. The debug terminal has no end-of-file key and no Ctrl+C.
-- Open: the browser test for a program that throws and catches (`debugAdapter.test.ts`, currently `test.skip`) needs the compiler fix in "Debug build breaks C++ exceptions".
 
-- **Debug build breaks C++ exceptions:** fixed in the `llvm-project` fork (`SanitizerCoverage.cpp` adds the `funclet` bundle to guard calls in EH pads), verified in Node on the MinSizeRel `build/bin/clang.wasm`. Still to do: rebuild the PGO `clang.wasm` (`pgo/*-variant.bat`), publish a new tag, rebuild the debug fixtures, then un-skip the throw/catch test in `debugAdapter.test.ts` and check it passes in the browser. A fork lit test for the pass is not written.
+- Write a lit test in the `llvm-project` fork for the SanitizerCoverage `funclet` bundle on guard calls in EH pads (wasm EH).
 
 ## Milestone 6: full DAP surface
 - Breakpoints: data breakpoints and exception breakpoints (`setExceptionBreakpoints` is accepted and ignored).
