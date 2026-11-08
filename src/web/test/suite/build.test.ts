@@ -7,7 +7,7 @@ import { chooseArtifactDir } from '../../buildWorkspace';
 import { runProgram } from '../../runProgram';
 import { createTaskProvider } from '../../tasks';
 import { userFlags } from '../../projectConfig';
-import { ToolchainStore } from '../../toolchain/toolchainStore';
+import { ToolchainStore, type StoreUi } from '../../toolchain/toolchainStore';
 
 // Needs a workspace folder and --coi (see the `test` script in package.json).
 suite('vscwClang build (in browser)', function () {
@@ -64,6 +64,49 @@ suite('vscwClang build (in browser)', function () {
 			await vscode.workspace.getConfiguration('vscwclang').update('toolchainUrl', toolchainUrl, vscode.ConfigurationTarget.Global);
 		}
 		assert.strictEqual((await new ToolchainStore(context, log).getFile('compile-flags.json')).byteLength, manifest.files['compile-flags.json'].size);
+	});
+
+	test('a failing download shows one dialog with Retry / Show Log; Retry asks again; success fires onDidEnsure', async () => {
+		const errors: { message: string; items: string[] }[] = [];
+		const answers = ['Retry', undefined];
+		const ui: StoreUi = {
+			showErrorMessage: (message, ...items) => { errors.push({ message, items }); return Promise.resolve(answers.shift()); },
+			showInformationMessage: () => Promise.resolve(undefined),
+		};
+		const failingContext = { ...context, globalStorageUri: vscode.Uri.joinPath(dir, 'storage-failing') } as vscode.ExtensionContext;
+		await vscode.workspace.getConfiguration('vscwclang').update('toolchainUrl', 'http://127.0.0.1:1/unreachable', vscode.ConfigurationTarget.Global);
+		try {
+			const store = new ToolchainStore(failingContext, log, { ui, retryDelayMs: 1 });
+			let ensured = 0;
+			store.onDidEnsure(() => ensured++);
+			await assert.rejects(store.ensure(), /could not reach/);
+			for (let i = 0; i < 200 && errors.length < 2; i++) { await new Promise(r => setTimeout(r, 50)); }
+			assert.strictEqual(errors.length, 2, 'the first dialog and the one Retry raised');
+			assert.deepStrictEqual(errors[0].items, ['Retry', 'Show Log']);
+			assert.match(errors[0].message, /cannot function until it successfully downloads the clang tools[\s\S]*does not need internet after those are downloaded/);
+			assert.strictEqual(ensured, 0, 'a failed ensure must not fire onDidEnsure');
+		} finally {
+			await vscode.workspace.getConfiguration('vscwclang').update('toolchainUrl', toolchainUrl, vscode.ConfigurationTarget.Global);
+		}
+		const recovered = new ToolchainStore(failingContext, log, { ui });
+		let fired = 0;
+		recovered.onDidEnsure(() => fired++);
+		await recovered.ensure();
+		assert.strictEqual(fired, 1);
+	});
+
+	test('a user-initiated command during a running download is told the download is still in progress', async () => {
+		const infos: string[] = [];
+		const ui: StoreUi = { showErrorMessage: () => Promise.resolve(undefined), showInformationMessage: message => { infos.push(message); return Promise.resolve(undefined); } };
+		const busyContext = { ...context, globalStorageUri: vscode.Uri.joinPath(dir, 'storage-busy') } as vscode.ExtensionContext;
+		const store = new ToolchainStore(busyContext, log, { ui });
+		const first = store.ensure();
+		const second = store.ensure(undefined, { userInitiated: true });
+		await Promise.all([first, second]);
+		assert.strictEqual(infos.length, 1);
+		assert.match(infos[0], /cannot function until it has downloaded the clang tools[\s\S]*still in progress/);
+		await store.ensure(undefined, { userInitiated: true });
+		assert.strictEqual(infos.length, 1, 'nothing running, so no message');
 	});
 
 	test('multi-file project builds, links and runs', async () => {

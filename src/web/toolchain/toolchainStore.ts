@@ -10,6 +10,12 @@ export const BUILD_FILES = ['clang.wasm', 'lld.wasm', 'sysroot.zip', 'compile-fl
 
 const isOffline = () => typeof navigator !== 'undefined' && navigator.onLine === false;
 
+/** The notifications the store raises; tests pass a recorder instead of the real window. */
+export interface StoreUi {
+	showErrorMessage(message: string, ...items: string[]): Thenable<string | undefined>;
+	showInformationMessage(message: string, ...items: string[]): Thenable<string | undefined>;
+}
+
 const reported = new WeakSet<object>();
 
 /** True for a download error the user was already told about (dialog or own cancellation), so callers need not add another popup. */
@@ -66,7 +72,9 @@ export class ToolchainStore {
 	/** Fires after every `ensure` that succeeded (including when nothing was missing). */
 	readonly onDidEnsure = this.downloaded.event;
 
-	constructor(private readonly context: StoreContext, private readonly log: vscode.OutputChannel) {}
+	constructor(private readonly context: StoreContext, private readonly log: vscode.OutputChannel, private readonly testing: { ui?: StoreUi; retryDelayMs?: number } = {}) {}
+
+	private get ui(): StoreUi { return this.testing.ui ?? vscode.window; }
 
 	/** Identifies the exact toolchain bytes (manifest hash prefix), for cache keys. */
 	async version(): Promise<string> {
@@ -82,7 +90,7 @@ export class ToolchainStore {
 	/** Downloads whatever is missing among `names` (default: everything `build()` needs), with a progress notification. */
 	ensure(names: string[] = BUILD_FILES, options: { userInitiated?: boolean } = {}): Promise<void> {
 		if (options.userInitiated && this.pending > 0) {
-			void vscode.window.showInformationMessage('vscwClang: the plugin cannot function until it has downloaded the clang tools, and that download is still in progress. This command continues when it finishes.');
+			void this.ui.showInformationMessage('vscwClang: the plugin cannot function until it has downloaded the clang tools, and that download is still in progress. This command continues when it finishes.');
 		}
 		this.pending++;
 		const run = (this.queue ?? Promise.resolve()).then(() => this.download(names)).then(
@@ -97,7 +105,7 @@ export class ToolchainStore {
 		const reason = e instanceof Error ? e.message : String(e);
 		this.log.appendLine(`[vscwclang] toolchain download failed: ${reason}`);
 		if (/was cancelled/.test(reason)) { return; }
-		void vscode.window.showErrorMessage(`vscwClang: the plugin cannot function until it successfully downloads the clang tools, and ${isOffline() ? 'you appear to be offline' : 'the last download attempt failed'}. ${reason} Finished files are kept, so retrying continues where it stopped.`, 'Retry', 'Show Log').then(choice => {
+		void this.ui.showErrorMessage(`vscwClang: the plugin cannot function until it successfully downloads the clang tools, and ${isOffline() ? 'you appear to be offline' : 'the last download attempt failed'}. ${reason} Finished files are kept, so retrying continues where it stopped.`, 'Retry', 'Show Log').then(choice => {
 			if (choice === 'Retry') { this.ensure(names).catch(() => undefined); } else if (choice) { this.log.show(true); }
 		});
 	}
@@ -119,7 +127,7 @@ export class ToolchainStore {
 			throw new Error('vscwClang: this build of the extension has no published toolchain pinned yet (toolchainPin.ts). Did you mean to set vscwclang.toolchainUrl to a locally served toolchain (see scripts/make-toolchain-dist.mjs)?');
 		}
 		const root = new VscodeByteStore(vscode.Uri.joinPath(this.context.globalStorageUri, 'toolchain'));
-		const opts: DownloadOptions = { baseUrl, isOffline };
+		const opts: DownloadOptions = { baseUrl, isOffline, retryDelayMs: this.testing.retryDelayMs };
 		const { manifest, sha256 } = await resolveManifest(root, opts, override ? undefined : TOOLCHAIN_PIN.manifestSha256);
 		if (override) { this.log.appendLine(`[vscwclang] toolchain override ${baseUrl}: manifest ${sha256.slice(0, 16)} accepted without a pin`); }
 		return { manifest, keyDir: sha256.slice(0, 16), store: root, opts };

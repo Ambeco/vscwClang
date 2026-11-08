@@ -141,7 +141,7 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Remaining gaps:
 
 ## Toolchain download failure UX (`toolchainDownload.ts`, `toolchainStore.ts`, `extension.ts`, `clangdClient.ts`)
 - Optional: a status bar item ("toolchain not downloaded, click to download") so the missing state is visible before the first Build.
-- Test-web check that a failing `vscwclang.toolchainUrl` shows the Retry / Show Log dialog and that clangd restarts after a later successful download (neither is asserted today; `ToolchainStore.reportFailure`, `onDidEnsure`).
+- Test-web check that `extension.ts` restarts clangd after a failed start once a later `ensure()` succeeds (the store's dialog, in-progress message and `onDidEnsure` are covered in `build.test.ts`).
 
 ## Found by the compatibility survey (2026-10-27), details in `documents/compat_survey.md`
 - `compile_commands.json` target picker: a CMake test target (fmt `format-test`) selects only its own sources, not the library/gtest targets it links, so it cannot link. Deferred (decided 2026-10-27): the Make and Python secondary journeys are expected to cover building such projects; revisit only if they do not.
