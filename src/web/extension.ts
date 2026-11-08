@@ -9,6 +9,7 @@ import { registerTaskProvider } from './tasks';
 import { publishDiagnostics } from './toolchain/diagnosticsCollection';
 import { buildCacheStats, clearBuildCache, getToolchainStore } from './toolchain/toolchain';
 import { startClangdClient } from './clangd/clangdClient';
+import { wasReported } from './toolchain/toolchainStore';
 
 export function activate(context: vscode.ExtensionContext) {
 	const log = vscode.window.createOutputChannel('vscwclang');
@@ -27,7 +28,7 @@ export function activate(context: vscode.ExtensionContext) {
 				const firstFailure = !clangdFailed;
 				clangdFailed = true;
 				log.appendLine(`[vscwclang] clangd did not start: ${message}`);
-				if (firstFailure) {
+				if (firstFailure && !wasReported(e)) {
 					void vscode.window.showWarningMessage(`vscwClang: IntelliSense (clangd) did not start, so completion and hover are unavailable; Build and Run still work. Reason: ${message} It starts again by itself once the toolchain has downloaded (e.g. after Build or Download Toolchain), or after a window reload.`, 'Show Log').then(choice => { if (choice) { log.show(true); } });
 				}
 			}).finally(() => { clangdStarting = false; });

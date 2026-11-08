@@ -10,6 +10,20 @@ export const BUILD_FILES = ['clang.wasm', 'lld.wasm', 'sysroot.zip', 'compile-fl
 
 const isOffline = () => typeof navigator !== 'undefined' && navigator.onLine === false;
 
+const reported = new WeakSet<object>();
+
+/** True for a download error the user was already told about (dialog or own cancellation), so callers need not add another popup. */
+export const wasReported = (e: unknown) => typeof e === 'object' && e !== null && reported.has(e);
+
+/** Shows a notification only if `work` is still running after `delayMs`, so a cached-manifest lookup does not flash one. */
+async function withSlowProgress<T>(title: string, work: Promise<T>, delayMs = 400): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const slow = new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(true), delayMs); });
+	const isSlow = await Promise.race([work.then(() => false, () => false), slow]);
+	clearTimeout(timer);
+	return isSlow ? vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title }, () => work) : work;
+}
+
 const OVERRIDE_SETTING = 'toolchainUrl';
 
 class VscodeByteStore implements ByteStore {
@@ -73,7 +87,7 @@ export class ToolchainStore {
 		this.pending++;
 		const run = (this.queue ?? Promise.resolve()).then(() => this.download(names)).then(
 			() => this.downloaded.fire(),
-			e => { this.reportFailure(e, names); throw e; }).finally(() => { this.pending--; });
+			e => { if (typeof e === 'object' && e !== null) { reported.add(e); } this.reportFailure(e, names); throw e; }).finally(() => { this.pending--; });
 		this.queue = run.catch(() => undefined);
 		return run;
 	}
@@ -112,7 +126,7 @@ export class ToolchainStore {
 	}
 
 	private async download(names: string[]): Promise<void> {
-		const { manifest, keyDir, store, opts } = await this.init();
+		const { manifest, keyDir, store, opts } = await withSlowProgress('vscwClang: contacting the toolchain host (the clang tools are downloaded once, on first use)...', this.init());
 		const total = await missingBytes(manifest, store, keyDir, names);
 		if (total === 0) { return; }
 		this.log.appendLine(`[vscwclang] downloading toolchain ${manifest.tag} (${(total / 1048576).toFixed(1)} MB) from ${opts.baseUrl}`);
