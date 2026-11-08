@@ -122,6 +122,23 @@ suite('toolchain download', () => {
 		await assert.rejects(getFile(manifest, new MemStore(), 'k', 'a.bin', { ...OPTS, retries: 0, fetch: failing }), /could not reach host[\s\S]*internet connection[\s\S]*CORS/);
 	});
 
+	test('offline fails at once, without fetching or waiting, and says the internet is only needed once', async () => {
+		const served: Served = new Map(); const log: string[] = [];
+		const manifest = manifestOf({ 'a.bin': await publish(content, 'a.bin', 'raw', 1000, served) });
+		const started = Date.now();
+		await assert.rejects(getFile(manifest, new MemStore(), 'k', 'a.bin', { baseUrl: OPTS.baseUrl, isOffline: () => true, fetch: fakeFetch(served, log) }),
+			/could not reach host[\s\S]*offline[\s\S]*needs to download the clang tools when first used, but does not need internet after those are downloaded/);
+		assert.deepStrictEqual(log, []);
+		assert.ok(Date.now() - started < 1000);
+	});
+
+	test('a network failure message carries the same one-time-download note', async () => {
+		const served: Served = new Map();
+		const manifest = manifestOf({ 'a.bin': await publish(content, 'a.bin', 'raw', 1000, served) });
+		const failing = (async () => { throw new TypeError('Failed to fetch'); }) as unknown as typeof fetch;
+		await assert.rejects(getFile(manifest, new MemStore(), 'k', 'a.bin', { ...OPTS, retries: 0, fetch: failing }), /does not need internet after those are downloaded/);
+	});
+
 	test('a cached file with the right size but wrong bytes is replaced', async () => {
 		const served: Served = new Map(); const log: string[] = [];
 		const manifest = manifestOf({ 'a.bin': await publish(content, 'a.bin', 'raw', 1000, served) });

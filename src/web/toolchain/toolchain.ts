@@ -114,7 +114,7 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 	// permission prompt, which requires the user gesture that started the command and expires within seconds.
 	await vscode.workspace.fs.createDirectory(outputDir);
 	const toolchain = getToolchainStore(context, log);
-	await toolchain.ensure();
+	await toolchain.ensure(undefined, { userInitiated: true });
 	const flagsPromise = loadCompileFlags(toolchain);
 	const guestSysroot = await loadSysrootGuestFs(toolchain);
 	const objects = new MemoryGuestFs();

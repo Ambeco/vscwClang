@@ -8,6 +8,8 @@ export type StoreContext = Pick<vscode.ExtensionContext, 'globalStorageUri'>;
 /** Files `build()` needs; lldb joins when debugging lands. */
 export const BUILD_FILES = ['clang.wasm', 'lld.wasm', 'sysroot.zip', 'compile-flags.json'];
 
+const isOffline = () => typeof navigator !== 'undefined' && navigator.onLine === false;
+
 const OVERRIDE_SETTING = 'toolchainUrl';
 
 class VscodeByteStore implements ByteStore {
@@ -45,6 +47,7 @@ class VscodeByteStore implements ByteStore {
 export class ToolchainStore {
 	private ready: Promise<{ manifest: ToolchainManifest; keyDir: string; store: VscodeByteStore; opts: DownloadOptions }> | undefined;
 	private queue: Promise<void> | undefined;
+	private pending = 0;
 	private readonly downloaded = new vscode.EventEmitter<void>();
 	/** Fires after every `ensure` that succeeded (including when nothing was missing). */
 	readonly onDidEnsure = this.downloaded.event;
@@ -63,10 +66,14 @@ export class ToolchainStore {
 	}
 
 	/** Downloads whatever is missing among `names` (default: everything `build()` needs), with a progress notification. */
-	ensure(names: string[] = BUILD_FILES): Promise<void> {
+	ensure(names: string[] = BUILD_FILES, options: { userInitiated?: boolean } = {}): Promise<void> {
+		if (options.userInitiated && this.pending > 0) {
+			void vscode.window.showInformationMessage('vscwClang: the plugin cannot function until it has downloaded the clang tools, and that download is still in progress. This command continues when it finishes.');
+		}
+		this.pending++;
 		const run = (this.queue ?? Promise.resolve()).then(() => this.download(names)).then(
 			() => this.downloaded.fire(),
-			e => { this.reportFailure(e, names); throw e; });
+			e => { this.reportFailure(e, names); throw e; }).finally(() => { this.pending--; });
 		this.queue = run.catch(() => undefined);
 		return run;
 	}
@@ -76,7 +83,7 @@ export class ToolchainStore {
 		const reason = e instanceof Error ? e.message : String(e);
 		this.log.appendLine(`[vscwclang] toolchain download failed: ${reason}`);
 		if (/was cancelled/.test(reason)) { return; }
-		void vscode.window.showErrorMessage(`vscwClang: the C++ toolchain could not be downloaded, so Build, Run, Debug and IntelliSense are unavailable. ${reason} The download happens once and resumes where it stopped.`, 'Retry', 'Show Log').then(choice => {
+		void vscode.window.showErrorMessage(`vscwClang: the plugin cannot function until it successfully downloads the clang tools, and ${isOffline() ? 'you appear to be offline' : 'the last download attempt failed'}. ${reason} Finished files are kept, so retrying continues where it stopped.`, 'Retry', 'Show Log').then(choice => {
 			if (choice === 'Retry') { this.ensure(names).catch(() => undefined); } else if (choice) { this.log.show(true); }
 		});
 	}
@@ -98,7 +105,7 @@ export class ToolchainStore {
 			throw new Error('vscwClang: this build of the extension has no published toolchain pinned yet (toolchainPin.ts). Did you mean to set vscwclang.toolchainUrl to a locally served toolchain (see scripts/make-toolchain-dist.mjs)?');
 		}
 		const root = new VscodeByteStore(vscode.Uri.joinPath(this.context.globalStorageUri, 'toolchain'));
-		const opts: DownloadOptions = { baseUrl };
+		const opts: DownloadOptions = { baseUrl, isOffline };
 		const { manifest, sha256 } = await resolveManifest(root, opts, override ? undefined : TOOLCHAIN_PIN.manifestSha256);
 		if (override) { this.log.appendLine(`[vscwclang] toolchain override ${baseUrl}: manifest ${sha256.slice(0, 16)} accepted without a pin`); }
 		return { manifest, keyDir: sha256.slice(0, 16), store: root, opts };

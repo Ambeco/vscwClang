@@ -40,6 +40,8 @@ export interface DownloadOptions {
 	retries?: number;
 	/** Base wait before a retry (default 2000); later retries wait 2.5x and 5x as long. */
 	retryDelayMs?: number;
+	/** When it returns true, requests fail at once instead of retrying (the browser reports no network). */
+	isOffline?: () => boolean;
 	concurrency?: number;
 }
 
@@ -52,6 +54,9 @@ export async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string>
 	const digest = await crypto.subtle.digest('SHA-256', bytes);
 	return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
+
+/** Appended to every connectivity failure: users assume the plugin needs the internet all the time. */
+export const DOWNLOAD_NOTE = 'The plugin needs to download the clang tools when first used, but does not need internet after those are downloaded.';
 
 const joinUrl = (baseUrl: string, name: string) => `${baseUrl.replace(/\/+$/, '')}/${name}`;
 const host = (url: string) => { try { return new URL(url).host; } catch { return url; } };
@@ -188,6 +193,7 @@ function isPermanent(e: unknown): boolean {
 }
 
 async function fetchWithRetry(url: string, chunk: PayloadChunk | undefined, opts: DownloadOptions, tracker?: ProgressTracker): Promise<Uint8Array<ArrayBuffer>> {
+	if (opts.isOffline?.()) { throw new Error(`could not reach ${host(url)}: your browser reports that this computer is offline. ${DOWNLOAD_NOTE}`); }
 	const attempts = (opts.retries ?? 3) + 1;
 	let lastError: unknown;
 	for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -222,7 +228,7 @@ function describeFailure(url: string, e: unknown): Error {
 	const msg = (e as Error).message ?? String(e);
 	if (e instanceof TypeError) {
 		// fetch() rejects with a bare TypeError for network failure, CORS and COEP blocks alike.
-		return new Error(`could not reach ${host(url)} (${msg}). Check your internet connection; if you are online, the host may be blocking cross-origin requests (vscode.dev requires CORS and Cross-Origin-Resource-Policy headers). The toolchain is cached after the first successful download, so this only matters once.`);
+		return new Error(`could not reach ${host(url)} (${msg}). Check your internet connection; if you are online, the host may be blocking cross-origin requests (vscode.dev requires CORS and Cross-Origin-Resource-Policy headers). ${DOWNLOAD_NOTE}`);
 	}
 	return new Error(msg);
 }
