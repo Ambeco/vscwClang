@@ -5,6 +5,7 @@ import { LanguageClient, ReadableStreamMessageReader, WriteableStreamMessageWrit
 import { loadCompileFlags, loadSysrootFiles, loadSysrootGuestFs } from '../toolchain/sysroot';
 import { fallbackFlags } from './fallbackFlags';
 import { getToolchainStore } from '../toolchain/toolchain';
+import { BUILD_FILES } from '../toolchain/toolchainStore';
 import { chooseSlice } from '../toolchain/threadSlice';
 import { GUEST_WORKSPACE, TOOLCHAIN_SCHEME, fromGuestPath, isToolchainGuestPath, toGuestPath } from '../toolchain/guestPaths';
 import { ToolchainFileSystem } from '../toolchain/toolchainFileSystem';
@@ -46,6 +47,8 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	const level = loggingLevel();
 
 	const toolchain = getToolchainStore(context, log);
+	// One download notification for everything a normal session needs, instead of one per file as each is first read.
+	await toolchain.ensure([...BUILD_FILES, 'clangd.wasm']);
 	const [bits, sysrootFiles, flags] = await Promise.all([toolchain.getFile('clangd.wasm'), loadSysrootFiles(toolchain), loadCompileFlags(toolchain)]);
 	const mappedFlags = userFlags(log, true);
 	const extraFlags = mappedFlags.flags;

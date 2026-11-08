@@ -400,7 +400,8 @@ class FakeSession implements DebuggeeSession {
 	async start(): Promise<void> { this.listener!({ kind: 'stopped', reason: 'start', threadId: 1, frames: [] }); }
 	async setBreakpoints(guards: number[]): Promise<void> { this.armed.push(guards); }
 	async resume(how: ResumeKind): Promise<void> { this.resumed.push(how); }
-	async pause(): Promise<void> { throw new Error('no pause'); }
+	pauseWorks = false;
+	async pause(): Promise<void> { if (!this.pauseWorks) { throw new Error('no pause'); } }
 	async readMemory(): Promise<Uint8Array | undefined> { return new Uint8Array(4096); }
 	async terminate(): Promise<void> { /* nothing to stop */ }
 }
@@ -426,6 +427,21 @@ suiteIfFixtures('DebugController with a scripted host', function () {
 		fake.listener!({ kind: 'stopped', reason: 'pause', threadId: 1, frames: [{ funcIndex: add[1].funcIndex, pc: add[1].pc, sp: 1000 }] });
 		await client.event('stopped');
 		assert.deepStrictEqual(fake.armed, [[add[0]]]);
+	});
+
+	test('pause tells the user it only takes effect at the next statement (a program blocked in cin stays running until then)', async () => {
+		const program = new Uint8Array(readFileSync(PROG));
+		const scan = scanProgram(program);
+		const reactor = await ReactorHost.create(readFileSync(REACTOR), undefined, undefined, nodeReactorThreads());
+		reactor.createTarget(program);
+		const fake = new FakeSession();
+		fake.pauseWorks = true;
+		const client = makeClient(async () => ({ session: fake, reactor, program, scan, paths: identity }));
+		await client.ok('initialize'); await client.ok('launch', {}); await client.event('initialized');
+		await client.ok('configurationDone');
+		const notice = client.event('output');
+		await client.ok('pause', { threadId: 1 });
+		assert.match((await notice).body.output, /pause requested[\s\S]*waiting for input \(cin\)[\s\S]*after it continues/);
 	});
 
 	test('a stop on another thread announces the thread, lists it, and only that thread can be resumed or read', async () => {

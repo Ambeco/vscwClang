@@ -114,7 +114,11 @@ export class DebugController {
 			case 'stepIn': return this.resumeFromRequest(req, 'into', {}, args);
 			case 'stepOut': return this.resumeFromRequest(req, 'out', {}, args);
 			case 'pause':
-				if (!this.stop) { await this.requireTarget().session.pause(); }
+				if (!this.stop) {
+					await this.requireTarget().session.pause();
+					// The stub stops at the next statement it runs, so a program blocked in cin or sleeping stays "running" until then.
+					this.send({ type: 'event', event: 'output', body: { category: 'console', output: 'vscwClang: pause requested. The program stops at the next statement it runs; if it is waiting for input (cin) or sleeping, that happens after it continues.\n' } });
+				}
 				this.respond(req, true, {});
 				return;
 			case 'stackTrace': return this.stackTrace(req, args);

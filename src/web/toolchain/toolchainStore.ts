@@ -138,7 +138,7 @@ export class ToolchainStore {
 		const total = await missingBytes(manifest, store, keyDir, names);
 		if (total === 0) { return; }
 		this.log.appendLine(`[vscwclang] downloading toolchain ${manifest.tag} (${(total / 1048576).toFixed(1)} MB) from ${opts.baseUrl}`);
-		await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `vscwClang: downloading the C++ toolchain ${manifest.tag} (one-time, ${(total / 1048576).toFixed(0)} MB; needed for Build, Run, Debug and IntelliSense)`, cancellable: true }, async (progress, token) => {
+		await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `vscwClang: downloading the C++ toolchain ${manifest.tag} (one-time, ${Math.max(1, Math.round(total / 1048576))} MB; needed for Build, Run, Debug and IntelliSense)`, cancellable: true }, async (progress, token) => {
 			const abort = new AbortController();
 			token.onCancellationRequested(() => abort.abort());
 			let reported = 0;
