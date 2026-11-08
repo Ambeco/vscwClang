@@ -43,10 +43,10 @@ suite('vscwClang debug adapter (in browser)', function () {
 	teardown(() => { adapters.forEach(a => a.dispose()); adapters = []; });
 
 	/** An adapter whose "debug build" is a real `build()` of `source` in debug mode. */
-	function newClient(source = 'main.cpp', host?: DebugHost): DapClient {
+	function newClient(source = 'main.cpp', host?: DebugHost, extraSources: string[] = []): DapClient {
 		const output = vscode.Uri.joinPath(dir, `${source}.debug.wasm`);
 		const plan = async () => {
-			const built = await build({ sources: [vscode.Uri.joinPath(dir, source)], output, flags: [], mode: 'debug' }, log, context);
+			const built = await build({ sources: [source, ...extraSources].map(s => vscode.Uri.joinPath(dir, s)), output, flags: [], mode: 'debug' }, log, context);
 			assert.strictEqual(built.exitCode, 0, built.diagnostics);
 			return { output, args: [] };
 		};
@@ -222,6 +222,83 @@ suite('vscwClang debug adapter (in browser)', function () {
 		await client.ok('continue', { threadId: 1 });
 		assert.strictEqual((await client.event('exited')).body.exitCode, 0);
 		await terminal.waitFor('got 10');
+	});
+
+	test('debugs a multi-file program: a breakpoint in the second file reports that file, with the caller in the first', async () => {
+		const nl = String.fromCharCode(10);
+		const write = (name: string, lines: string[]) => vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, name), new TextEncoder().encode(lines.join(nl)));
+		await write('multi_main.cpp', ['int triple(int x);', 'int main() {', '  int r = triple(14);', '  return r == 42 ? 0 : 1;', '}', '']);
+		await write('multi_lib.cpp', ['int triple(int x) {', '  int y = x * 3;', '  if (y > 1000)', '    y = 0;', '  return y;', '}', '']);
+		const client = newClient('multi_main.cpp', undefined, ['multi_lib.cpp']);
+		await client.ok('initialize', { adapterID: 'vscwclang' });
+		await client.ok('launch', { console: 'internalConsole' });
+		await client.event('initialized');
+		const libPath = vscode.Uri.joinPath(dir, 'multi_lib.cpp').toString();
+		const set = await client.ok('setBreakpoints', { source: { path: libPath }, breakpoints: [{ line: 5 }] });
+		assert.strictEqual(set.breakpoints[0].verified, true, JSON.stringify(set));
+		await client.ok('configurationDone');
+		assert.strictEqual((await client.event('stopped')).body.reason, 'breakpoint');
+		const frames = (await client.ok('stackTrace', { threadId: 1 })).stackFrames as { id: number; name: string; line: number; source?: { name: string; path?: string } }[];
+		assert.match(frames[0].name, /triple/, JSON.stringify(frames));
+		assert.strictEqual(frames[0].source?.name, 'multi_lib.cpp');
+		assert.strictEqual(frames[0].source?.path, libPath);
+		const caller = frames.find(f => /main/.test(f.name));
+		assert.ok(caller, JSON.stringify(frames));
+		assert.strictEqual(caller.source?.name, 'multi_main.cpp');
+		const y = (await client.ok('evaluate', { expression: 'y', frameId: frames[0].id, context: 'hover' })).result as string;
+		assert.match(y, /\(int\) y = 42\b/);
+		await client.ok('continue', { threadId: 1 });
+		assert.strictEqual((await client.event('exited')).body.exitCode, 0);
+	});
+
+	// Skipped: any `throw` in a debug build ends in `unreachable` (exit 139) because `-fsanitize-coverage=...,no-prune` breaks
+	// wasm EH; a fork compiler bug (remaining_work.md "Debug build breaks C++ exceptions"). Un-skip once fixed.
+	test.skip('debugs a program that throws and catches: a breakpoint in the handler stops, and the run ends normally', async () => {
+		const nl = String.fromCharCode(10);
+		await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, 'throws.cpp'), new TextEncoder().encode([
+			'#include <cstdio>', '#include <stdexcept>',
+			'static int risky(int n) {',
+			'  if (n > 2)',
+			'    throw std::runtime_error("too big");',
+			'  return n;',
+			'}',
+			'int main() {',
+			'  int caught = 0;',
+			'  try {',
+			'    risky(5);',
+			'  } catch (const std::exception& e) {',
+			'    caught = 7;',
+			'    std::printf("caught: %s\\n", e.what());',
+			'  }',
+			'  return caught == 7 ? 0 : 1;',
+			'}', ''].join(nl)));
+		const client = newClient('throws.cpp');
+		await client.ok('initialize', { adapterID: 'vscwclang' });
+		await client.ok('launch', { console: 'internalConsole' });
+		await client.event('initialized');
+		const path = vscode.Uri.joinPath(dir, 'throws.cpp').toString();
+		const set = await client.ok('setBreakpoints', { source: { path }, breakpoints: [{ line: 5 }, { line: 14 }] });
+		assert.deepStrictEqual(set.breakpoints.map((b: { verified: boolean }) => b.verified), [true, true], JSON.stringify(set));
+		await client.ok('configurationDone');
+		const topLine = async () => ((await client.ok('stackTrace', { threadId: 1 })).stackFrames as { name: string; line: number }[])[0];
+		await client.event('stopped');
+		assert.match((await topLine()).name, /risky/);
+		assert.strictEqual((await topLine()).line, 5);
+		await client.ok('continue', { threadId: 1 });
+		await new Promise<void>((resolve, reject) => {
+			const deadline = Date.now() + 30_000;
+			const seen = () => JSON.stringify(['stopped', 'exited', 'terminated'].map(e => [e, client.events(e).map(m => m.body)]).concat([['output', client.events('output').map(m => m.body.output)]]));
+			const poll = () => client.events('stopped').length >= 2 ? resolve()
+				: client.events('exited').length > 0 ? reject(new Error(`the program exited without stopping in the catch handler: ${seen()}`))
+				: Date.now() > deadline ? reject(new Error(`no stop in the catch handler: ${seen()}`)) : void setTimeout(poll, 20);
+			poll();
+		});
+		const handler = await topLine();
+		assert.match(handler.name, /main/, JSON.stringify(handler));
+		assert.strictEqual(handler.line, 14, 'stopped in the catch handler after the unwind');
+		await client.ok('continue', { threadId: 1 });
+		assert.strictEqual((await client.event('exited')).body.exitCode, 0);
+		assert.ok(client.events('output').some(m => m.body.category === 'stdout' && /caught: too big/.test(m.body.output)));
 	});
 
 	test('a program that fails to build reports the failure and ends the launch', async () => {
