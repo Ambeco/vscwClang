@@ -139,6 +139,14 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Remaining gaps:
 
 - Time PCH/no-PCH and parallel vs sequential compiles in the browser (`compiled ... in N ms` lines), and check that the pinned `mtdist` v24.0.8 download path works in a real browser (the browser tests used the `toolchainUrl` override). Open: C++23, other `-O` levels, a modules route (needs a wasi-libc module map). The threaded reactor's pool threads run in Workers made by a spawner Worker (`workerThreads.ts`); they read only a shared copy of the target file, so any other file or stdio call from a reactor thread fails.
 
+## Toolchain download failure UX (`toolchainDownload.ts`, `toolchainStore.ts`, `extension.ts`, `clangdClient.ts`)
+- Retry: `fetchWithRetry` treats every 4xx except 408/429 as permanent, so jsDelivr's cold-start 403 on a first-requested file (seen on the v24.0.13 tag) fails the download. Make 403 and 5xx retryable and lengthen the backoff (today 3 attempts, 0.5 s and 1 s; try 2, 5, 10 s). Test with a fake `fetch`.
+- A failed or cancelled `ensure()` surfaces only as VS Code's generic command-failure toast (Build, Run) or a debug-launch error (F5). Show one error dialog with the real reason and Retry / Show Log buttons; say that the download is one-time.
+- clangd start failure shows "IntelliSense (clangd) did not start" with the reason only in the log, and never retries until a window reload. Include the reason, and restart clangd once a later download succeeds.
+- clangd's 62 MB download starts at activation, so opening any workspace shows an unexplained download notification, and Build then waits silently in the shared download queue. Explain it in the notification title.
+- Optional: a status bar item ("toolchain not downloaded, click to download") so the missing state is visible before the first Build.
+- Test-web check that a failing `vscwclang.toolchainUrl` gives the dialog (none exists today).
+
 ## Found by the compatibility survey (2026-10-27), details in `documents/compat_survey.md`
 - `compile_commands.json` target picker: a CMake test target (fmt `format-test`) selects only its own sources, not the library/gtest targets it links, so it cannot link. Deferred (decided 2026-10-27): the Make and Python secondary journeys are expected to cover building such projects; revisit only if they do not.
 - Re-run the survey now that `std::thread`/`std::mutex` exist: Catch2 `Sleep` tests and fmt `std.h` users (compile-test, std-test, xchar-test, format-test) were blocked by their absence.
