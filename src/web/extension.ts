@@ -16,12 +16,24 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(log, diagnostics, trackActiveCppFile());
 	const folders = vscode.workspace.workspaceFolders ?? [];
 	log.appendLine(`[vscwclang] workspace: ${vscode.workspace.workspaceFile?.toString() ?? 'single folder (no workspace file)'}; folders: ${folders.map(f => f.uri.toString()).join(', ') || 'none'}`);
-	void startClangdClient(context, log).then(d => { if (d) { context.subscriptions.push(d); } },
-		e => {
-			const message = e instanceof Error ? e.message : String(e);
-			log.appendLine(`[vscwclang] clangd did not start: ${message}`);
-			void vscode.window.showWarningMessage('vscwClang: IntelliSense (clangd) did not start, so completion and hover are unavailable; Build and Run still work.', 'Show Log').then(choice => { if (choice) { log.show(true); } });
-		});
+	let clangdFailed = false;
+	let clangdStarting = false;
+	const tryStartClangd = () => {
+		if (clangdStarting) { return; }
+		clangdStarting = true;
+		void startClangdClient(context, log).then(d => { clangdFailed = false; if (d) { context.subscriptions.push(d); } },
+			e => {
+				const message = e instanceof Error ? e.message : String(e);
+				const firstFailure = !clangdFailed;
+				clangdFailed = true;
+				log.appendLine(`[vscwclang] clangd did not start: ${message}`);
+				if (firstFailure) {
+					void vscode.window.showWarningMessage(`vscwClang: IntelliSense (clangd) did not start, so completion and hover are unavailable; Build and Run still work. Reason: ${message} It starts again by itself once the toolchain has downloaded (e.g. after Build or Download Toolchain), or after a window reload.`, 'Show Log').then(choice => { if (choice) { log.show(true); } });
+				}
+			}).finally(() => { clangdStarting = false; });
+	};
+	tryStartClangd();
+	context.subscriptions.push(getToolchainStore(context, log).onDidEnsure(() => { if (clangdFailed) { tryStartClangd(); } }));
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscwclang.build', async () => {

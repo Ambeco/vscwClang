@@ -36,8 +36,9 @@ export interface DownloadOptions {
 	fetch?: typeof fetch;
 	signal?: AbortSignal;
 	onProgress?: (doneBytes: number, totalBytes: number) => void;
-	/** Extra attempts per chunk after the first. */
+	/** Extra attempts per chunk after the first (default 3). */
 	retries?: number;
+	/** Base wait before a retry (default 2000); later retries wait 2.5x and 5x as long. */
 	retryDelayMs?: number;
 	concurrency?: number;
 }
@@ -178,8 +179,16 @@ export class ProgressTracker {
 	add(bytes: number) { this.done += bytes; this.opts.onProgress?.(this.done, this.total); }
 }
 
+/** Multipliers of `retryDelayMs` (default 2 s): waits of 2, 5 and 10 s. */
+const BACKOFF = [1, 2.5, 5];
+
+/** 4xx is permanent except 408/429 and 403: jsDelivr answers 403 to the first request of a cold tag, then succeeds. */
+function isPermanent(e: unknown): boolean {
+	return e instanceof HttpStatusError && e.status >= 400 && e.status < 500 && ![403, 408, 429].includes(e.status);
+}
+
 async function fetchWithRetry(url: string, chunk: PayloadChunk | undefined, opts: DownloadOptions, tracker?: ProgressTracker): Promise<Uint8Array<ArrayBuffer>> {
-	const attempts = (opts.retries ?? 2) + 1;
+	const attempts = (opts.retries ?? 3) + 1;
 	let lastError: unknown;
 	for (let attempt = 1; attempt <= attempts; attempt++) {
 		let counted = 0;
@@ -195,9 +204,9 @@ async function fetchWithRetry(url: string, chunk: PayloadChunk | undefined, opts
 			tracker?.add(-counted);
 			lastError = e;
 			if (opts.signal?.aborted) { throw new Error(`download of ${host(url)} was cancelled; files already downloaded are kept, so running it again resumes.`); }
-			const permanent = e instanceof HttpStatusError && e.status >= 400 && e.status < 500 && e.status !== 429 && e.status !== 408;
+			const permanent = isPermanent(e);
 			if (permanent || attempt === attempts) { break; }
-			await new Promise(r => setTimeout(r, (opts.retryDelayMs ?? 500) * 2 ** (attempt - 1)));
+			await new Promise(r => setTimeout(r, (opts.retryDelayMs ?? 2000) * BACKOFF[Math.min(attempt, BACKOFF.length) - 1]));
 		}
 	}
 	throw describeFailure(url, lastError);
@@ -207,7 +216,7 @@ function describeFailure(url: string, e: unknown): Error {
 	if (e instanceof HttpStatusError) {
 		const hint = e.status === 404
 			? 'The toolchain version this extension expects is not published at that URL. Did you mean to update the extension, or fix vscwclang.toolchainUrl?'
-			: 'The host refused or failed the request; try again later.';
+			: 'The host refused or failed the request even after retrying; try again in a minute (a CDN may need time to warm up a newly published version).';
 		return new Error(`${e.message} ${hint}`);
 	}
 	const msg = (e as Error).message ?? String(e);

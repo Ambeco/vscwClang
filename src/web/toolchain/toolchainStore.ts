@@ -45,6 +45,9 @@ class VscodeByteStore implements ByteStore {
 export class ToolchainStore {
 	private ready: Promise<{ manifest: ToolchainManifest; keyDir: string; store: VscodeByteStore; opts: DownloadOptions }> | undefined;
 	private queue: Promise<void> | undefined;
+	private readonly downloaded = new vscode.EventEmitter<void>();
+	/** Fires after every `ensure` that succeeded (including when nothing was missing). */
+	readonly onDidEnsure = this.downloaded.event;
 
 	constructor(private readonly context: StoreContext, private readonly log: vscode.OutputChannel) {}
 
@@ -61,9 +64,21 @@ export class ToolchainStore {
 
 	/** Downloads whatever is missing among `names` (default: everything `build()` needs), with a progress notification. */
 	ensure(names: string[] = BUILD_FILES): Promise<void> {
-		const run = (this.queue ?? Promise.resolve()).then(() => this.download(names));
+		const run = (this.queue ?? Promise.resolve()).then(() => this.download(names)).then(
+			() => this.downloaded.fire(),
+			e => { this.reportFailure(e, names); throw e; });
 		this.queue = run.catch(() => undefined);
 		return run;
+	}
+
+	/** One error dialog with the real reason; not shown when the user cancelled. Retry runs `ensure` again (which reports its own failure). */
+	private reportFailure(e: unknown, names: string[]) {
+		const reason = e instanceof Error ? e.message : String(e);
+		this.log.appendLine(`[vscwclang] toolchain download failed: ${reason}`);
+		if (/was cancelled/.test(reason)) { return; }
+		void vscode.window.showErrorMessage(`vscwClang: the C++ toolchain could not be downloaded, so Build, Run, Debug and IntelliSense are unavailable. ${reason} The download happens once and resumes where it stopped.`, 'Retry', 'Show Log').then(choice => {
+			if (choice === 'Retry') { this.ensure(names).catch(() => undefined); } else if (choice) { this.log.show(true); }
+		});
 	}
 
 	async clear(): Promise<void> {
@@ -94,7 +109,7 @@ export class ToolchainStore {
 		const total = await missingBytes(manifest, store, keyDir, names);
 		if (total === 0) { return; }
 		this.log.appendLine(`[vscwclang] downloading toolchain ${manifest.tag} (${(total / 1048576).toFixed(1)} MB) from ${opts.baseUrl}`);
-		await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `vscwClang: downloading toolchain ${manifest.tag}`, cancellable: true }, async (progress, token) => {
+		await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `vscwClang: downloading the C++ toolchain ${manifest.tag} (one-time, ${(total / 1048576).toFixed(0)} MB; needed for Build, Run, Debug and IntelliSense)`, cancellable: true }, async (progress, token) => {
 			const abort = new AbortController();
 			token.onCancellationRequested(() => abort.abort());
 			let reported = 0;

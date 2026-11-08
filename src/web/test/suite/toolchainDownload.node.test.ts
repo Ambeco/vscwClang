@@ -88,6 +88,33 @@ suite('toolchain download', () => {
 		assert.strictEqual(log.length, 1);
 	});
 
+	test('a cold-start 403 is retried, and a persistent one fails with the status', async () => {
+		const served: Served = new Map();
+		const manifest = manifestOf({ 'a.bin': await publish(content, 'a.bin', 'raw', 1000, served) });
+		const good = served.get('https://host/tc/a.bin.0') as Uint8Array<ArrayBuffer>;
+		let calls = 0;
+		served.set('https://host/tc/a.bin.0', () => ++calls === 1 ? new Response('no', { status: 403, statusText: 'Forbidden' }) : new Response(good));
+		assert.deepStrictEqual(await getFile(manifest, new MemStore(), 'k', 'a.bin', { ...OPTS, fetch: fakeFetch(served) }), content);
+		assert.strictEqual(calls, 2);
+		served.set('https://host/tc/a.bin.0', () => new Response('no', { status: 403, statusText: 'Forbidden' }));
+		const log: string[] = [];
+		await assert.rejects(getFile(manifest, new MemStore(), 'k', 'a.bin', { ...OPTS, fetch: fakeFetch(served, log) }), /HTTP 403[\s\S]*try again in a minute/);
+		assert.strictEqual(log.length, 4, 'one attempt plus three retries by default');
+	});
+
+	test('retries wait 1x, 2.5x then 5x the base delay', async () => {
+		const waits: number[] = [];
+		const realSetTimeout = globalThis.setTimeout;
+		globalThis.setTimeout = ((fn: () => void, ms?: number) => { waits.push(ms ?? 0); return realSetTimeout(fn, 0); }) as typeof setTimeout;
+		try {
+			const served: Served = new Map();
+			const manifest = manifestOf({ 'a.bin': await publish(content, 'a.bin', 'raw', 1000, served) });
+			served.set('https://host/tc/a.bin.0', () => new Response('boom', { status: 500, statusText: 'Server Error' }));
+			await assert.rejects(getFile(manifest, new MemStore(), 'k', 'a.bin', { baseUrl: OPTS.baseUrl, retryDelayMs: 100, fetch: fakeFetch(served) }), /HTTP 500/);
+		} finally { globalThis.setTimeout = realSetTimeout; }
+		assert.deepStrictEqual(waits, [100, 250, 500]);
+	});
+
 	test('a network failure explains CORS and offline', async () => {
 		const served: Served = new Map();
 		const manifest = manifestOf({ 'a.bin': await publish(content, 'a.bin', 'raw', 1000, served) });
