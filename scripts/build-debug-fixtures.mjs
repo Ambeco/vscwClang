@@ -3,9 +3,7 @@
 // after changing debugStub.c:
 //   node scripts/build-debug-fixtures.mjs --release <llvm-project>/release/<tag> [--llvm <llvm-project>]
 // --release is the output of llvm-project/wasi-tests/package_release.mjs (sysroot/, resource/, compile-flags.json); the
-// tools come from the --llvm checkout (default ../../llvm-project relative to this repo): build-single-threaded/bin for
-// plain fixtures, build/bin (the wasi-threads build) for threads.c, which targets wasm32-wasip1-threads.
-import { WASI } from 'node:wasi';
+// tools come from the --llvm checkout (default ../../llvm-project relative to this repo): build/bin, the wasi-threads build.
 import { mkdtempSync, readFileSync, rmSync, copyFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -28,36 +26,30 @@ const nested = join(release, 'resource', 'lib', 'clang');
 const resourceDir = existsSync(nested) ? join(nested, readdirSync(nested)[0]) : join(release, 'resource');
 const preopens = work => ({ '/sysroot': join(release, 'sysroot'), '/resource': resourceDir, '/src': fixtures, '/stub': stubSource, '/work': work });
 
-const tool = (threaded, name) => join(llvm, threaded ? 'build' : 'build-single-threaded', 'bin', name);
-for (const needed of [tool(false, 'clang.wasm'), tool(false, 'lld.wasm'), tool(true, 'clang.wasm'), tool(true, 'lld.wasm'), join(release, 'sysroot'), resourceDir]) {
-	if (!existsSync(needed)) { throw new Error(`${needed} is missing; did you mean to build llvm-project (build-single-threaded.bat, build.bat) or pass --release/--llvm?`); }
+const tool = (name) => join(llvm, 'build', 'bin', name);
+for (const needed of [tool('clang.wasm'), tool('lld.wasm'), join(release, 'sysroot'), resourceDir]) {
+	if (!existsSync(needed)) { throw new Error(`${needed} is missing; did you mean to build llvm-project (build.bat) or pass --release/--llvm?`); }
 }
 
-async function run(threaded, wasmFile, toolArgs, work) {
-	const bytes = readFileSync(tool(threaded, wasmFile));
+async function run(wasmFile, toolArgs, work) {
+	const bytes = readFileSync(tool(wasmFile));
 	const module = await WebAssembly.compile(bytes);
-	if (threaded) {
-		const r = await runWasi(module, toolArgs, preopens(work), bytes);
-		if (r.code !== 0) { throw new Error(`${wasmFile} ${toolArgs.join(' ')} exited with ${r.code}: ${r.stderr}`); }
-		return;
-	}
-	const wasi = new WASI({ version: 'preview1', args: toolArgs, returnOnExit: true, preopens: preopens(work) });
-	const code = wasi.start(await WebAssembly.instantiate(module, wasi.getImportObject()));
-	if (code !== 0) { throw new Error(`${wasmFile} ${toolArgs.join(' ')} exited with ${code}`); }
+	const r = await runWasi(module, toolArgs, preopens(work), bytes);
+	if (r.code !== 0) { throw new Error(`${wasmFile} ${toolArgs.join(' ')} exited with ${r.code}: ${r.stderr}`); }
 }
 
 const instrument = ['-O0', '-g', '-fsanitize-coverage=trace-pc-guard,no-prune', ...debugCoverage, '-fdebug-prefix-map=/src/=', '-fdebug-prefix-map=/work='];
 const work = mkdtempSync(join(tmpdir(), 'vscw-fixtures-'));
 try {
-	for (const [slice, threaded, names] of [['wasm32-wasip1', false, ['prog', 'chatty', 'loop', 'stepcall']], ['wasm32-wasip1-threads', true, ['threads', 'spin', 'stepcallmt']]]) {
+	for (const [slice, names] of [['wasm32-wasip1', ['prog', 'chatty', 'loop', 'stepcall']], ['wasm32-wasip1-threads', ['threads', 'spin', 'stepcallmt']]]) {
 		const compile = flags.compile[slice].map(sub);
 		const link = flags.link[slice].map(sub);
 		// The threaded driver spawns cc1 as a subprocess unless told not to (see notes.md 2026-10-29).
-		const driver = threaded ? ['-fintegrated-cc1'] : [];
-		await run(threaded, 'clang.wasm', ['clang', ...compile, ...driver, '-O2', '-c', '/stub/debugStub.c', '-o', `/work/debugStub-${slice}.o`], work);
+		const driver = ['-fintegrated-cc1'];
+		await run('clang.wasm', ['clang', ...compile, ...driver, '-O2', '-c', '/stub/debugStub.c', '-o', `/work/debugStub-${slice}.o`], work);
 		for (const name of names) {
-			await run(threaded, 'clang.wasm', ['clang', ...compile, ...driver, ...instrument, '-c', `/src/${name}.c`, '-o', `/work/${name}.o`], work);
-			await run(threaded, 'lld.wasm', ['wasm-ld', link[0], `/work/${name}.o`, `/work/debugStub-${slice}.o`, '--export=__sanitizer_cov_trace_pc_guard', ...link.slice(1), '-o', `/work/${name}stub.wasm`], work);
+			await run('clang.wasm', ['clang', ...compile, ...driver, ...instrument, '-c', `/src/${name}.c`, '-o', `/work/${name}.o`], work);
+			await run('lld.wasm', ['wasm-ld', link[0], `/work/${name}.o`, `/work/debugStub-${slice}.o`, '--export=__sanitizer_cov_trace_pc_guard', ...link.slice(1), '-o', `/work/${name}stub.wasm`], work);
 			copyFileSync(join(work, `${name}stub.wasm`), join(fixtures, `${name}stub.wasm`));
 			console.log(`rebuilt ${name}stub.wasm (${slice})`);
 		}
@@ -65,8 +57,8 @@ try {
 	// locals.wasm has no stub: reactorHost tests give it a JS hook (an imported __sanitizer_cov_trace_pc_guard).
 	const compile = flags.compile['wasm32-wasip1'].map(sub);
 	const link = flags.link['wasm32-wasip1'].map(sub);
-	await run(false, 'clang.wasm', ['clang', ...compile, ...instrument, '-c', '/src/locals.c', '-o', '/work/locals.o'], work);
-	await run(false, 'lld.wasm', ['wasm-ld', link[0], '/work/locals.o', '--export=__stack_pointer', '--allow-undefined', ...link.slice(1), '-o', '/work/locals.wasm'], work);
+	await run('clang.wasm', ['clang', ...compile, '-fintegrated-cc1', ...instrument, '-c', '/src/locals.c', '-o', '/work/locals.o'], work);
+	await run('lld.wasm', ['wasm-ld', link[0], '/work/locals.o', '--export=__stack_pointer', '--allow-undefined', ...link.slice(1), '-o', '/work/locals.wasm'], work);
 	copyFileSync(join(work, 'locals.wasm'), join(fixtures, 'locals.wasm'));
 	console.log('rebuilt locals.wasm');
 } finally {

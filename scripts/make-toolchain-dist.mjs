@@ -8,8 +8,8 @@
 //                 bin paths. The shipped tools are the PGO builds (llvm-project/pgo/*-variant.bat), not the trees' own bat output,
 //                 so a release stages them into such a folder (see documents/notes.md "v24.0.11 release method").
 //   --mtdist      the only layout: build/bin/{clang,lld}.wasm, build-clangd-threads/bin/clangd.wasm,
-//                 build-lldb/bin/lldb-wasm-reactor.wasm (all import wasi.thread-spawn; the extension host runs their threads in
-//                 Workers, see workerThreads.ts) and build-single-threaded/bin/llvm-ar.wasm (llvm-ar spawns no threads)
+//                 build-lldb/bin/lldb-wasm-reactor.wasm, build/bin/llvm-ar.wasm (all import shared memory; the extension host runs their
+//                 threads in Workers, see workerThreads.ts)
 //   --pin         write the manifest SHA-256 and the jsDelivr baseUrl (@<tag>/mtdist) into src/web/toolchain/toolchainPin.ts
 //   --if-missing  skip the layout if <outDir>/manifest.json already exists
 //   --no-pch      skip the libc++ precompiled headers (a PCH per -std and -O level, each built by the layout's own clang.wasm, ~6 s each)
@@ -41,7 +41,7 @@ const layouts = [
 		['lld.wasm', 'build/bin/lld.wasm'],
 		['clangd.wasm', 'build-clangd-threads/bin/clangd.wasm'],
 		['lldb-wasm-reactor.wasm', 'build-lldb/bin/lldb-wasm-reactor.wasm'],
-		['llvm-ar.wasm', 'build-single-threaded/bin/llvm-ar.wasm'], // no threaded variant: llvm-ar spawns no threads
+		['llvm-ar.wasm', 'build/bin/llvm-ar.wasm'],
 	] },
 ].filter((l) => l.outDir);
 if (!release || layouts.length === 0) {

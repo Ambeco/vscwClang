@@ -3,7 +3,8 @@
 // documents/notes.md "Wasmer tool benchmark".
 //   node scripts/perf-wasmer.mjs <wasmerSdkDir> <workDir> [--repeat 3] [--src hello|iostream]
 // <wasmerSdkDir> holds node_modules/@wasmer/sdk (npm install @wasmer/sdk there, outside the repo); <workDir> is a scratch folder.
-// Uses the single-threaded clang.wasm and the wasm32-wasip1 slice from VSCWCLANG_ARTIFACTS (or the newest release/<tag>).
+// Uses the wasm32-wasip1 slice and bin/clang.wasm from VSCWCLANG_ARTIFACTS (or the newest release/<tag>); that clang.wasm must
+// export its own memory (the removed single-threaded build), since Wasmer's shared-memory thread support is unverified.
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';

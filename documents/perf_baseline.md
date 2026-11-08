@@ -29,7 +29,7 @@ Compile is 2-5x release: sqlite3.c 28.9 s (release 5.9), shell.c 5.0 s (1.7), fm
 - `scanProgram` used to throw on SQLite debug builds (clang keeps the guard address in `-O0` locals: `i32.const A; local.set X; i32.const B; local.set Y; local.get X; local.get Y; i32.add; local.set L; local.get L; call hook`); fixed, it now takes 252 ms there.
 
 ## clangd (cold, `clangd --check`, Node WASI)
-Single-threaded clangd.wasm from the fork (`build-single-threaded`), `-background-index=false -check-locations=false`, one file per process, so every figure is a cold preamble. AST time is the first parse of the main file after the preamble.
+Single-threaded clangd.wasm (an earlier build, since removed), `-background-index=false -check-locations=false`, one file per process, so every figure is a cold preamble. AST time is the first parse of the main file after the preamble.
 
 | File | Preamble (size) | AST |
 |---|---|---|
