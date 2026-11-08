@@ -1,5 +1,5 @@
 // Compile/link performance baseline with the extension's real configuration: the threaded tool binaries
-// (clang-threads.wasm / lld-threads.wasm, which the dist ships as clang.wasm / lld.wasm), the wasm32-wasip1-threads
+// (clang.wasm / lld.wasm), the wasm32-wasip1-threads
 // slice, -fintegrated-cc1, the default flags and, for C++, the prebuilt libc++ PCH. Projects come from compat-projects.mjs.
 //   node scripts/perf-bench.mjs <projectsDir> <name>[,<name>...] [--only regex] [--repeat 3] [--pch both|on|off]
 //        [--link] [--debug] [--j N] [--flags "-x -y"] [--out results.json]
@@ -42,9 +42,9 @@ const [projectsDir, names] = argv;
 if (!projectsDir || !names) { throw new Error('usage: node scripts/perf-bench.mjs <projectsDir> <name>[,<name>...] [--only regex] [--repeat 3] [--pch both|on|off] [--link] [--out file]'); }
 
 const bytesOf = {}, moduleOf = {};
-const load = async name => { bytesOf[name] ??= readFileSync((name === 'clang-threads.wasm' && process.env.PERF_CLANG_WASM) || (name === 'lld-threads.wasm' && process.env.PERF_LLD_WASM) || join(artifacts, 'bin', name)); return moduleOf[name] ??= await WebAssembly.compile(bytesOf[name]); };
-const clang = async (args, preopens) => runWasi(await load('clang-threads.wasm'), [args[0], '-fintegrated-cc1', ...args.slice(1)], preopens, bytesOf['clang-threads.wasm']);
-const lld = async (args, preopens) => runWasi(await load('lld-threads.wasm'), args, preopens, bytesOf['lld-threads.wasm']);
+const load = async name => { bytesOf[name] ??= readFileSync((name === 'clang.wasm' && process.env.PERF_CLANG_WASM) || (name === 'lld.wasm' && process.env.PERF_LLD_WASM) || join(artifacts, 'bin', name)); return moduleOf[name] ??= await WebAssembly.compile(bytesOf[name]); };
+const clang = async (args, preopens) => runWasi(await load('clang.wasm'), [args[0], '-fintegrated-cc1', ...args.slice(1)], preopens, bytesOf['clang.wasm']);
+const lld = async (args, preopens) => runWasi(await load('lld.wasm'), args, preopens, bytesOf['lld.wasm']);
 
 /** Extracts the shipped sysroot (it holds `vscwclang/pch.h`) and the gnu++17 threads PCH from the pinned dist into a cache folder outside the repo and Dropbox. */
 function shipped() {

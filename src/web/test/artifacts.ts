@@ -1,15 +1,15 @@
-import { existsSync, readdirSync } from 'fs';
+import { existsSync, readdirSync, statSync } from 'fs';
 import { join, resolve } from 'path';
 
 /**
  * Where the node tests find the toolchain: a folder with `bin/`, `sysroot/`, `resource/` and `compile-flags.json`.
  *
- * Order: `VSCWCLANG_ARTIFACTS`, then `./llvm-artifacts`, then the newest `release/<tag>` of the sibling `llvm-project`
- * checkout (the output of its `package_release.mjs`). Returns undefined when none has `bin/clang.wasm`, so suites can skip.
+ * Order: `VSCWCLANG_ARTIFACTS`, then `./llvm-artifacts`, then the most recently packaged `release/<tag>` (by modification time,
+ * since tags do not sort by age) of the sibling `llvm-project` checkout (the output of its `package_release.mjs`). Returns undefined when none has `bin/clang.wasm`, so suites can skip.
  */
 export function artifactsRoot(): string | undefined {
 	const releases = resolve('..', '..', 'llvm-project', 'release');
-	const newest = existsSync(releases) ? readdirSync(releases).sort().reverse().map(d => join(releases, d)) : [];
+	const newest = existsSync(releases) ? readdirSync(releases).map(d => join(releases, d)).sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs) : [];
 	return [process.env.VSCWCLANG_ARTIFACTS, resolve('llvm-artifacts'), ...newest]
 		.find(dir => !!dir && existsSync(join(dir, 'bin', 'clang.wasm')) && existsSync(join(dir, 'sysroot')));
 }

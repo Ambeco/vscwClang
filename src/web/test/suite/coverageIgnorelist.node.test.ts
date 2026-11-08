@@ -2,8 +2,9 @@ import * as assert from 'assert';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { resolve } from 'path';
+import { pathToFileURL } from 'url';
 import { artifactBin, artifactPath, artifactResource } from '../artifacts';
-import { WASI } from 'wasi';
 import { COVERAGE_IGNORELIST } from '../../debug/coverageIgnorelist';
 import { scanProgram } from '../../debug/wasmScan';
 
@@ -22,10 +23,13 @@ suite('coverage ignorelist (real clang, needs llvm-artifacts)', function () {
 	suiteTeardown(() => { if (work) { rmSync(work, { recursive: true, force: true }); } });
 
 	async function run(tool: string, args: string[]): Promise<void> {
-		const wasi = new WASI({ version: 'preview1', args, returnOnExit: true, preopens: { '/sysroot': artifactPath('sysroot'), '/resource': artifactResource(), '/work': work } });
-		const instance = await WebAssembly.instantiate(await WebAssembly.compile(readFileSync(artifactBin(tool))), wasi.getImportObject() as WebAssembly.Imports);
-		const code = wasi.start(instance as { exports: { memory: WebAssembly.Memory; _start(): void } });
-		assert.strictEqual(code, 0, `${tool} ${args.join(' ')} exited with ${code}`);
+		// Not a static import: the module re-launches itself as a Worker, so esbuild must not bundle it.
+		const { runWasi } = await import(pathToFileURL(resolve('scripts/clang-wasi.mjs')).href) as { runWasi: (m: WebAssembly.Module, a: string[], p: Record<string, string>, b: Uint8Array) => Promise<{ code: number; stderr: string }> };
+		const bytes = readFileSync(artifactBin(tool));
+		// -fintegrated-cc1: the threaded driver would spawn cc1 as a subprocess, which clang-wasi.mjs does not provide.
+		const toolArgs = tool === 'clang.wasm' ? [args[0], '-fintegrated-cc1', ...args.slice(1)] : args;
+		const r = await runWasi(await WebAssembly.compile(bytes), toolArgs, { '/sysroot': artifactPath('sysroot'), '/resource': artifactResource(), '/work': work }, bytes);
+		assert.strictEqual(r.code, 0, `${tool} ${args.join(' ')} exited with ${r.code}: ${r.stderr}`);
 	}
 
 	async function guardedFunctions(tag: string, extra: string[]): Promise<string[]> {

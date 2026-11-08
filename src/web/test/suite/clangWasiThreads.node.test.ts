@@ -5,7 +5,7 @@ import { join, resolve } from 'path';
 import { artifactBin, artifactPath, artifactResource } from '../artifacts';
 import { pathToFileURL } from 'url';
 
-const CLANG_THREADS = artifactBin('clang-threads.wasm');
+const CLANG_THREADS = artifactBin('clang.wasm');
 type RunWasi = (module: WebAssembly.Module, args: string[], preopens: Record<string, string>, bytes?: Uint8Array) => Promise<{ code: number; stderr: string }>;
 
 suite('scripts/clang-wasi.mjs with the threaded clang.wasm', function () {
