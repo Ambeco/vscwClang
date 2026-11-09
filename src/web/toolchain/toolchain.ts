@@ -110,13 +110,19 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 
 	let diagnostics = '';
 	let exitCode = 0;
+	const buildStarted = Date.now();
+	const phases: string[] = [];
+	let phaseStart = buildStarted;
+	const endPhase = (name: string) => { const now = Date.now(); phases.push(`${name} ${now - phaseStart}`); phaseStart = now; };
 	// First write to the workspace, before any first-use download: a local folder on vscode.dev may need a browser
 	// permission prompt, which requires the user gesture that started the command and expires within seconds.
 	await vscode.workspace.fs.createDirectory(outputDir);
 	const toolchain = getToolchainStore(context, log);
 	await toolchain.ensure(undefined, { userInitiated: true });
+	endPhase('ensure');
 	const flagsPromise = loadCompileFlags(toolchain);
 	const guestSysroot = await loadSysrootGuestFs(toolchain);
+	endPhase('sysroot');
 	const objects = new MemoryGuestFs();
 	const run = (wasmFile: string, args: string[], extra?: ToolExtras) => runTool(context, folder, toolchain, guestSysroot, wasmFile, args, extra);
 	const flags = await flagsPromise;
@@ -135,10 +141,19 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 	const usesCpp = sources.some(s => !s.guest.endsWith('.c'));
 	const uncaughtShim = usesCpp ? await addShim(objects, clang, slice, flags.compile[slice].map(sub), log, UNCAUGHT_SHIM) : undefined;
 	const debugStub = request.mode === 'debug' ? await addShim(objects, clang, slice, flags.compile[slice].map(sub), log, DEBUG_STUB) : undefined;
-	const readGuest: ReadGuestFile = async guestPath => {
-		const hostPath = fromGuestPath(folder.path, guestPath);
-		if (hostPath === undefined) { return undefined; }
-		try { return new Uint8Array(await vscode.workspace.fs.readFile(folder.with({ path: hostPath }))); } catch { return undefined; }
+	endPhase('shims');
+	// Memoized for this build: every source validates its cached object by re-reading the headers it included, and
+	// the same few headers are shared by most sources (each read is an RPC to the workbench).
+	const reads = new Map<string, Promise<Uint8Array<ArrayBuffer> | undefined>>();
+	const readGuest: ReadGuestFile = guestPath => {
+		let read = reads.get(guestPath);
+		if (!read) {
+			const hostPath = fromGuestPath(folder.path, guestPath);
+			read = hostPath === undefined ? Promise.resolve(undefined)
+				: Promise.resolve(vscode.workspace.fs.readFile(folder.with({ path: hostPath }))).then(b => new Uint8Array(b), () => undefined);
+			reads.set(guestPath, read);
+		}
+		return read;
 	};
 	const toolchainVersion = await toolchain.version();
 	const pchSet = vscode.workspace.getConfiguration('vscwclang').get<boolean>('precompiledHeaders', true) ? flags.pch?.[slice] : undefined;
@@ -197,6 +212,7 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 		return { exitCode: 0, objectPath: `/obj/${objectName}`, objectId: entry?.id };
 	};
 	await forEachLimited(sources, compileParallelism(sources.length), async (source, i) => { compiles[i] = await compileSource(source, i); });
+	endPhase('sources');
 	diagnostics += stderrs.join('');
 	exitCode = compiles.find(c => c && c.exitCode !== 0)?.exitCode ?? 0;
 	const objectIds = compiles.map(c => c?.objectId);
@@ -224,6 +240,8 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 			}
 		}
 	}
+	endPhase('link');
+	log.appendLine(`[vscwclang] build phases (ms): ${phases.join(', ')}, total ${Date.now() - buildStarted}`);
 	return { exitCode, diagnostics, parsed: withFailureFallback(parseDiagnostics(diagnostics), exitCode, diagnostics) };
 }
 

@@ -51,6 +51,16 @@ suite('ObjectCache', () => {
 		assert.strictEqual(await c.lookup('k', 'args', 'src', read), undefined);
 	});
 
+	test('with several headers, a change in any one (even the last) is a miss', async () => {
+		const c = new ObjectCache(store);
+		const headers = ['/workspace/a.h', '/workspace/b.h', '/workspace/c.h'];
+		files.set('/workspace/b.h', 'b1'); files.set('/workspace/c.h', 'c1');
+		await c.store('k', 'args', 'src', headers, obj, '', read);
+		assert.ok(await c.lookup('k', 'args', 'src', read));
+		files.set('/workspace/c.h', 'c2');
+		assert.strictEqual(await c.lookup('k', 'args', 'src', read), undefined);
+	});
+
 	test('the id is the content hash: equal objects share it, different ones do not', async () => {
 		const c = new ObjectCache(store);
 		const a = await c.store('a', 'x', 's', [], obj, '', read);

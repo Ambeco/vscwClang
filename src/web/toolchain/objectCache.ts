@@ -147,10 +147,8 @@ export class ObjectCache {
 		await this.load();
 		const m = this.meta.get(key);
 		if (!m || m.argsKey !== argsKey || m.sourceHash !== sourceHash) { return undefined; }
-		for (const [path, hash] of m.headers) {
-			const bytes = await read(path);
-			if (!bytes || await sha256Hex(bytes) !== hash) { return undefined; }
-		}
+		const current = await Promise.all(m.headers.map(async ([path, hash]) => { const bytes = await read(path); return bytes !== undefined && await sha256Hex(bytes) === hash; }));
+		if (!current.every(Boolean)) { return undefined; }
 		const object = await this.backing.get(objectKey(m.id)).catch(() => undefined);
 		if (!object) {
 			this.meta.delete(key);

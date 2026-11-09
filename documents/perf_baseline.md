@@ -76,3 +76,22 @@ Scaling is 1.7x at `-j 2`, 2.5x at `-j 4`, 3.0x at `-j 8` (Catch2), so the exten
 - Occasionally a worker thread traps ("memory access out of bounds") under the Node harness and its file is never indexed (Lua `-j 8` never finished; one or two traps also appear at `-j 4`, with the old clangd too). Not seen in the browser suite; unexplained.
 - libc++ PCH: clangd silently drops `-include-pch` (a nonexistent PCH path produces no error and no speed change: fmt 27.2 s plain vs 27.9 s with the PCH), so it cannot speed up indexing.
 - `-fmodules -fimplicit-module-maps -fmodules-cache-path=...`: the file indexes ("Failed to compile ..., index may be incomplete"), with far fewer symbols (os.cc 1785 vs 3852) and more time (5.5 s vs 1.2 s for one file, including building the std module). Not viable.
+
+## clangd first index in the browser (vscode.dev, v24.0.13 pinned, 2026-11-08)
+Cold `clangd-cache` (IndexedDB keys under `globalStorage/<ext>/clangd-cache/` deleted, folder reseeded in OPFS, `compile_commands.json` with the same units and flags as `perf-clangd-index.mjs`, 12 cores, one run each). Time is the "indexing N/M" status-bar item, polled every 1 s; it starts about 4-8 s after opening a source file (clangd start-up).
+- Lua (33 units): about 4 s (Node `-j 4`: 1.9 s). fmt (27 units + gtest): about 55 s (Node: 29 s). So the browser is about 2x the Node harness.
+- Chrome total working set (all processes, includes vscode.dev itself) went 2.1 to 3.7 GB during the fmt run; per-wasm-memory is not measured.
+- A `compile_commands.json` without the sysroot/`--target` flags indexes in seconds but is invalid: every `#include <vector>` is "file not found" and the log says "Failed to compile ..., index may be incomplete". The extension does not add toolchain flags to database entries (CMake output for this toolchain carries them). Validate a run by counting `file not found` in the `vscwclang` output log (expect 0).
+- Log also shows `Failed to auto-detect resource directory` and, in the first run, `config.yaml:2:0: Config should be a dictionary` (not yet investigated; the second run had no config error).
+
+## Incremental build in the browser (vscode.dev, v24.0.13, Lua 34 files, 12 cores, 2026-11-09)
+Command click to completion (`build.log` mtime), `vscwClang: Build C++`, release, threads slice, objects in the Cache API. The `vscwclang` output now ends each build with `build phases (ms): ensure, sysroot, shims, sources, link, total`; "sources" covers cache validation plus every compile.
+| Scenario | Before (header reads per source) | After (reads memoized per build, headers checked in parallel) |
+|---|---|---|
+| First build of a page session (cold objects reused, page reloaded) | 21.0 s (shims 9.4, sources 10.6, link 0.9) | 20.8 s (same) |
+| Nothing changed | 1.6 s | 0.6 s |
+| Edit one leaf .c (1 compile + 33 reused, link 0.35 s) | 2.8-3.5 s | 1.9-2.4 s |
+| Edit `lobject.h` (19 units recompile; objects unchanged, link skipped) | 5.1-5.4 s | 4.2-4.6 s |
+- Per-file compile in the browser is 0.5-1.0 s (Node: 0.14-0.4 s), about 2x Node, like clangd indexing.
+- Comment-only edits recompile one unit but write no new `a.out.wasm` (object bytes identical, link skipped); `build.log` is the completion signal, not the wasm mtime.
+- The two palette-driven timings include about 2 s of harness typing; the numbers above exclude it (timed from the click on the palette row).
