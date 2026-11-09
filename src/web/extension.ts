@@ -10,6 +10,7 @@ import { publishDiagnostics } from './toolchain/diagnosticsCollection';
 import { buildCacheStats, clearBuildCache, getToolchainStore } from './toolchain/toolchain';
 import { startClangdClient } from './clangd/clangdClient';
 import { wasReported } from './toolchain/toolchainStore';
+import { pickCounterpart } from './switchSource';
 
 export function activate(context: vscode.ExtensionContext) {
 	const log = vscode.window.createOutputChannel('vscwclang');
@@ -74,6 +75,21 @@ export function activate(context: vscode.ExtensionContext) {
 			const before = await buildCacheStats();
 			await clearBuildCache();
 			void vscode.window.showInformationMessage(`vscwClang: build cache cleared (${before.objects} objects, ${(before.bytes / 1048576).toFixed(1)} MB); the next build recompiles everything.`);
+		}),
+		vscode.commands.registerCommand('vscwclang.switchHeaderSource', async () => {
+			const editor = vscode.window.activeTextEditor;
+			if (!editor) { return; }
+			const folder = vscode.workspace.getWorkspaceFolder(editor.document.uri);
+			if (!folder) { void vscode.window.showWarningMessage('vscwClang: Switch Header/Source needs the file to be inside an open workspace folder.'); return; }
+			const current = vscode.workspace.asRelativePath(editor.document.uri, false);
+			const stem = current.replace(/^.*[\\/]/, '').replace(/\.[^.]*$/, '');
+			const found = await vscode.workspace.findFiles(new vscode.RelativePattern(folder, `**/${stem}.*`), '**/{node_modules,.git}/**', 200);
+			const target = pickCounterpart(current, found.map(u => vscode.workspace.asRelativePath(u, false)));
+			if (target === undefined) {
+				void vscode.window.showInformationMessage(`vscwClang: no matching header or source named "${stem}" with a C/C++ extension was found in ${folder.name}.`);
+				return;
+			}
+			await vscode.window.showTextDocument(vscode.Uri.joinPath(folder.uri, target));
 		}),
 		registerTaskProvider(context, log),
 		vscode.debug.registerDebugConfigurationProvider('vscwclang', {

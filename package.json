@@ -25,6 +25,7 @@
     "onCommand:vscwclang.clearBuildCache",
     "onCommand:vscwclang.run",
     "onCommand:vscwclang.runWithArgs",
+    "onCommand:vscwclang.switchHeaderSource",
     "onTaskType:vscwclang",
     "onTaskType:cppbuild",
     "onLanguage:c",
@@ -345,6 +346,10 @@
         "title": "vscwClang: Build and Run C++ with Arguments... (clang.wasm)"
       },
       {
+        "command": "vscwclang.switchHeaderSource",
+        "title": "vscwClang: Switch Header/Source"
+      },
+      {
         "command": "vscwclang.downloadToolchain",
         "title": "vscwClang: Download toolchain"
       },
@@ -355,6 +360,13 @@
       {
         "command": "vscwclang.clearBuildCache",
         "title": "vscwClang: Clear build cache"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "vscwclang.switchHeaderSource",
+        "key": "alt+o",
+        "when": "editorTextFocus && (editorLangId == cpp || editorLangId == c)"
       }
     ],
     "breakpoints": [
