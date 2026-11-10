@@ -347,6 +347,10 @@ export function getToolchainStore(context: StoreContext, log: vscode.OutputChann
 	let store = stores.get(key);
 	if (!store) {
 		store = new ToolchainStore(context, log);
+		store.backgroundPrefetch = true;
+		// Compiling clang.wasm and lld.wasm takes seconds; do it as soon as they are cached, not on the first Build.
+		const warm = store;
+		store.onDidEnsure(() => { for (const file of ['clang.wasm', 'lld.wasm']) { void getModule(warm, file).catch(() => undefined); } });
 		stores.set(key, store);
 	}
 	return store;

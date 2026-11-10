@@ -66,6 +66,28 @@ suite('vscwClang build (in browser)', function () {
 		assert.strictEqual((await new ToolchainStore(context, log).getFile('compile-flags.json')).byteLength, manifest.files['compile-flags.json'].size);
 	});
 
+	test('with backgroundPrefetch, one successful ensure quietly fetches every other non-PCH file', async () => {
+		const prefetchContext = { ...context, globalStorageUri: vscode.Uri.joinPath(dir, 'storage-prefetch') } as vscode.ExtensionContext;
+		const store = new ToolchainStore(prefetchContext, log);
+		store.backgroundPrefetch = true;
+		await store.ensure(['compile-flags.json']);
+		const manifest = JSON.parse(new TextDecoder().decode(await vscode.workspace.fs.readFile(vscode.Uri.parse(`${toolchainUrl}/manifest.json`)))) as { files: Record<string, { size: number }> };
+		const wanted = Object.keys(manifest.files).filter(n => !n.startsWith('pch-'));
+		const versionDir = async () => (await vscode.workspace.fs.readDirectory(vscode.Uri.joinPath(prefetchContext.globalStorageUri, 'toolchain'))).find(([, t]) => t === vscode.FileType.Directory)?.[0] ?? '';
+		const missing = async () => {
+			const out: string[] = [];
+			for (const name of wanted) {
+				const size = await vscode.workspace.fs.stat(vscode.Uri.joinPath(prefetchContext.globalStorageUri, 'toolchain', await versionDir(), name)).then(s => s.size, () => -1);
+				if (size !== manifest.files[name].size) { out.push(name); }
+			}
+			return out;
+		};
+		for (let i = 0; i < 600 && (await missing()).length > 0; i++) { await new Promise(r => setTimeout(r, 100)); }
+		assert.deepStrictEqual(await missing(), [], 'every non-PCH file should be cached by the background download');
+		const entries = (await vscode.workspace.fs.readDirectory(vscode.Uri.joinPath(prefetchContext.globalStorageUri, 'toolchain', await versionDir()))).map(([n]) => n);
+		assert.deepStrictEqual(entries.filter(n => n.startsWith('pch-')), [], 'PCH variants are downloaded only by the builds that use them');
+	});
+
 	test('a failing download shows one dialog with Retry / Show Log; Retry asks again; success fires onDidEnsure', async () => {
 		const errors: { message: string; items: string[] }[] = [];
 		const answers = ['Retry', undefined];

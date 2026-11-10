@@ -68,6 +68,9 @@ export class ToolchainStore {
 	private ready: Promise<{ manifest: ToolchainManifest; keyDir: string; store: VscodeByteStore; opts: DownloadOptions }> | undefined;
 	private queue: Promise<void> | undefined;
 	private pending = 0;
+	private prefetching: Promise<void> | undefined;
+	/** When set (by `getToolchainStore`), every successful `ensure` starts the quiet download of the rest of the toolchain. */
+	backgroundPrefetch = false;
 	private readonly downloaded = new vscode.EventEmitter<void>();
 	/** Fires after every `ensure` that succeeded (including when nothing was missing). */
 	readonly onDidEnsure = this.downloaded.event;
@@ -93,11 +96,36 @@ export class ToolchainStore {
 			void this.ui.showInformationMessage('vscwClang: the plugin cannot function until it has downloaded the clang tools, and that download is still in progress. This command continues when it finishes.');
 		}
 		this.pending++;
-		const run = (this.queue ?? Promise.resolve()).then(() => this.download(names)).then(
-			() => this.downloaded.fire(),
+		const run = (this.queue ?? Promise.resolve()).then(() => this.download(names, false)).then(
+			() => { this.downloaded.fire(); this.startPrefetch(); },
 			e => { if (typeof e === 'object' && e !== null) { reported.add(e); } this.reportFailure(e, names); throw e; }).finally(() => { this.pending--; });
 		this.queue = run.catch(() => undefined);
 		return run;
+	}
+
+	/** Starts the quiet download of the rest of the toolchain once; a failed attempt (offline) is retried after the next successful `ensure`. */
+	private startPrefetch() {
+		const saveData = (globalThis.navigator as { connection?: { saveData?: boolean } } | undefined)?.connection?.saveData === true;
+		if (!this.backgroundPrefetch || this.prefetching || saveData) { return; }
+		this.prefetching = this.prefetchRest().catch(e => {
+			this.prefetching = undefined;
+			this.log.appendLine(`[vscwclang] background toolchain download stopped: ${e instanceof Error ? e.message : String(e)}`);
+		});
+	}
+
+	/**
+	 * Fetches every manifest file not yet cached except the `pch-*` variants (a build downloads the one it uses), build
+	 * files first. One file per queue turn, so a foreground `ensure` waits for at most one file, and failures only log.
+	 */
+	private async prefetchRest(): Promise<void> {
+		const { manifest, keyDir, store } = await this.init();
+		const names = [...BUILD_FILES.filter(n => n in manifest.files), ...Object.keys(manifest.files).filter(n => !BUILD_FILES.includes(n) && !n.startsWith('pch-'))];
+		for (const name of names) {
+			if (await missingBytes(manifest, store, keyDir, [name]) === 0) { continue; }
+			const run = (this.queue ?? Promise.resolve()).then(() => this.download([name], true)).then(() => this.downloaded.fire());
+			this.queue = run.catch(() => undefined);
+			await run;
+		}
 	}
 
 	/** One error dialog with the real reason; not shown when the user cancelled. Retry runs `ensure` again (which reports its own failure). */
@@ -112,6 +140,7 @@ export class ToolchainStore {
 
 	async clear(): Promise<void> {
 		this.ready = undefined;
+		this.prefetching = undefined;
 		await vscode.workspace.fs.delete(vscode.Uri.joinPath(this.context.globalStorageUri, 'toolchain'), { recursive: true, useTrash: false }).then(undefined, () => undefined);
 	}
 
@@ -133,12 +162,15 @@ export class ToolchainStore {
 		return { manifest, keyDir: sha256.slice(0, 16), store: root, opts };
 	}
 
-	private async download(names: string[]): Promise<void> {
-		const { manifest, keyDir, store, opts } = await withSlowProgress('vscwClang: contacting the toolchain host (the clang tools are downloaded once, on first use)...', this.init());
+	private async download(names: string[], background: boolean): Promise<void> {
+		const { manifest, keyDir, store, opts } = await (background ? this.init() : withSlowProgress('vscwClang: contacting the toolchain host (the clang tools are downloaded once, on first use)...', this.init()));
 		const total = await missingBytes(manifest, store, keyDir, names);
 		if (total === 0) { return; }
-		this.log.appendLine(`[vscwclang] downloading toolchain ${manifest.tag} (${(total / 1048576).toFixed(1)} MB) from ${opts.baseUrl}`);
-		await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `vscwClang: downloading the C++ toolchain ${manifest.tag} (one-time, ${Math.max(1, Math.round(total / 1048576))} MB; needed for Build, Run, Debug and IntelliSense)`, cancellable: true }, async (progress, token) => {
+		this.log.appendLine(`[vscwclang] downloading toolchain ${manifest.tag} (${(total / 1048576).toFixed(1)} MB${background ? ', in the background' : ''}) from ${opts.baseUrl}`);
+		const progressOptions: vscode.ProgressOptions = background
+			? { location: vscode.ProgressLocation.Window, title: `vscwClang: downloading ${names.join(', ')} (${Math.max(1, Math.round(total / 1048576))} MB, in the background)` }
+			: { location: vscode.ProgressLocation.Notification, title: `vscwClang: downloading the C++ toolchain ${manifest.tag} (one-time, ${Math.max(1, Math.round(total / 1048576))} MB; needed for Build, Run, Debug and IntelliSense)`, cancellable: true };
+		await vscode.window.withProgress(progressOptions, async (progress, token) => {
 			const abort = new AbortController();
 			token.onCancellationRequested(() => abort.abort());
 			let reported = 0;
