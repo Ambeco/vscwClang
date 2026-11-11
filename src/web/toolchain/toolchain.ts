@@ -403,6 +403,9 @@ const intelliSenseSettled = new Promise<void>(resolve => { settleIntelliSense = 
 /** Tells the toolchain store that clangd has shown its first diagnostics, failed, or is switched off, so clang and lld may be compiled in the background now. */
 export function markIntelliSenseSettled(): void { settleIntelliSense(); }
 
+/** Resolves once `markIntelliSenseSettled` was called. */
+export const whenIntelliSenseSettled = (): Promise<void> => intelliSenseSettled;
+
 /** The compiled module of a toolchain `.wasm` (plus its shared-memory limits), compiled once per session and shared by every caller. */
 export function getModule(toolchain: ToolchainStore, wasmFile: string): Promise<{ module: WebAssembly.Module; limits: MemoryLimits | undefined }> {
 	let module = modules.get(wasmFile);

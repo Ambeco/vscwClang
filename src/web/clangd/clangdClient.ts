@@ -3,7 +3,7 @@ import { createWorkerProcess, type PipedProcess } from '../host/workerProcess';
 import { LanguageClient, ReadableStreamMessageReader, WriteableStreamMessageWriter, type LanguageClientOptions, type MessageTransports } from 'vscode-languageclient/browser';
 import { loadCompileFlags, loadSysrootFiles, loadSysrootGuestFs } from '../toolchain/sysroot';
 import { fallbackFlags } from './fallbackFlags';
-import { getModule, getToolchainStore, markIntelliSenseSettled } from '../toolchain/toolchain';
+import { getModule, getToolchainStore, markIntelliSenseSettled, whenIntelliSenseSettled } from '../toolchain/toolchain';
 import { INTELLISENSE_FILES } from '../toolchain/toolchainStore';
 import { chooseSlice } from '../toolchain/threadSlice';
 import { GUEST_WORKSPACE, TOOLCHAIN_SCHEME, fromGuestPath, isToolchainGuestPath, toGuestPath } from '../toolchain/guestPaths';
@@ -21,6 +21,7 @@ const CLANGD_TMP = 'clangd-tmp';
 const CLANGD_CACHE = 'clangd-cache';
 const CLANGD_CONFIG = 'clangd-config';
 const STALE_TEMP_MS = 10 * 60_000;
+const OVERLAY_DEFER_LIMIT_MS = 15_000;
 /**
  * Starts clangd.wasm as a long-lived process on the Worker host and wires it to VS Code's language-client
  * machinery, so completion/hover/go-to-definition/diagnostics come from clangd instead of nothing.
@@ -203,6 +204,8 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	void (async () => {
 		try {
 			if (databaseDir !== undefined) { return; }
+			// The overlay changes the open file's compile command, which invalidates its first preamble and builds it twice; so it waits for the first diagnostics.
+			await Promise.race([whenIntelliSenseSettled(), new Promise(resolve => setTimeout(resolve, OVERLAY_DEFER_LIMIT_MS))]);
 			await sendOverlay(initial.sources);
 		} catch (e) {
 			log.appendLine(`[vscwclang] clangd: could not register workspace sources for background indexing: ${errorText(e)}`);
