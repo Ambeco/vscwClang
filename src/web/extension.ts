@@ -34,6 +34,7 @@ export function activate(context: vscode.ExtensionContext) {
 				}
 			}).finally(() => { clangdStarting = false; });
 	};
+	getToolchainStore(context, log).prefetch();
 	tryStartClangd();
 	context.subscriptions.push(getToolchainStore(context, log).onDidEnsure(() => { if (clangdFailed) { tryStartClangd(); } }));
 

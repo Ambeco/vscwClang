@@ -1,11 +1,10 @@
 import * as vscode from 'vscode';
-import { sharedMemoryLimits } from '../host/sharedMemory';
 import { createWorkerProcess, type PipedProcess } from '../host/workerProcess';
 import { LanguageClient, ReadableStreamMessageReader, WriteableStreamMessageWriter, type LanguageClientOptions, type MessageTransports } from 'vscode-languageclient/browser';
 import { loadCompileFlags, loadSysrootFiles, loadSysrootGuestFs } from '../toolchain/sysroot';
 import { fallbackFlags } from './fallbackFlags';
-import { getToolchainStore } from '../toolchain/toolchain';
-import { BUILD_FILES } from '../toolchain/toolchainStore';
+import { getModule, getToolchainStore } from '../toolchain/toolchain';
+import { INTELLISENSE_FILES } from '../toolchain/toolchainStore';
 import { chooseSlice } from '../toolchain/threadSlice';
 import { GUEST_WORKSPACE, TOOLCHAIN_SCHEME, fromGuestPath, isToolchainGuestPath, toGuestPath } from '../toolchain/guestPaths';
 import { ToolchainFileSystem } from '../toolchain/toolchainFileSystem';
@@ -47,15 +46,13 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	const level = loggingLevel();
 
 	const toolchain = getToolchainStore(context, log);
-	// One download notification for everything a normal session needs, instead of one per file as each is first read.
-	await toolchain.ensure([...BUILD_FILES, 'clangd.wasm']);
-	const [bits, sysrootFiles, flags] = await Promise.all([toolchain.getFile('clangd.wasm'), loadSysrootFiles(toolchain), loadCompileFlags(toolchain)]);
+	// One download notification for what clangd needs; the rest of the toolchain follows quietly (ToolchainStore.prefetch).
+	await toolchain.ensure(INTELLISENSE_FILES);
+	const [{ module, limits: memoryLimits }, sysrootFiles, flags] = await Promise.all([getModule(toolchain, 'clangd.wasm'), loadSysrootFiles(toolchain), loadCompileFlags(toolchain)]);
 	const mappedFlags = userFlags(log, true);
 	const extraFlags = mappedFlags.flags;
 	// The same slice Build picks, or <thread> and <mutex> would be errors here but not there.
 	const compileFlags = flags.compile[chooseSlice(Object.keys(flags.compile), vscode.workspace.getConfiguration('vscwclang').get<boolean>('threads', true), [extraFlags])].map(f => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource'));
-	const module = await WebAssembly.compile(bits);
-	const memoryLimits = sharedMemoryLimits(bits);
 	if (!memoryLimits) {
 		throw new Error('vscwClang: the downloaded clangd.wasm is the single-threaded build, which no longer has an indexing fallback. Did you mean to use a toolchain published from build-clangd-threads (see scripts/make-toolchain-dist.mjs)?');
 	}

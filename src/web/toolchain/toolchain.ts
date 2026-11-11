@@ -348,15 +348,18 @@ export function getToolchainStore(context: StoreContext, log: vscode.OutputChann
 	if (!store) {
 		store = new ToolchainStore(context, log);
 		store.backgroundPrefetch = true;
-		// Compiling clang.wasm and lld.wasm takes seconds; do it as soon as they are cached, not on the first Build.
+		// Compiling a tool takes seconds; start as soon as its file is cached (in parallel with the next download), not on first use.
 		const warm = store;
-		store.onDidEnsure(() => { for (const file of ['clang.wasm', 'lld.wasm']) { void getModule(warm, file).catch(() => undefined); } });
+		store.onDidHaveFile(file => { if (WARM_MODULES.includes(file)) { void getModule(warm, file).catch(() => undefined); } });
 		stores.set(key, store);
 	}
 	return store;
 }
 
-function getModule(toolchain: ToolchainStore, wasmFile: string): Promise<{ module: WebAssembly.Module; limits: MemoryLimits | undefined }> {
+const WARM_MODULES = ['clangd.wasm', 'clang.wasm', 'lld.wasm'];
+
+/** The compiled module of a toolchain `.wasm` (plus its shared-memory limits), compiled once per session and shared by every caller. */
+export function getModule(toolchain: ToolchainStore, wasmFile: string): Promise<{ module: WebAssembly.Module; limits: MemoryLimits | undefined }> {
 	let module = modules.get(wasmFile);
 	if (!module) {
 		module = toolchain.getFile(wasmFile)

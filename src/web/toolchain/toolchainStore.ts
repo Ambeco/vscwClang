@@ -8,6 +8,12 @@ export type StoreContext = Pick<vscode.ExtensionContext, 'globalStorageUri'>;
 /** Files `build()` needs; lldb joins when debugging lands. */
 export const BUILD_FILES = ['clang.wasm', 'lld.wasm', 'sysroot.zip', 'compile-flags.json'];
 
+/** What clangd needs, so IntelliSense can start. */
+export const INTELLISENSE_FILES = ['clangd.wasm', 'sysroot.zip', 'compile-flags.json'];
+
+/** Order of the background download: IntelliSense, then compile, link, debug. PCH variants are not prefetched (a build fetches the one it uses). */
+export const PREFETCH_ORDER = [...INTELLISENSE_FILES, 'clang.wasm', 'llvm-ar.wasm', 'lld.wasm', 'lldb-wasm-reactor.wasm'];
+
 const isOffline = () => typeof navigator !== 'undefined' && navigator.onLine === false;
 
 /** The notifications the store raises; tests pass a recorder instead of the real window. */
@@ -74,6 +80,9 @@ export class ToolchainStore {
 	private readonly downloaded = new vscode.EventEmitter<void>();
 	/** Fires after every `ensure` that succeeded (including when nothing was missing). */
 	readonly onDidEnsure = this.downloaded.event;
+	private readonly haveFile = new vscode.EventEmitter<string>();
+	/** Fires with a file's name as soon as it is verified in the cache, downloaded now or found already cached. */
+	readonly onDidHaveFile = this.haveFile.event;
 
 	constructor(private readonly context: StoreContext, private readonly log: vscode.OutputChannel, private readonly testing: { ui?: StoreUi; retryDelayMs?: number } = {}) {}
 
@@ -97,31 +106,34 @@ export class ToolchainStore {
 		}
 		this.pending++;
 		const run = (this.queue ?? Promise.resolve()).then(() => this.download(names, false)).then(
-			() => { this.downloaded.fire(); this.startPrefetch(); },
+			() => { this.downloaded.fire(); this.prefetch(); },
 			e => { if (typeof e === 'object' && e !== null) { reported.add(e); } this.reportFailure(e, names); throw e; }).finally(() => { this.pending--; });
 		this.queue = run.catch(() => undefined);
 		return run;
 	}
 
-	/** Starts the quiet download of the rest of the toolchain once; a failed attempt (offline) is retried after the next successful `ensure`. */
-	private startPrefetch() {
+	/**
+	 * Starts, once, the ordered download of the whole toolchain (`PREFETCH_ORDER`); a stopped attempt (offline,
+	 * cancelled) is retried after the next successful `ensure`. Skipped while offline or under Data Saver.
+	 */
+	prefetch() {
 		const saveData = (globalThis.navigator as { connection?: { saveData?: boolean } } | undefined)?.connection?.saveData === true;
-		if (!this.backgroundPrefetch || this.prefetching || saveData) { return; }
-		this.prefetching = this.prefetchRest().catch(e => {
+		if (!this.backgroundPrefetch || this.prefetching || saveData || isOffline()) { return; }
+		this.prefetching = this.prefetchAll().catch(e => {
 			this.prefetching = undefined;
 			this.log.appendLine(`[vscwclang] background toolchain download stopped: ${e instanceof Error ? e.message : String(e)}`);
 		});
 	}
 
 	/**
-	 * Fetches every manifest file not yet cached except the `pch-*` variants (a build downloads the one it uses), build
-	 * files first. One file per queue turn, so a foreground `ensure` waits for at most one file, and failures only log.
+	 * The IntelliSense files go through a normal `ensure` (notification with Cancel, since IntelliSense waits for them);
+	 * the rest follow quietly, one file per queue turn so a foreground `ensure` waits for at most one file.
 	 */
-	private async prefetchRest(): Promise<void> {
-		const { manifest, keyDir, store } = await this.init();
-		const names = [...BUILD_FILES.filter(n => n in manifest.files), ...Object.keys(manifest.files).filter(n => !BUILD_FILES.includes(n) && !n.startsWith('pch-'))];
-		for (const name of names) {
-			if (await missingBytes(manifest, store, keyDir, [name]) === 0) { continue; }
+	private async prefetchAll(): Promise<void> {
+		const { manifest } = await this.init();
+		const order = [...PREFETCH_ORDER, ...Object.keys(manifest.files)].filter((n, i, all) => n in manifest.files && !n.startsWith('pch-') && all.indexOf(n) === i);
+		await this.ensure(order.filter(n => INTELLISENSE_FILES.includes(n)));
+		for (const name of order.filter(n => !INTELLISENSE_FILES.includes(n))) {
 			const run = (this.queue ?? Promise.resolve()).then(() => this.download([name], true)).then(() => this.downloaded.fire());
 			this.queue = run.catch(() => undefined);
 			await run;
@@ -165,7 +177,7 @@ export class ToolchainStore {
 	private async download(names: string[], background: boolean): Promise<void> {
 		const { manifest, keyDir, store, opts } = await (background ? this.init() : withSlowProgress('vscwClang: contacting the toolchain host (the clang tools are downloaded once, on first use)...', this.init()));
 		const total = await missingBytes(manifest, store, keyDir, names);
-		if (total === 0) { return; }
+		if (total === 0) { names.forEach(n => this.haveFile.fire(n)); return; }
 		this.log.appendLine(`[vscwclang] downloading toolchain ${manifest.tag} (${(total / 1048576).toFixed(1)} MB${background ? ', in the background' : ''}) from ${opts.baseUrl}`);
 		const progressOptions: vscode.ProgressOptions = background
 			? { location: vscode.ProgressLocation.Window, title: `vscwClang: downloading ${names.join(', ')} (${Math.max(1, Math.round(total / 1048576))} MB, in the background)` }
@@ -183,6 +195,7 @@ export class ToolchainStore {
 			}, total);
 			for (const name of names) {
 				await getFile(manifest, store, keyDir, name, { ...opts, signal: abort.signal }, tracker);
+					this.haveFile.fire(name);
 			}
 		});
 		await store.removeDirsExcept(keyDir).catch(() => undefined);

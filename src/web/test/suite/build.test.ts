@@ -70,6 +70,8 @@ suite('vscwClang build (in browser)', function () {
 		const prefetchContext = { ...context, globalStorageUri: vscode.Uri.joinPath(dir, 'storage-prefetch') } as vscode.ExtensionContext;
 		const store = new ToolchainStore(prefetchContext, log);
 		store.backgroundPrefetch = true;
+		const seen: string[] = [];
+		store.onDidHaveFile(n => { if (!seen.includes(n)) { seen.push(n); } });
 		await store.ensure(['compile-flags.json']);
 		const manifest = JSON.parse(new TextDecoder().decode(await vscode.workspace.fs.readFile(vscode.Uri.parse(`${toolchainUrl}/manifest.json`)))) as { files: Record<string, { size: number }> };
 		const wanted = Object.keys(manifest.files).filter(n => !n.startsWith('pch-'));
@@ -84,6 +86,8 @@ suite('vscwClang build (in browser)', function () {
 		};
 		for (let i = 0; i < 600 && (await missing()).length > 0; i++) { await new Promise(r => setTimeout(r, 100)); }
 		assert.deepStrictEqual(await missing(), [], 'every non-PCH file should be cached by the background download');
+		const order = ['clangd.wasm', 'clang.wasm', 'lld.wasm', 'lldb-wasm-reactor.wasm'].map(n => seen.indexOf(n));
+		assert.ok(order.every(i => i >= 0) && order.every((i, k) => k === 0 || i > order[k - 1]), `files should arrive IntelliSense, compile, link, debug; saw ${seen.join(', ')}`);
 		const entries = (await vscode.workspace.fs.readDirectory(vscode.Uri.joinPath(prefetchContext.globalStorageUri, 'toolchain', await versionDir()))).map(([n]) => n);
 		assert.deepStrictEqual(entries.filter(n => n.startsWith('pch-')), [], 'PCH variants are downloaded only by the builds that use them');
 	});
