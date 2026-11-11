@@ -95,3 +95,6 @@ Command click to completion (`build.log` mtime), `vscwClang: Build C++`, release
 - Per-file compile in the browser is 0.5-1.0 s (Node: 0.14-0.4 s), about 2x Node, like clangd indexing.
 - Comment-only edits recompile one unit but write no new `a.out.wasm` (object bytes identical, link skipped); `build.log` is the completion signal, not the wasm mtime.
 - The two palette-driven timings include about 2 s of harness typing; the numbers above exclude it (timed from the click on the palette row).
+
+## First build after the background prefetch and precompile (2026-11-10)
+Same Lua project, page reloaded, file opened, then Build. With the toolchain prefetch/compile at activation (`ToolchainStore.prefetch`, `onDidHaveFile`), the first build of a page session, pressed 30 s after opening a file, takes 4.3 s (shims 0.3 s, sources 3.6 s, link 0.4 s) instead of 21-24 s (shims 9.4-10.8 s). Pressed 4 s after opening the file it still takes 24 s, since clang.wasm is still compiling (the compile runs alongside clangd's own start-up). Later builds: unchanged tree 0.5 s, leaf edit 1.2-2.0 s, core header 3.3-3.7 s (this session's machine was less loaded than for the table above).
