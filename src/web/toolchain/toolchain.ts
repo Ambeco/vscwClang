@@ -356,15 +356,47 @@ export function getToolchainStore(context: StoreContext, log: vscode.OutputChann
 	return store;
 }
 
-const WARM_MODULES = ['clangd.wasm', 'clang.wasm', 'lld.wasm'];
+const MODULE_CACHE = 'vscwclang-modules-v1';
+
+/**
+ * Compiles through `compileStreaming` over a Cache API response, so V8 keeps its compiled code across page loads
+ * (a plain `compile` of clang.wasm costs ~10 s every session). The verified bytes and their memory limits are stored
+ * per toolchain version; any cache failure falls back to a plain compile.
+ */
+async function compileCached(toolchain: ToolchainStore, wasmFile: string): Promise<{ module: WebAssembly.Module; limits: MemoryLimits | undefined }> {
+	const plain = async () => {
+		const bits = await toolchain.getFile(wasmFile);
+		return { module: await WebAssembly.compile(bits), limits: sharedMemoryLimits(bits) };
+	};
+	if (typeof caches === 'undefined') { return plain(); }
+	try {
+		const version = await toolchain.version();
+		const url = `https://vscwclang.invalid/module/${version}/${wasmFile}`;
+		const limitsUrl = `${url}.limits`;
+		const cache = await caches.open(MODULE_CACHE);
+		const [hit, hitLimits] = await Promise.all([cache.match(url), cache.match(limitsUrl)]);
+		if (hit && hitLimits) {
+			return { module: await WebAssembly.compileStreaming(hit), limits: ((await hitLimits.json()) as MemoryLimits | null) ?? undefined };
+		}
+		const bits = await toolchain.getFile(wasmFile);
+		const limits = sharedMemoryLimits(bits);
+		for (const key of await cache.keys()) { if (!key.url.includes(`/${version}/`)) { await cache.delete(key); } }
+		await cache.put(url, new Response(bits, { headers: { 'Content-Type': 'application/wasm' } }));
+		await cache.put(limitsUrl, new Response(JSON.stringify(limits ?? null)));
+		const stored = await cache.match(url);
+		return { module: stored ? await WebAssembly.compileStreaming(stored) : await WebAssembly.compile(bits), limits };
+	} catch {
+		return plain();
+	}
+}
+
+const WARM_MODULES =['clangd.wasm', 'clang.wasm', 'lld.wasm'];
 
 /** The compiled module of a toolchain `.wasm` (plus its shared-memory limits), compiled once per session and shared by every caller. */
 export function getModule(toolchain: ToolchainStore, wasmFile: string): Promise<{ module: WebAssembly.Module; limits: MemoryLimits | undefined }> {
 	let module = modules.get(wasmFile);
 	if (!module) {
-		module = toolchain.getFile(wasmFile)
-			.then(async bits => ({ module: await WebAssembly.compile(bits), limits: sharedMemoryLimits(bits) }))
-			.catch(e => { modules.delete(wasmFile); throw e; });
+		module = compileCached(toolchain, wasmFile).catch(e => { modules.delete(wasmFile); throw e; });
 		modules.set(wasmFile, module);
 	}
 	return module;

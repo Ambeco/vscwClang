@@ -98,3 +98,6 @@ Command click to completion (`build.log` mtime), `vscwClang: Build C++`, release
 
 ## First build after the background prefetch and precompile (2026-11-10)
 Same Lua project, page reloaded, file opened, then Build. With the toolchain prefetch/compile at activation (`ToolchainStore.prefetch`, `onDidHaveFile`), the first build of a page session, pressed 30 s after opening a file, takes 4.3 s (shims 0.3 s, sources 3.6 s, link 0.4 s) instead of 21-24 s (shims 9.4-10.8 s). Pressed 4 s after opening the file it still takes 24 s, since clang.wasm is still compiling (the compile runs alongside clangd's own start-up). Later builds: unchanged tree 0.5 s, leaf edit 1.2-2.0 s, core header 3.3-3.7 s (this session's machine was less loaded than for the table above).
+
+## Module compile cache (compileStreaming over the Cache API, 2026-11-10)
+Toolchain `.wasm` files are compiled via `WebAssembly.compileStreaming` on a `vscwclang-modules-v1` Cache API response, so V8's code cache survives page loads. Lua, first Build pressed 4 s after opening a file (page reloaded): 24 s before, 12.3 s after (shims 9-10 s -> 1.1 s; sources 7 s is contention with clangd start-up). Pressed after 30 s: 3.4-4.2 s.
