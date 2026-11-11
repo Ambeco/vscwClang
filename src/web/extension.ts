@@ -7,7 +7,7 @@ import { runProgram } from './runProgram';
 import { joinArgs, splitArgs } from './toolchain/runEnvironment';
 import { registerTaskProvider } from './tasks';
 import { publishDiagnostics } from './toolchain/diagnosticsCollection';
-import { buildCacheStats, clearBuildCache, getToolchainStore } from './toolchain/toolchain';
+import { buildCacheStats, clearBuildCache, getToolchainStore, markIntelliSenseSettled } from './toolchain/toolchain';
 import { startClangdClient } from './clangd/clangdClient';
 import { wasReported } from './toolchain/toolchainStore';
 import { pickCounterpart } from './switchSource';
@@ -23,8 +23,9 @@ export function activate(context: vscode.ExtensionContext) {
 	const tryStartClangd = () => {
 		if (clangdStarting) { return; }
 		clangdStarting = true;
-		void startClangdClient(context, log).then(d => { clangdFailed = false; if (d) { context.subscriptions.push(d); } },
+		void startClangdClient(context, log).then(d => { clangdFailed = false; if (d) { context.subscriptions.push(d); } else { markIntelliSenseSettled(); } },
 			e => {
+				markIntelliSenseSettled();
 				const message = e instanceof Error ? e.message : String(e);
 				const firstFailure = !clangdFailed;
 				clangdFailed = true;

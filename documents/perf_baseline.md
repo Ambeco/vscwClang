@@ -101,3 +101,20 @@ Same Lua project, page reloaded, file opened, then Build. With the toolchain pre
 
 ## Module compile cache (compileStreaming over the Cache API, 2026-11-10)
 Toolchain `.wasm` files are compiled via `WebAssembly.compileStreaming` on a `vscwclang-modules-v1` Cache API response, so V8's code cache survives page loads. Lua, first Build pressed 4 s after opening a file (page reloaded): 24 s before, 12.3 s after (shims 9-10 s -> 1.1 s; sources 7 s is contention with clangd start-up). Pressed after 30 s: 3.4-4.2 s.
+
+## Browser flows end to end (vscode.dev, v24.0.13, 12 cores, 2026-11-10)
+Warm page: toolchain, module code cache and clangd index shards cached; the folder is seeded into OPFS and opened, then timed from Ctrl+P Enter on the file. Harness: `documents/live_testing.md`. Numbers are from a fresh test Chrome; the same code ran 25-30 s on Lua after about 40 page reloads, so restart Chrome when numbers drift.
+
+Flow 1, project open to IntelliSense to go-to-definition (the squiggle is a deliberate error in the opened file; hover and definition were retried every 1.3-1.5 s, so their figures include that wait and the real latency is near zero once diagnostics show):
+| Project | first diagnostic | hover | go-to-definition (other file) |
+|---|---|---|---|
+| 3 files, `<iostream>` `<map>` `<string>` `<vector>` | 6.3-6.8 s | 8.0 s | 9.6 s |
+| Lua (33 C files, 27 headers), definition in `lgc.h` | 8.1 s | 9.4 s | 11.0 s |
+Where the 6.5 s goes (3-file project): activation 1.1 s after the file opens; clangd start-up 2.2 s (`clangd start (ms)` line in the `vscwclang` output: toolchain 1.1-1.3, workspace 0.15, spawn, `initialize` 0.55); then about 3 s from `didOpen` to the diagnostic, of which the first preamble (`<iostream>` plus `<map>`) is 2.1-2.8 s and the rest is unexplained (clangd's first preamble build starts 2.6 s after `didOpen` even for Lua, whose preamble takes 0.45 s).
+
+Flow 2, after a test run: edit a `.cpp`, Build and Run, until the test wrote its result file (3 files, `<sstream>` `<vector>` `<string>`, PCH on): first build and run on a warm page 1.4-2.0 s, rerun unchanged 0.3-0.6 s, edit one `.cpp` 1.1-1.3 s. Phases of an edit: compile 0.45-0.59 s, link 0.29-0.44 s, build total 0.82-0.93 s, run start about 0.3 s. Nothing here is worth tuning; the floor is one compile plus one link.
+
+Fixes from this pass (A/B with alternated bundles on the same Chrome):
+- `clangd-tmp` in extension storage leaked a preamble file or three per closed or reloaded tab (199 files, 556 MB in the test profile); `createDirectory` on it took 1.1-1.5 s at every start, against 10-150 ms when empty (first diagnostic 8.7-9.3 s to 6.3 s). Files older than 10 minutes are now deleted in the background after clangd starts (`staleTempFiles.ts`).
+- clang and lld are compiled after clangd's first diagnostics instead of beside its start-up: first diagnostic 10.3-12.1 s to 9.8-10.1 s in the degraded-Chrome A/B (about 0.5 s); the first Build 25 s after opening is unchanged (1.4 s).
+- Overlapping the toolchain load with the workspace scan was slower (the extension host is one thread): not kept.

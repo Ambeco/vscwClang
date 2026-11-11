@@ -349,8 +349,13 @@ export function getToolchainStore(context: StoreContext, log: vscode.OutputChann
 		store = new ToolchainStore(context, log);
 		store.backgroundPrefetch = true;
 		// Compiling a tool takes seconds; start as soon as its file is cached (in parallel with the next download), not on first use.
+		// clang and lld wait for IntelliSense's first diagnostics: compiling them alongside clangd's start-up delayed it by ~0.5 s.
 		const warm = store;
-		store.onDidHaveFile(file => { if (WARM_MODULES.includes(file)) { void getModule(warm, file).catch(() => undefined); } });
+		store.onDidHaveFile(file => {
+			if (!WARM_MODULES.includes(file)) { return; }
+			const start = () => { void getModule(warm, file).catch(() => undefined); };
+			if (file === 'clangd.wasm') { start(); } else { void Promise.race([intelliSenseSettled, new Promise(resolve => setTimeout(resolve, WARM_DEFER_LIMIT_MS))]).then(start); }
+		});
 		stores.set(key, store);
 	}
 	return store;
@@ -390,7 +395,13 @@ async function compileCached(toolchain: ToolchainStore, wasmFile: string): Promi
 	}
 }
 
-const WARM_MODULES =['clangd.wasm', 'clang.wasm', 'lld.wasm'];
+const WARM_MODULES = ['clangd.wasm', 'clang.wasm', 'lld.wasm'];
+const WARM_DEFER_LIMIT_MS = 20_000;
+let settleIntelliSense!: () => void;
+const intelliSenseSettled = new Promise<void>(resolve => { settleIntelliSense = resolve; });
+
+/** Tells the toolchain store that clangd has shown its first diagnostics, failed, or is switched off, so clang and lld may be compiled in the background now. */
+export function markIntelliSenseSettled(): void { settleIntelliSense(); }
 
 /** The compiled module of a toolchain `.wasm` (plus its shared-memory limits), compiled once per session and shared by every caller. */
 export function getModule(toolchain: ToolchainStore, wasmFile: string): Promise<{ module: WebAssembly.Module; limits: MemoryLimits | undefined }> {

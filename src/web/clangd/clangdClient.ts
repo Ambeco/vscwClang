@@ -3,7 +3,7 @@ import { createWorkerProcess, type PipedProcess } from '../host/workerProcess';
 import { LanguageClient, ReadableStreamMessageReader, WriteableStreamMessageWriter, type LanguageClientOptions, type MessageTransports } from 'vscode-languageclient/browser';
 import { loadCompileFlags, loadSysrootFiles, loadSysrootGuestFs } from '../toolchain/sysroot';
 import { fallbackFlags } from './fallbackFlags';
-import { getModule, getToolchainStore } from '../toolchain/toolchain';
+import { getModule, getToolchainStore, markIntelliSenseSettled } from '../toolchain/toolchain';
 import { INTELLISENSE_FILES } from '../toolchain/toolchainStore';
 import { chooseSlice } from '../toolchain/threadSlice';
 import { GUEST_WORKSPACE, TOOLCHAIN_SCHEME, fromGuestPath, isToolchainGuestPath, toGuestPath } from '../toolchain/guestPaths';
@@ -15,10 +15,12 @@ import { GUEST_CACHE, GUEST_CONFIG, OVERLAY_BATCH_SIZE, SEMANTIC_TOKENS_MAX_LINE
 import { discoverTargetSources, discoverWorkspaceSources, findCompilationDatabaseDir } from './compileOverlay';
 import { ClangdStatus } from './clangdStatus';
 import { clangdUserConfig, headersAreCpp, mapClangdSettings } from './clangdSettings';
+import { removeStaleTempFiles, type TempDirFs } from './staleTempFiles';
 
 const CLANGD_TMP = 'clangd-tmp';
 const CLANGD_CACHE = 'clangd-cache';
 const CLANGD_CONFIG = 'clangd-config';
+const STALE_TEMP_MS = 10 * 60_000;
 /**
  * Starts clangd.wasm as a long-lived process on the Worker host and wires it to VS Code's language-client
  * machinery, so completion/hover/go-to-definition/diagnostics come from clangd instead of nothing.
@@ -44,11 +46,15 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 		return undefined;
 	}
 	const level = loggingLevel();
+	const startedAt = Date.now();
+	const phases: string[] = [];
+	const mark = (name: string) => { phases.push(`${name} ${Date.now() - startedAt}`); };
 
 	const toolchain = getToolchainStore(context, log);
 	// One download notification for what clangd needs; the rest of the toolchain follows quietly (ToolchainStore.prefetch).
 	await toolchain.ensure(INTELLISENSE_FILES);
-	const [{ module, limits: memoryLimits }, sysrootFiles, flags] = await Promise.all([getModule(toolchain, 'clangd.wasm'), loadSysrootFiles(toolchain), loadCompileFlags(toolchain)]);
+	const [{ module, limits: memoryLimits }, sysrootFiles, flags, sysroot] = await Promise.all([getModule(toolchain, 'clangd.wasm'), loadSysrootFiles(toolchain), loadCompileFlags(toolchain), loadSysrootGuestFs(toolchain)]);
+	mark('toolchain');
 	const mappedFlags = userFlags(log, true);
 	const extraFlags = mappedFlags.flags;
 	// The same slice Build picks, or <thread> and <mutex> would be errors here but not there.
@@ -101,7 +107,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	})));
 
 	const args = clangdArgs(clangdLogLevel(level), clangdThreadCount(globalThis.navigator?.hardwareConcurrency), mapped.args);
-	const sysroot = await loadSysrootGuestFs(toolchain);
+	mark('workspace');
 	const process = await createWorkerProcess(context, {
 		name: 'clangd', module, args, env: { XDG_CACHE_HOME: GUEST_CACHE, XDG_CONFIG_HOME: GUEST_CONFIG }, memoryLimits,
 		mounts: [
@@ -114,6 +120,12 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 			...(shardMount ? [{ guestPath: shardMount, uri: cacheDir }] : []),
 		],
 	});
+	mark('process');
+	// Off the start-up path: the folder's old files are what made `createDirectory(tmpDir)` slow, and are not needed by this session.
+	const tmpFs = vscode.workspace.fs;
+	const tmpAccess: TempDirFs<vscode.Uri> = { readDirectory: d => tmpFs.readDirectory(d), stat: f => tmpFs.stat(f), delete: f => tmpFs.delete(f), child: (d, name) => vscode.Uri.joinPath(d, name) };
+	void removeStaleTempFiles(tmpAccess, tmpDir, Date.now(), STALE_TEMP_MS).then(
+		n => { if (n > 0) { log.appendLine(`[vscwclang] clangd: removed ${n} stale temporary file(s) left by earlier sessions`); } });
 	const stderrChunks: string[] = [];
 	process.stderr?.onData(d => {
 		const text = new TextDecoder().decode(d);
@@ -167,6 +179,8 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 		initializationOptions: { fallbackFlags: overlayFlags, clangdFileStatus: true },
 		synchronize: { fileEvents: sourceWatcher },
 		middleware: {
+			// The user config's own (empty) diagnostics arrive before any source's, so they do not count.
+			handleDiagnostics: (uri, diagnostics, next) => { if (!uri.path.endsWith('.yaml')) { markIntelliSenseSettled(); } next(uri, diagnostics); },
 			provideDocumentSemanticTokens: (document, token, next) => document.lineCount > SEMANTIC_TOKENS_MAX_LINES ? null : next(document, token),
 			provideDocumentSemanticTokensEdits: (document, resultId, token, next) => document.lineCount > SEMANTIC_TOKENS_MAX_LINES ? null : next(document, resultId, token),
 		},
@@ -175,6 +189,8 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	try {
 		client.onNotification('textDocument/clangd.fileStatus', (p: { uri: string; state: string }) => status.fileStatus(p.uri, p.state));
 		await client.start();
+		mark('initialized');
+		log.appendLine(`[vscwclang] clangd start (ms): ${phases.join(', ')}`);
 		status.ready();
 	} catch (e) {
 		// A process that died during startup rejects start(); stop everything started so far so nothing leaks.
