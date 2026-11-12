@@ -43,8 +43,9 @@ export const OVERLAY_BATCH_SIZE = 200;
 export function compilationDatabaseChanges(guestPaths: readonly string[], flags: readonly string[], perFileFlags: Readonly<Record<string, readonly string[]>> = {}): CompilationDatabaseChanges {
 	const changes: CompilationDatabaseChanges = {};
 	for (const guestPath of guestPaths) {
-		const driver = guestPath.toLowerCase().endsWith('.c') ? 'clang' : 'clang++';
-		changes[guestPath] = { workingDirectory: GUEST_WORKSPACE, compilationCommand: [driver, ...flags, ...(perFileFlags[guestPath] ?? []), guestPath] };
+		// Shaped exactly like clangd's own fallback command (`clang <flags> -- <file>`): a different command for a file that is
+		// already open makes clangd discard its preamble and rebuild it (8-20 s for Catch2), and the first hover waits for that.
+		changes[guestPath] = { workingDirectory: GUEST_WORKSPACE, compilationCommand: ['clang', ...flags, ...(perFileFlags[guestPath] ?? []), '--', guestPath] };
 	}
 	return changes;
 }

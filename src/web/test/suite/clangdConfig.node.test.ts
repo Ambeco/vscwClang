@@ -15,11 +15,11 @@ suite('clangdConfig', () => {
 		assert.ok(!args.includes('-sync'));
 	});
 
-	test('compilationDatabaseChanges: one command per file, clang for .c and clang++ otherwise', () => {
+	test('compilationDatabaseChanges: one command per file, shaped like the clangd fallback (clang <flags> -- <file>)', () => {
 		const changes = compilationDatabaseChanges(['/workspace/a.cpp', '/workspace/src/b.cc', '/workspace/c.c'], ['--target=wasm32-wasip1', '-std=c++20']);
 		assert.deepStrictEqual(Object.keys(changes), ['/workspace/a.cpp', '/workspace/src/b.cc', '/workspace/c.c']);
-		assert.deepStrictEqual(changes['/workspace/a.cpp'], { workingDirectory: '/workspace', compilationCommand: ['clang++', '--target=wasm32-wasip1', '-std=c++20', '/workspace/a.cpp'] });
-		assert.strictEqual(changes['/workspace/src/b.cc'].compilationCommand[0], 'clang++');
+		assert.deepStrictEqual(changes['/workspace/a.cpp'], { workingDirectory: '/workspace', compilationCommand: ['clang', '--target=wasm32-wasip1', '-std=c++20', '--', '/workspace/a.cpp'] });
+		assert.deepStrictEqual(changes['/workspace/src/b.cc'].compilationCommand.slice(-2), ['--', '/workspace/src/b.cc']);
 		assert.strictEqual(changes['/workspace/c.c'].compilationCommand[0], 'clang');
 	});
 

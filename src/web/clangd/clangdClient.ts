@@ -175,7 +175,8 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 		if (databaseDir !== undefined || !e.affectsConfiguration('tasks', folder)) { return; }
 		void resolveSources().then(r => sendOverlay(r.sources)).catch(err => log.appendLine(`[vscwclang] clangd: could not re-register sources after a tasks.json change: ${errorText(err)}`));
 	});
-	const disposeWatchers = () => { createdSub.dispose(); tasksSub.dispose(); sourceWatcher.dispose(); editorSub.dispose(); statusItem.dispose(); };
+	let closeSub: vscode.Disposable | undefined;
+	const disposeWatchers = () => { closeSub?.dispose(); createdSub.dispose(); tasksSub.dispose(); sourceWatcher.dispose(); editorSub.dispose(); statusItem.dispose(); };
 	const clientOptions: LanguageClientOptions = {
 		documentSelector: [{ language: 'c' }, { language: 'cpp' }, { scheme: TOOLCHAIN_SCHEME }],
 		uriConverters: { code2Protocol, protocol2Code },
@@ -206,11 +207,20 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	void (async () => {
 		try {
 			if (databaseDir !== undefined) { return; }
-			// The overlay changes the open file's compile command, which invalidates its first preamble and builds it twice; so it waits for the first diagnostics.
+			// clangd force-rebuilds every open file named in the overlay (its preamble takes 8-20 s on Catch2, and the first hover waits for it),
+			// so the overlay waits for the first diagnostics and leaves out the open files; each gets its entry when it is closed.
 			await Promise.race([whenIntelliSenseSettled(), new Promise(resolve => setTimeout(resolve, OVERLAY_DEFER_LIMIT_MS))]);
 			// Indexing then waits out the first hover and go-to-definition: while it runs they take ~9 s instead of ~1.3 s (Catch2, 109 units).
 			await new Promise(resolve => setTimeout(resolve, INDEX_START_DELAY_MS));
-			await sendOverlay(initial.sources);
+			const openNow = new Set(vscode.workspace.textDocuments.map(d => d.uri.toString()));
+			const heldBack = new Map(initial.sources.filter(e => openNow.has(e.uri.toString())).map(e => [e.uri.toString(), e]));
+			if (heldBack.size > 0) {
+				closeSub = vscode.workspace.onDidCloseTextDocument(d => {
+					const entry = heldBack.get(d.uri.toString());
+					if (entry) { heldBack.delete(d.uri.toString()); void sendOverlay([entry]).catch(() => undefined); }
+				});
+			}
+			await sendOverlay(initial.sources.filter(e => !heldBack.has(e.uri.toString())));
 		} catch (e) {
 			log.appendLine(`[vscwclang] clangd: could not register workspace sources for background indexing: ${errorText(e)}`);
 		}
