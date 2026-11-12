@@ -20,10 +20,12 @@ export function activate(context: vscode.ExtensionContext) {
 	log.appendLine(`[vscwclang] workspace: ${vscode.workspace.workspaceFile?.toString() ?? 'single folder (no workspace file)'}; folders: ${folders.map(f => f.uri.toString()).join(', ') || 'none'}`);
 	let clangdFailed = false;
 	let clangdStarting = false;
+	let clangdRunning = false;
 	const tryStartClangd = () => {
-		if (clangdStarting) { return; }
+		if (clangdStarting || clangdRunning) { return; }
 		clangdStarting = true;
-		void startClangdClient(context, log).then(d => { clangdFailed = false; if (d) { context.subscriptions.push(d); } else { markIntelliSenseSettled(); } },
+		getToolchainStore(context, log).prefetch();
+		void startClangdClient(context, log).then(d => { clangdFailed = false; if (d) { clangdRunning = true; context.subscriptions.push(d); } else { markIntelliSenseSettled(); } },
 			e => {
 				markIntelliSenseSettled();
 				const message = e instanceof Error ? e.message : String(e);
@@ -35,8 +37,14 @@ export function activate(context: vscode.ExtensionContext) {
 				}
 			}).finally(() => { clangdStarting = false; });
 	};
-	getToolchainStore(context, log).prefetch();
-	tryStartClangd();
+	// Activation is on startup, not on opening a C/C++ file, so clangd is already up (saving ~1.1 s) when the first file opens; a workspace without C/C++ files starts nothing and downloads nothing.
+	const isCpp = (d: vscode.TextDocument) => d.languageId === 'c' || d.languageId === 'cpp';
+	const startIfCpp = async () => {
+		if (vscode.workspace.textDocuments.some(isCpp) || (await vscode.workspace.findFiles('**/*.{c,cc,cpp,cxx,h,hh,hpp}', '**/{node_modules,.git}/**', 1)).length > 0) { tryStartClangd(); }
+	};
+	void startIfCpp();
+	context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => { void startIfCpp(); }));
+	context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(d => { if (isCpp(d)) { tryStartClangd(); } }));
 	context.subscriptions.push(getToolchainStore(context, log).onDidEnsure(() => { if (clangdFailed) { tryStartClangd(); } }));
 
 	context.subscriptions.push(

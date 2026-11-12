@@ -29,7 +29,8 @@
     "onTaskType:vscwclang",
     "onTaskType:cppbuild",
     "onLanguage:c",
-    "onLanguage:cpp"
+    "onLanguage:cpp",
+    "onStartupFinished"
   ],
   "browser": "./dist/web/extension.js",
   "contributes": {

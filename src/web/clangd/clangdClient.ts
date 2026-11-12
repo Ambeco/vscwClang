@@ -53,8 +53,9 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 
 	const toolchain = getToolchainStore(context, log);
 	// One download notification for what clangd needs; the rest of the toolchain follows quietly (ToolchainStore.prefetch).
-	await toolchain.ensure(INTELLISENSE_FILES);
-	const [{ module, limits: memoryLimits }, sysrootFiles, flags, sysroot] = await Promise.all([getModule(toolchain, 'clangd.wasm'), loadSysrootFiles(toolchain), loadCompileFlags(toolchain), loadSysrootGuestFs(toolchain)]);
+	// Everything starts at once: cached files are read without queueing behind `ensure`, and a missing one downloads on its own.
+	const modulePromise = getModule(toolchain, 'clangd.wasm');
+	const [, { module, limits: memoryLimits }, sysrootFiles, flags, sysroot] = await Promise.all([toolchain.ensure(INTELLISENSE_FILES), modulePromise, loadSysrootFiles(toolchain), loadCompileFlags(toolchain), loadSysrootGuestFs(toolchain)]);
 	mark('toolchain');
 	const mappedFlags = userFlags(log, true);
 	const extraFlags = mappedFlags.flags;

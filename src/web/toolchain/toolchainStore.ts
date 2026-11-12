@@ -75,6 +75,8 @@ export class ToolchainStore {
 	private queue: Promise<void> | undefined;
 	private pending = 0;
 	private prefetching: Promise<void> | undefined;
+	// Names already checked or downloaded this session: `ensure` of them returns at once instead of queueing behind the background prefetch (~0.5 s per file read at clangd start-up).
+	private readonly verified = new Set<string>();
 	/** When set (by `getToolchainStore`), every successful `ensure` starts the quiet download of the rest of the toolchain. */
 	backgroundPrefetch = false;
 	private readonly downloaded = new vscode.EventEmitter<void>();
@@ -94,8 +96,11 @@ export class ToolchainStore {
 	}
 
 	async getFile(name: string): Promise<Uint8Array<ArrayBuffer>> {
-		await this.ensure([name]);
 		const { manifest, keyDir, store, opts } = await this.init();
+		// A cached file is read at once; only a missing one goes through `ensure`, which queues behind the background prefetch.
+		if (!this.verified.has(name)) {
+			if (await missingBytes(manifest, store, keyDir, [name]) === 0) { this.verified.add(name); } else { await this.ensure([name]); }
+		}
 		return getFile(manifest, store, keyDir, name, opts);
 	}
 
@@ -104,6 +109,7 @@ export class ToolchainStore {
 		if (options.userInitiated && this.pending > 0) {
 			void this.ui.showInformationMessage('vscwClang: the plugin cannot function until it has downloaded the clang tools, and that download is still in progress. This command continues when it finishes.');
 		}
+		if (names.every(n => this.verified.has(n))) { return Promise.resolve(); }
 		this.pending++;
 		const run = (this.queue ?? Promise.resolve()).then(() => this.download(names, false)).then(
 			() => { this.downloaded.fire(); this.prefetch(); },
@@ -153,6 +159,7 @@ export class ToolchainStore {
 	async clear(): Promise<void> {
 		this.ready = undefined;
 		this.prefetching = undefined;
+		this.verified.clear();
 		await vscode.workspace.fs.delete(vscode.Uri.joinPath(this.context.globalStorageUri, 'toolchain'), { recursive: true, useTrash: false }).then(undefined, () => undefined);
 	}
 
@@ -177,7 +184,7 @@ export class ToolchainStore {
 	private async download(names: string[], background: boolean): Promise<void> {
 		const { manifest, keyDir, store, opts } = await (background ? this.init() : withSlowProgress('vscwClang: contacting the toolchain host (the clang tools are downloaded once, on first use)...', this.init()));
 		const total = await missingBytes(manifest, store, keyDir, names);
-		if (total === 0) { names.forEach(n => this.haveFile.fire(n)); return; }
+		if (total === 0) { names.forEach(n => { this.verified.add(n); this.haveFile.fire(n); }); return; }
 		this.log.appendLine(`[vscwclang] downloading toolchain ${manifest.tag} (${(total / 1048576).toFixed(1)} MB${background ? ', in the background' : ''}) from ${opts.baseUrl}`);
 		const progressOptions: vscode.ProgressOptions = background
 			? { location: vscode.ProgressLocation.Window, title: `vscwClang: downloading ${names.join(', ')} (${Math.max(1, Math.round(total / 1048576))} MB, in the background)` }
@@ -195,7 +202,8 @@ export class ToolchainStore {
 			}, total);
 			for (const name of names) {
 				await getFile(manifest, store, keyDir, name, { ...opts, signal: abort.signal }, tracker);
-					this.haveFile.fire(name);
+				this.verified.add(name);
+				this.haveFile.fire(name);
 			}
 		});
 		await store.removeDirsExcept(keyDir).catch(() => undefined);
