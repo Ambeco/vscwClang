@@ -22,6 +22,7 @@ const CLANGD_CACHE = 'clangd-cache';
 const CLANGD_CONFIG = 'clangd-config';
 const STALE_TEMP_MS = 10 * 60_000;
 const OVERLAY_DEFER_LIMIT_MS = 15_000;
+const INDEX_START_DELAY_MS = 15_000;
 /**
  * Starts clangd.wasm as a long-lived process on the Worker host and wires it to VS Code's language-client
  * machinery, so completion/hover/go-to-definition/diagnostics come from clangd instead of nothing.
@@ -207,6 +208,8 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 			if (databaseDir !== undefined) { return; }
 			// The overlay changes the open file's compile command, which invalidates its first preamble and builds it twice; so it waits for the first diagnostics.
 			await Promise.race([whenIntelliSenseSettled(), new Promise(resolve => setTimeout(resolve, OVERLAY_DEFER_LIMIT_MS))]);
+			// Indexing then waits out the first hover and go-to-definition: while it runs they take ~9 s instead of ~1.3 s (Catch2, 109 units).
+			await new Promise(resolve => setTimeout(resolve, INDEX_START_DELAY_MS));
 			await sendOverlay(initial.sources);
 		} catch (e) {
 			log.appendLine(`[vscwclang] clangd: could not register workspace sources for background indexing: ${errorText(e)}`);
