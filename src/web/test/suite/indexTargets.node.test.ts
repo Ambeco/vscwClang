@@ -44,7 +44,7 @@ suite('indexTargetsFromTasks', () => {
 suite('compilationDatabaseChanges per-file flags', () => {
 	test('a file\'s own flags follow the shared ones, and files without any get only the shared flags', () => {
 		const changes = compilationDatabaseChanges(['/workspace/a.cpp', '/workspace/b.cpp'], ['--target=wasm32'], { '/workspace/a.cpp': ['-DFOO'] });
-		assert.deepStrictEqual(changes['/workspace/a.cpp'].compilationCommand, ['clang++', '--target=wasm32', '-DFOO', '/workspace/a.cpp']);
-		assert.deepStrictEqual(changes['/workspace/b.cpp'].compilationCommand, ['clang++', '--target=wasm32', '/workspace/b.cpp']);
+		assert.deepStrictEqual(changes['/workspace/a.cpp'].compilationCommand, ['clang', '--target=wasm32', '-DFOO', '--', '/workspace/a.cpp']);
+		assert.deepStrictEqual(changes['/workspace/b.cpp'].compilationCommand, ['clang', '--target=wasm32', '--', '/workspace/b.cpp']);
 	});
 });
