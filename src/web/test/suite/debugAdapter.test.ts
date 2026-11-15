@@ -195,6 +195,35 @@ suite('vscwClang debug adapter (in browser)', function () {
 		await client.event('terminated');
 	});
 
+	test('a failed assert stops in the debugger in the function that asserted, and Continue ends the run with exit code 134', async () => {
+		const nl = String.fromCharCode(10);
+		await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, 'asserting.cpp'), new TextEncoder().encode([
+			'#include <cassert>',
+			'static void check(int v) {',
+			'  assert(v > 0);',
+			'}',
+			'int main() {',
+			'  check(0);',
+			'  return 0;',
+			'}', ''].join(nl)));
+		const client = newClient('asserting.cpp');
+		await client.ok('initialize', { adapterID: 'vscwclang' });
+		await client.ok('launch', { console: 'internalConsole' });
+		await client.event('initialized');
+		await client.ok('configurationDone');
+
+		const stopped = (await client.event('stopped')).body;
+		assert.strictEqual(stopped.reason, 'exception', JSON.stringify(stopped));
+		assert.match(String(stopped.text), /abort\(\) called/);
+		const frames = (await client.ok('stackTrace', { threadId: stopped.threadId })).stackFrames as { name: string; line: number }[];
+		assert.match(frames[0].name, /check/, JSON.stringify(frames));
+		assert.ok(frames.some(f => /main/.test(f.name)), JSON.stringify(frames));
+
+		await client.ok('continue', { threadId: stopped.threadId });
+		assert.strictEqual((await client.event('exited')).body.exitCode, 134);
+		await client.event('terminated');
+	});
+
 	const INPUT_SOURCE = [
 		'#include <iostream>',
 		'static int twice(int v) {',

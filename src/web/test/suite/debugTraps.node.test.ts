@@ -154,3 +154,28 @@ suite('trapStop', () => {
 		assert.deepStrictEqual(refineFrames(shadow, trace([7, 1]), undefined), shadow);
 	});
 });
+
+suite('abort stops before the program exits 134 (real stub)', function () {
+	this.timeout(60_000);
+
+	for (const withMemory of [true, false]) {
+		test(`abort() stops as an exception with the calling stack, and Continue exits 134 (${withMemory ? 'shared memory' : 'no shared memory'})`, async () => {
+			const p = startProgram('aborting', withMemory);
+			try {
+				await p.nextStop();
+				await p.debuggee.resume('continue');
+				const stop = await p.nextStop();
+				assert.deepStrictEqual([stop.reason, stop.threadId], ['exception', 1]);
+				assert.match(String(stop.text), /abort\(\) called.*exit code 134/);
+				const fail = p.guardsOf('fail');
+				// The fixture's own abort() is instrumented (the shim the extension links is not), so skip its frame.
+				const callers = stop.frames.filter(f => f.funcIndex !== p.guardsOf('abort').index);
+				assert.strictEqual(callers[0].funcIndex, fail.index, 'the function that called abort is on top');
+				assert.ok(callers.filter(f => f.funcIndex === fail.index).length >= 2, 'the recursion shows');
+				assert.strictEqual(callers[callers.length - 1].funcIndex, p.guardsOf('__original_main').index, 'main is the outermost frame');
+				await p.debuggee.resume('continue');
+				assert.strictEqual((await p.waitForExit()).exitCode, 134);
+			} finally { p.stop(); }
+		});
+	}
+});

@@ -262,14 +262,17 @@ const NL = String.fromCharCode(10);
  * wasi-libc's `abort()`, so `assert`, `std::terminate` and `abort` itself, is a trap, which the host reports as a
  * crash (exit 139). Weak, so a program's own `abort` still wins, and linked ahead of libc so libc's copy is never
  * pulled in. The same object holds a startup `chdir("/workspace")`, since WASI has no working directory and
- * relative paths otherwise fail.
+ * relative paths otherwise fail. In a debug build the debug stub defines `vscw_debug_abort`, which stops the debugger
+ * before the exit; the weak reference is null in a release build.
  */
 const ABORT_SHIM_SOURCE = [
 	'#include <stdio.h>',
 	'#include <wasi/api.h>',
 	'#include <unistd.h>',
+	'extern void vscw_debug_abort(void) __attribute__((weak));',
 	'__attribute__((constructor)) static void vscwclang_chdir_workspace(void) { chdir("/workspace"); }',
 	'__attribute__((weak, noreturn)) void abort(void) {',
+	'	if (vscw_debug_abort) { vscw_debug_abort(); }',
 	'\tfputs("abort() called", stderr);',
 	'\tfputc(10, stderr);',
 	'\t__wasi_proc_exit(134);',

@@ -10,7 +10,7 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 **Near-term plan (decided 2026-10-27, replaces the 2026-10-21 one):** in order: (1) main critical user journeys feature complete; (2) pick a large, pure, portable C++ project from GitHub (many translation units, builds without extra dependencies) as the profiling workload; (3) profile and fix the low-hanging fruit, with incremental build+test speed first (see the Priority item in Milestone 1); (4) secondary journeys feature complete; (5) Make support (pseudo, i.e. interpret the common subset); (6) Python support (partial). Multithreading is on (threaded tools, clangd and user programs) and changes the numbers: re-profile, and expect it to affect concurrent compiles, clangd and the threaded toolchain more than a single-file edit.
 
 **Main critical user journeys (decided 2026-10-27), with the known gaps:**
-- Debug: view local variables, step through statements, conditional breakpoints. Gap today: a failed `assert`, `abort()` or exception uncaught in `main` ends the session without stopping (Milestone 6); all-stop and trap stops are not yet checked on real vscode.dev (Milestone 5).
+- Debug: view local variables, step through statements, conditional breakpoints. No known gaps; all-stop, trap and abort stops are not yet checked on real vscode.dev (Milestone 5).
 - Code intelligence via clangd: completion, IntelliSense, go to definition, go to declaration and similar. Mostly wired (Milestone 3).
 - Other core cpptools functionality: Open: remaining inventory (cpptools features with no counterpart yet): none known.
 
@@ -113,7 +113,6 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Remaining gaps:
 
 ## Milestone 6: full DAP surface
 - Breakpoints: data breakpoints and exception breakpoints (`setExceptionBreakpoints` is accepted and ignored).
-- Stop in the debugger before a failed `assert`, `abort()` or an uncaught exception in `main` ends the program (the abort and uncaught shims call `proc_exit(134)`, which is not a trap): e.g. a debug-build shim that calls the hook with a breakpoint-style stop first.
 - Debug console input, `launch` env/cwd.
 
 ## Milestone 7: release

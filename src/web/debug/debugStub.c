@@ -319,6 +319,17 @@ __attribute__((noinline)) static void stop(const char *reason) {
   NOTIFY_ALL(&ticket_serving);
 }
 
+/*
+ * Called by the abort shim (toolchain.ts) of a debug build before it exits 134, so a failed assert, std::terminate and
+ * abort() stop here like a breakpoint, with the stack of the function that called them. The program can then continue,
+ * which ends it as usual. The stack ends at that function's last guard, so its line is that of its last statement start.
+ */
+void vscw_debug_abort(void) {
+  if (detached) return;
+  if (!self_info) register_thread();
+  stop("abort");
+}
+
 void __sanitizer_cov_trace_pc_guard_init(uint32_t *start, uint32_t *end) {
   static int announced;
   if (announced) return;

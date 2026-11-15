@@ -14,7 +14,7 @@
 
 export type ResumeKind = 'continue' | 'into' | 'over' | 'out';
 
-/** `start` is the held-at-startup stop, before any user code; it has no frames. `exception` is a trap (the program cannot resume). */
+/** `start` is the held-at-startup stop, before any user code; it has no frames. `exception` is a trap (the program cannot resume) or an abort before the exit 134 (it can). */
 export type StopReason = 'start' | 'breakpoint' | 'step' | 'pause' | 'exception';
 
 export interface DebuggeeFrame {

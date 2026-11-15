@@ -41,7 +41,7 @@ interface ThreadView {
 	lldbFrames: LldbFrame[];
 }
 interface StopState {
-	/** Set for a trap: what the engine said. The program cannot continue; any resume ends it. */
+	/** Set for a trap or an abort: what happened. After a trap any resume ends the program (the host decides); after an abort it exits 134. */
 	exception?: string;
 	/** The thread that stopped (hit the breakpoint or step); the only one that can be stepped. */
 	threadId: number;
