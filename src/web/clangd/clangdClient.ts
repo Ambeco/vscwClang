@@ -99,6 +99,11 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 		tidyArgs: cpptools.get('codeAnalysis.clangTidy.args'),
 		inlayParameterNames: cpptools.get('inlayHints.parameterNames.enabled'),
 		inlayAutoTypes: cpptools.get('inlayHints.autoDeclarationTypes.enabled'),
+		formatting: cpptools.get('formatting'),
+		formatStyle: cpptools.get('clang_format_style'),
+		formatFallbackStyle: cpptools.get('clang_format_fallbackStyle'),
+		formatSortIncludes: cpptools.get('clang_format_sortIncludes'),
+		formatPath: cpptools.get('clang_format_path'),
 		inlayUnsupported: Object.fromEntries(INLAY_UNSUPPORTED.map(k => [k, cpptools.get(`inlayHints.${k}`)])),
 	});
 	mapped.notes.forEach(n => log.appendLine(`[vscwclang] ${n}`));
@@ -183,6 +188,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	});
 	let closeSub: vscode.Disposable | undefined;
 	const disposeWatchers = () => { closeSub?.dispose(); createdSub.dispose(); tasksSub.dispose(); sourceWatcher.dispose(); editorSub.dispose(); statusItem.dispose(); };
+	const formatAllowed = (document: vscode.TextDocument) => mapped.formattingEnabled && document.uri.scheme !== TOOLCHAIN_SCHEME;
 	const clientOptions: LanguageClientOptions = {
 		documentSelector: [{ language: 'c' }, { language: 'cpp' }, { scheme: TOOLCHAIN_SCHEME }],
 		uriConverters: { code2Protocol, protocol2Code },
@@ -191,6 +197,10 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 		middleware: {
 			// The user config's own (empty) diagnostics arrive before any source's, so they do not count.
 			handleDiagnostics: (uri, diagnostics, next) => { if (!uri.path.endsWith('.yaml')) { markIntelliSenseSettled(); } next(uri, raiseTidyHints(diagnostics) as vscode.Diagnostic[]); },
+			// Sysroot headers are read-only; and 'disabled' still leaves clangd's formatter registered, so it answers with no edits.
+			provideDocumentFormattingEdits: (document, options, token, next) => formatAllowed(document) ? next(document, options, token) : [],
+			provideDocumentRangeFormattingEdits: (document, range, options, token, next) => formatAllowed(document) ? next(document, range, options, token) : [],
+			provideOnTypeFormattingEdits: (document, position, ch, options, token, next) => formatAllowed(document) ? next(document, position, ch, options, token) : [],
 			provideDocumentSemanticTokens: (document, token, next) => document.lineCount > SEMANTIC_TOKENS_MAX_LINES ? null : next(document, token),
 			provideDocumentSemanticTokensEdits: (document, resultId, token, next) => document.lineCount > SEMANTIC_TOKENS_MAX_LINES ? null : next(document, resultId, token),
 		},

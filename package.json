@@ -146,6 +146,37 @@
           "scope": "resource",
           "markdownDescription": "cpptools-compatible. Merged into `vscwclang.files.exclude` unless `vscwclang.useCppToolsSettings` is off."
         },
+        "C_Cpp.formatting": {
+          "type": "string",
+          "enum": ["clangFormat", "vcFormat", "default", "disabled"],
+          "default": "default",
+          "scope": "resource",
+          "markdownDescription": "cpptools-compatible. `disabled` turns off Format Document, Format Selection and format-on-type; every other value uses the clang-format built into clangd (`vcFormat` is not available). Needs `vscwclang.intelliSense.enabled`, because clangd does the formatting. Reload the window to apply."
+        },
+        "C_Cpp.clang_format_style": {
+          "type": "string",
+          "default": "file",
+          "scope": "resource",
+          "markdownDescription": "cpptools-compatible, but only `file` is supported: clangd uses the nearest `.clang-format` file. Another value is logged; put `BasedOnStyle: <name>` in a `.clang-format` file instead."
+        },
+        "C_Cpp.clang_format_fallbackStyle": {
+          "type": "string",
+          "default": "Visual Studio",
+          "scope": "resource",
+          "markdownDescription": "cpptools-compatible. The style used when there is no `.clang-format` file, passed as clangd's `-fallback-style=`: `LLVM`, `Google`, `Chromium`, `Mozilla`, `WebKit`, `Microsoft`, `GNU` or `none`. `Visual Studio` means `Microsoft`. Reload the window to apply."
+        },
+        "C_Cpp.clang_format_sortIncludes": {
+          "type": ["boolean", "null"],
+          "enum": [true, false, null],
+          "default": null,
+          "scope": "resource",
+          "markdownDescription": "cpptools-compatible, but not supported: set `SortIncludes` in a `.clang-format` file instead. A value is logged."
+        },
+        "C_Cpp.clang_format_path": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "markdownDescription": "cpptools-compatible, but ignored: the clang-format built into clangd is always used."
+        },
         "C_Cpp.refactoring.includeHeader": {
           "type": ["string","null"],
           "default": null,

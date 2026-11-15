@@ -4,7 +4,7 @@ import { clangdArgs } from '../../clangd/clangdConfig';
 
 suite('clangd settings mapping', () => {
 	test('unset or null settings map to nothing', () => {
-		assert.deepStrictEqual(mapClangdSettings({}), { args: [], tidyAdd: [], tidyRemove: [], inlayHints: {}, notes: [] });
+		assert.deepStrictEqual(mapClangdSettings({}), { args: [], tidyAdd: [], tidyRemove: [], inlayHints: {}, formattingEnabled: true, notes: [] });
 		assert.deepStrictEqual(mapClangdSettings({ includeHeader: null, clangTidyEnabled: null, tidyChecksEnabled: null }).args, []);
 	});
 
@@ -31,6 +31,25 @@ suite('clangd settings mapping', () => {
 		const m = mapClangdSettings({ tidyHeaderFilter: '.*', tidyConfig: 'Checks: x', tidyFallbackConfig: '', tidyArgs: ['-x'] });
 		assert.strictEqual(m.notes.length, 3);
 		assert.match(m.notes.join('\n'), /headerFilter.*\.clang-tidy/s);
+	});
+
+	test('the fallback style becomes -fallback-style, with Visual Studio mapped to Microsoft', () => {
+		assert.deepStrictEqual(mapClangdSettings({ formatFallbackStyle: 'Visual Studio' }).args, ['-fallback-style=Microsoft']);
+		assert.deepStrictEqual(mapClangdSettings({ formatFallbackStyle: 'Google' }).args, ['-fallback-style=Google']);
+		assert.deepStrictEqual(mapClangdSettings({ formatFallbackStyle: '  ' }).args, []);
+	});
+
+	test('formatting disabled turns the formatter off and ignores the other format settings', () => {
+		const m = mapClangdSettings({ formatting: 'disabled', formatFallbackStyle: 'Google', formatStyle: 'LLVM', formatPath: '/x' });
+		assert.deepStrictEqual([m.formattingEnabled, m.args, m.notes], [false, [], []]);
+	});
+
+	test('vcFormat, a style other than file, sortIncludes and clang_format_path are reported with a suggestion', () => {
+		assert.match(mapClangdSettings({ formatting: 'vcFormat' }).notes[0], /vcFormat.*clang-format is used/);
+		assert.match(mapClangdSettings({ formatStyle: 'Google' }).notes[0], /BasedOnStyle: Google.*.clang-format/);
+		assert.match(mapClangdSettings({ formatSortIncludes: false }).notes[0], /SortIncludes: Never/);
+		assert.match(mapClangdSettings({ formatPath: 'C:/llvm/clang-format.exe' }).notes[0], /ignored/);
+		assert.deepStrictEqual(mapClangdSettings({ formatStyle: 'file', formatSortIncludes: null, formatPath: '' }).notes, []);
 	});
 
 	test('clangdArgs appends the mapped arguments', () => {

@@ -12,7 +12,7 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 **Main critical user journeys (decided 2026-10-27), with the known gaps:**
 - Debug: view local variables, step through statements, conditional breakpoints. Gaps today: all-stop for threads and traps as stopped states need the custom runner (Milestone 6).
 - Code intelligence via clangd: completion, IntelliSense, go to definition, go to declaration and similar. Mostly wired (Milestone 3).
-- Other core cpptools functionality: Open: remaining inventory (cpptools features with no counterpart yet): formatting (clang-format is not shipped).
+- Other core cpptools functionality: Open: remaining inventory (cpptools features with no counterpart yet): none known.
 
 **Secondary user journeys (draft 2026-10-27; to extend; "?" = built but never checked end to end):**
 - Open a GitHub repository on vscode.dev/github.dev (`vscode-vfs://github/...`), edit files, build, run and debug. Edits are an uncommitted working copy until committed from Source Control (to a branch, which is VS Code's job, not ours). Open: DWARF source paths (`/workspace/...`) mapping back to `vscode-vfs` URIs for breakpoints and stack frames?; `findFiles` and clangd indexing on a large repo?; a repo with no `compile_commands.json` (sources come from `sourceGlobs`); includes that live outside the folder.
@@ -98,7 +98,7 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Remaining gaps:
 - `C_Cpp.autocompleteAddParentheses`/`suggestSnippets` are not mapped: clangd's `-function-arg-placeholders` has different semantics (argument placeholders versus bare parentheses); decide if a mapping is worth it.
 - clang-tidy: `enabled`, `checks.enabled` and `checks.disabled` are mapped; `config`, `fallbackConfig`, `headerFilter` and `args` only log a note (clangd reads `.clang-tidy` files); `codeAnalysis.runAutomatically/exclude` are not read.
 - Optional: `intelliSenseUpdateDelay`, `maxSymbolSearchResults` (clangd `--limit-results`).
-- Deliberately skipped: `default.compilerPath/intelliSenseMode/macFrameworkPath/windowsSdkVersion` (one wasm32 target), `vcFormat.*` (clang-format would be a separate item), `vcpkg`, `debugger.*`, `copilotHover`, resource caps (`maxMemory`, `maxConcurrentThreads`, caches), `doxygen.*`, `enhancedColorization`.
+- Deliberately skipped: `default.compilerPath/intelliSenseMode/macFrameworkPath/windowsSdkVersion` (one wasm32 target), `vcFormat.*` (clang-format is used instead), `vcpkg`, `debugger.*`, `copilotHover`, resource caps (`maxMemory`, `maxConcurrentThreads`, caches), `doxygen.*`, `enhancedColorization`.
 
 ## Milestone 4: debug build + hook runtime
 - Debug builds use `-O0 -g -fsanitize-coverage=trace-pc-guard,no-prune` plus `debugCoverage` from `compile-flags.json` (`-mllvm -sanitizer-coverage-stmt`: a guard at every line change; see `design.md` debug stub channel). Open: (1) overhead on a real program: fib(30) plus a 3M-iteration loop took 39 ms from Build and Run and 161 ms under F5 with no breakpoints, in the browser on the threaded build (fib is the call-heavy worst case; Node earlier: 16 ms plain, ~110-180 ms with line and post-call guards); (2) `ShadowStack`/stub: a guard of a different function at the same `sp` should be a new frame (sibling-leaf-call gap in notes.md); (3) `scanProgram` should read `DW_AT_frame_base` instead of guessing the frame-base local; (4) a `{` line on its own line after a multi-line parameter list gets a second entry-area guard before the parameters are stored, which the step-in skip does not cover.

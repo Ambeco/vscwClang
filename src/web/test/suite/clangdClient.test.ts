@@ -93,4 +93,39 @@ suite('vscwClang clangd client (in browser)', function () {
 		assert.ok(opened.getText().includes('puts'), `no puts in ${found.uri.toString()} (${opened.getText().length} chars)`);
 		await assert.rejects(Promise.resolve(vscode.workspace.fs.writeFile(found.uri, encoder.encode('x'))), /read-only/);
 	});
+	const NL = String.fromCharCode(10);
+	const SRC = ['int main(){', 'int a=1;', 'return a;', '}', ''].join(NL);
+	const formatted = async (name: string, text: string) => {
+		await write(name, text);
+		const file = vscode.Uri.joinPath(dir, name);
+		await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(file));
+		const deadline = Date.now() + 40_000;
+		let edits: vscode.TextEdit[] = [];
+		while (Date.now() < deadline && edits.length === 0) {
+			edits = await vscode.commands.executeCommand<vscode.TextEdit[]>('vscode.executeFormatDocumentProvider', file, { tabSize: 4, insertSpaces: true }) ?? [];
+			if (edits.length === 0) { await new Promise(r => setTimeout(r, 500)); }
+		}
+		const edit = new vscode.WorkspaceEdit();
+		edit.set(file, edits);
+		await vscode.workspace.applyEdit(edit);
+		return (await vscode.workspace.openTextDocument(file)).getText();
+	};
+
+	test('Format Document uses the fallback style (Microsoft, 4 spaces) when there is no .clang-format file', async () => {
+		const out = await formatted('fmt-fallback.cpp', SRC);
+		assert.ok(out.includes(NL + '    return a;'), JSON.stringify(out));
+	});
+
+	test('Format Document follows a .clang-format file that exists before the first format', async () => {
+		await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(dir, 'styled'));
+		await write('styled/.clang-format', ['BasedOnStyle: LLVM', 'IndentWidth: 8', ''].join(NL));
+		const out = await formatted('styled/fmt-file.cpp', SRC);
+		assert.ok(out.includes(NL + '        return a;'), JSON.stringify(out));
+	});
+
+	test('Format Document follows a .clang-format file changed after clangd formatted a file there', async () => {
+		await write('styled/.clang-format', ['BasedOnStyle: LLVM', 'IndentWidth: 3', ''].join(NL));
+		const out = await formatted('styled/fmt-file2.cpp', SRC);
+		assert.ok(out.includes(NL + '   return a;'), JSON.stringify(out));
+	});
 });

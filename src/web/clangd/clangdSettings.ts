@@ -10,6 +10,11 @@ export interface CppToolsClangdSettings {
 	tidyArgs?: unknown;
 	inlayParameterNames?: unknown;
 	inlayAutoTypes?: unknown;
+	formatting?: unknown;
+	formatStyle?: unknown;
+	formatFallbackStyle?: unknown;
+	formatSortIncludes?: unknown;
+	formatPath?: unknown;
 	/** Other `C_Cpp.inlayHints.*` values, by setting name (without the prefix), that clangd cannot honor. */
 	inlayUnsupported?: Readonly<Record<string, unknown>>;
 }
@@ -23,6 +28,8 @@ export interface ClangdSettingsMapping {
 	tidyAdd: string[];
 	tidyRemove: string[];
 	inlayHints: InlayHintsConfig;
+	/** False when `C_Cpp.formatting` is `disabled`: the client then answers every format request with no edits. */
+	formattingEnabled: boolean;
 	notes: string[];
 }
 
@@ -50,6 +57,11 @@ const hasText = (value: unknown): boolean => (typeof value === 'string' && value
  * `C_Cpp.inlayHints.parameterNames.enabled` and `autoDeclarationTypes.enabled` become the config's
  * `InlayHints: ParameterNames/DeducedTypes`. cpptools defaults both to off while clangd defaults to on, so they only
  * change anything when set explicitly. The other inlayHints keys have no clangd option and are noted when set.
+ *
+ * Formatting is clangd's built-in clang-format. `clang_format_fallbackStyle` becomes `-fallback-style=` (used when no
+ * `.clang-format` exists; cpptools' "Visual Studio" is clang-format's `Microsoft`); `formatting: disabled` clears
+ * `formattingEnabled`. `clang_format_style` other than `file`, `sortIncludes`, `clang_format_path` and
+ * `formatting: vcFormat` have no clangd equivalent and are reported in `notes`.
  */
 export function mapClangdSettings(settings: CppToolsClangdSettings): ClangdSettingsMapping {
 	const args: string[] = [];
@@ -77,7 +89,17 @@ export function mapClangdSettings(settings: CppToolsClangdSettings): ClangdSetti
 	for (const [name, value] of Object.entries(settings.inlayUnsupported ?? {})) {
 		if (value !== undefined && value !== null) { notes.push(`C_Cpp.inlayHints.${name} is not supported: clangd has no option for it. Did you mean editor.inlayHints.enabled to show or hide all hints?`); }
 	}
-	return { args, tidyAdd, tidyRemove, inlayHints, notes };
+	const formattingEnabled = settings.formatting !== 'disabled';
+	if (settings.formatting === 'vcFormat') { notes.push("C_Cpp.formatting 'vcFormat' is not supported: clang-format is used instead. Did you mean to set 'disabled' to turn formatting off?"); }
+	if (formattingEnabled) {
+		const fallback = typeof settings.formatFallbackStyle === 'string' ? settings.formatFallbackStyle.trim() : '';
+		if (fallback !== '') { args.push(`-fallback-style=${fallback.toLowerCase() === 'visual studio' ? 'Microsoft' : fallback}`); }
+		const style = typeof settings.formatStyle === 'string' ? settings.formatStyle.trim() : '';
+		if (style !== '' && style !== 'file') { notes.push(`C_Cpp.clang_format_style '${style}' is not supported: clangd always uses the nearest .clang-format file. Did you mean to put 'BasedOnStyle: ${style}' in a .clang-format file in your workspace?`); }
+		if (typeof settings.formatSortIncludes === 'boolean') { notes.push('C_Cpp.clang_format_sortIncludes is not supported: clangd takes it from the .clang-format file. Did you mean to set SortIncludes: ' + (settings.formatSortIncludes ? 'CaseSensitive' : 'Never') + ' there?'); }
+		if (hasText(settings.formatPath)) { notes.push('C_Cpp.clang_format_path is ignored: the clang-format built into clangd is always used, since no other program can run in a browser.'); }
+	}
+	return { args, tidyAdd, tidyRemove, inlayHints, formattingEnabled, notes };
 }
 
 /** C++ source and header extensions clangd already treats as C++ (`.h` is the ambiguous one). */
