@@ -1,5 +1,6 @@
-import type { DebuggeeEvent, DebuggeeSession, ResumeKind } from './debuggeeSession';
+import type { DebuggeeEvent, DebuggeeFrame, DebuggeeSession, DebuggeeThread, ResumeKind } from './debuggeeSession';
 import { StubSession } from './stubChannel';
+import { readStubThreads } from './stubRegistry';
 import type { GuardSite } from './wasmScan';
 
 export interface StubDebuggeeOptions {
@@ -31,6 +32,10 @@ const FOREVER_MS = 2_000_000_000;
  * on the host owns the bits, so the `bp` command is never mixed in. A program blocked in `std::cin`, a sleep or a
  * lock does not reach a guard, so Pause waits until it does.
  *
+ * With shared memory a stop is also an all-stop: every other thread parks at its next guard, and `threads()` reads
+ * each parked thread's shadow stack out of the stub's registry (`stubRegistry.ts`). A blocked thread (see above) is
+ * listed as not stopped, with no frames; it parks later if it reaches a guard while the program is still stopped.
+ *
  * `writeInput` forwards what the user types to the program: straight to the pipe while the program runs, queued
  * while it is stopped (the stub would read it as a command). Input forwarded just before a stop may still sit
  * unread in the pipe, and the stub then hands it back (`input` frames); the next resume therefore first `sync`s so
@@ -50,6 +55,8 @@ export class StubDebuggee implements DebuggeeSession {
 	private handedBack = 0;
 	/** Program input was written while running since the last resume, so the stub may still hold some. */
 	private inputInFlight = false;
+	/** The latest stop's thread and stack, which `threads()` reports as is. */
+	private lastStop: { threadId: number; frames: DebuggeeFrame[] } | undefined;
 
 	constructor(private readonly options: StubDebuggeeOptions) {
 		this.session = new StubSession(options.send, b => this.emit({ kind: 'output', stream: 'stderr', text: this.stderrDecoder.decode(b, { stream: true }) }), b => this.onHandedBack(b));
@@ -59,7 +66,7 @@ export class StubDebuggee implements DebuggeeSession {
 	/** Meaningful once the stub's `hello` has arrived (the start stop). */
 	get capabilities() {
 		const memory = this.options.memory !== undefined;
-		return { pause: memory && this.session.pauseFlag !== undefined, breakpointsWhileRunning: memory };
+		return { pause: memory && this.session.pauseFlag !== undefined, breakpointsWhileRunning: memory, allStop: memory && this.session.registry !== undefined };
 	}
 
 	feedStdout(chunk: Uint8Array): void { this.emit({ kind: 'output', stream: 'stdout', text: this.stdoutDecoder.decode(chunk, { stream: true }) }); }
@@ -124,7 +131,19 @@ export class StubDebuggee implements DebuggeeSession {
 		if (!memory || flag === undefined) {
 			throw new Error('vscwClang cannot pause this program: Pause needs the shared memory of a threaded debug build (is vscwclang.threads off?) and a current debug stub. Set a breakpoint and continue instead.');
 		}
-		Atomics.store(new Uint32Array(memory.buffer), flag >>> 2, 1);
+		Atomics.or(new Uint32Array(memory.buffer), flag >>> 2, 1);
+	}
+
+	async threads(): Promise<DebuggeeThread[]> {
+		const registry = this.session.registry;
+		if (!this.options.memory || !registry) {
+			return this.lastStop ? [{ id: this.lastStop.threadId, stopped: true, frames: this.lastStop.frames }] : [];
+		}
+		return readStubThreads(this.options.memory.buffer, registry).map(t => ({
+			id: t.id,
+			stopped: t.state === 'parked',
+			frames: t.id === this.lastStop?.threadId ? this.lastStop.frames : this.mapFrames(t.frames),
+		}));
 	}
 
 	async readMemory(addr: number, len: number): Promise<Uint8Array | undefined> {
@@ -163,6 +182,14 @@ export class StubDebuggee implements DebuggeeSession {
 		}, e => {
 			this.waiting = false;
 			if (!this.done) { this.emit({ kind: 'error', message: e instanceof Error ? e.message : String(e) }); }
+		});
+	}
+
+	private mapFrames(raw: { guard: number; sp: number }[]): DebuggeeFrame[] {
+		return raw.map(f => {
+			const site = this.options.guardSites.get(f.guard);
+			if (!site) { throw new Error(`the debug stub reported guard ${f.guard}, which is not in the program's coverage table; did the program and debug stub drift apart?`); }
+			return { funcIndex: site.funcIndex, pc: site.pc, sp: f.sp };
 		});
 	}
 

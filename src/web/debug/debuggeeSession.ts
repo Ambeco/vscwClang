@@ -1,9 +1,9 @@
 /**
  * What the DAP controller (`debugController.ts`) needs from a running debuggee, whatever hosts it; vscode-free.
  *
- * Today's host is the in-process stub (`stubDebuggee.ts`); a custom Worker runner (all-stop, traps) may follow. The
- * controller must not know which one it has, so everything a host cannot do is a flag in `capabilities` that the
- * controller turns into a clear DAP error. The stub host can pause and edit breakpoints live only for programs with shared memory.
+ * Today's host is the in-process stub (`stubDebuggee.ts`). The controller must not know which host it has, so
+ * everything a host cannot do is a flag in `capabilities` that the controller turns into a clear DAP error. The stub
+ * host can pause, edit breakpoints live and stop every thread at a stop (all-stop) only for programs with shared memory.
  *
  * Breakpoints are guard addresses (`scanProgram().guardSites` keys), the same handle both hosts arm. Frames come
  * innermost first and carry the DWARF pc of the last instrumented block run in that frame; for outer frames that is
@@ -14,8 +14,8 @@
 
 export type ResumeKind = 'continue' | 'into' | 'over' | 'out';
 
-/** `start` is the held-at-startup stop, before any user code; it has no frames. */
-export type StopReason = 'start' | 'breakpoint' | 'step' | 'pause';
+/** `start` is the held-at-startup stop, before any user code; it has no frames. `exception` is a trap (the program cannot resume). */
+export type StopReason = 'start' | 'breakpoint' | 'step' | 'pause' | 'exception';
 
 export interface DebuggeeFrame {
 	funcIndex: number;
@@ -26,7 +26,7 @@ export interface DebuggeeFrame {
 }
 
 export type DebuggeeEvent =
-	| { kind: 'stopped'; reason: StopReason; /** 1 is the main thread; a stopped thread's frames are the only ones known. */ threadId: number; frames: DebuggeeFrame[] }
+	| { kind: 'stopped'; reason: StopReason; /** 1 is the main thread. */ threadId: number; frames: DebuggeeFrame[]; /** For `exception`: what the engine said. */ text?: string }
 	| { kind: 'exited'; exitCode: number }
 	| { kind: 'output'; stream: 'stdout' | 'stderr'; text: string }
 	| { kind: 'error'; message: string };
@@ -36,6 +36,17 @@ export interface DebuggeeCapabilities {
 	pause: boolean;
 	/** `setBreakpoints()` works while the program runs free (otherwise only at a stop). */
 	breakpointsWhileRunning: boolean;
+	/** A stop halts every thread, and `threads()` lists them with their stacks. */
+	allStop: boolean;
+}
+
+export interface DebuggeeThread {
+	/** The id used in `stopped` events (1 is main). */
+	id: number;
+	/** False for a thread that did not reach a stop point in time (blocked in a lock, sleep or `cin`): it has no frames. */
+	stopped: boolean;
+	/** Innermost first. */
+	frames: DebuggeeFrame[];
 }
 
 export interface DebuggeeSession {
@@ -47,6 +58,8 @@ export interface DebuggeeSession {
 	setBreakpoints(guards: number[]): Promise<void>;
 	resume(how: ResumeKind): Promise<void>;
 	pause(): Promise<void>;
+	/** Every live thread with its stack, valid at a stop; with `capabilities.allStop` false only the stopped thread is known. */
+	threads(): Promise<DebuggeeThread[]>;
 	/** Reads the stopped program's memory; undefined if the range is unreadable. */
 	readMemory(addr: number, len: number): Promise<Uint8Array | undefined>;
 	terminate(): Promise<void>;

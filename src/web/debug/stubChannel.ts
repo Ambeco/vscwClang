@@ -26,7 +26,7 @@ const decoder = new TextDecoder();
 export interface StubFrame { guard: number; sp: number }
 
 export type StubMessage =
-	| { kind: 'hello'; guardStart: number; guardEnd: number; /** Address of the word the host sets to request a pause; absent from older stubs. */ pauseFlag?: number }
+	| { kind: 'hello'; guardStart: number; guardEnd: number; /** Address of the control word: the host ORs in bit 0 to request a pause. */ pauseFlag?: number; /** Address of the thread registry (see `stubRegistry.ts`) and its capacity. */ registry?: number; maxThreads?: number }
 	| { kind: 'stop'; reason: string; /** 1 is the main thread. */ threadId: number; frames: StubFrame[] }
 	| { kind: 'mem'; addr: number; data: Uint8Array }
 	| { kind: 'memerr'; addr: number; len: number }
@@ -44,7 +44,10 @@ export function parseMessage(text: string): StubMessage {
 	const [kind, ...rest] = text.split(' ');
 	const nums = (parts: string[]) => parts.map(Number);
 	switch (kind) {
-		case 'hello': { const [guardStart, guardEnd, pauseFlag] = nums(rest); return { kind, guardStart, guardEnd, ...(pauseFlag === undefined ? {} : { pauseFlag }) }; }
+		case 'hello': {
+				const [guardStart, guardEnd, pauseFlag, registry, maxThreads] = nums(rest);
+				return { kind, guardStart, guardEnd, ...(pauseFlag === undefined ? {} : { pauseFlag }), ...(registry === undefined ? {} : { registry, maxThreads }) };
+			}
 		case 'stop': {
 			const [reason, threadId, depth, ...pairs] = rest;
 			const frames: StubFrame[] = [];
@@ -148,6 +151,7 @@ export class StubSession {
 	private closed = false;
 	guardRange: { start: number; end: number } | undefined;
 	pauseFlag: number | undefined;
+	registry: { address: number; maxThreads: number } | undefined;
 
 	/** `onProgramInput` receives bytes meant for the program that the stub read at a stop; they must be re-sent after the next resume. */
 	constructor(private readonly send: (text: string) => void | Promise<void>, onProgramStderr: (b: Uint8Array) => void, private readonly onProgramInput?: (b: Uint8Array) => void) {
@@ -179,7 +183,7 @@ export class StubSession {
 	async nextStop(timeoutMs = 30_000): Promise<StopEvent> {
 		const m = await this.take(x => x.kind === 'hello' || x.kind === 'stop', 'a stop', timeoutMs);
 		this.memory.clear();
-		if (m.kind === 'hello') { this.guardRange = { start: m.guardStart, end: m.guardEnd }; this.pauseFlag = m.pauseFlag; return { reason: 'start', threadId: 1, frames: [] }; }
+		if (m.kind === 'hello') { this.guardRange = { start: m.guardStart, end: m.guardEnd }; this.pauseFlag = m.pauseFlag; this.registry = m.registry === undefined ? undefined : { address: m.registry, maxThreads: m.maxThreads ?? 0 }; return { reason: 'start', threadId: 1, frames: [] }; }
 		const stop = m as Extract<StubMessage, { kind: 'stop' }>;
 		return { reason: stop.reason, threadId: stop.threadId, frames: stop.frames };
 	}

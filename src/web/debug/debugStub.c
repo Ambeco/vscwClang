@@ -11,9 +11,14 @@
  * for program input written just before a stop: such a line (one not starting with "vscw ") is sent back as an
  * `input` frame instead of being treated as a command.
  *
- * Threads: the shadow stack and step state are per thread (`_Thread_local`; each thread has its own `__stack_pointer`),
- * and one thread at a time holds `stop_lock` while it is stopped. The others keep running, and a thread that hits a
- * breakpoint meanwhile waits for the lock and stops after the first resumes. Every stop frame names its thread.
+ * Threads (all-stop): the shadow stack and step state are per thread (`_Thread_local`; each thread has its own
+ * `__stack_pointer`), and stops are served one at a time in arrival order (a ticket lock). A stop sets CTL_STOPPED in
+ * `control`; every other thread parks at its next hook (`memory.atomic.wait32` on `resume_gen`) and falls through to
+ * its own breakpoint check when the world resumes, so a breakpoint it sat on still fires. Each thread registers in
+ * `registry` at its first hook, so the host lists every thread and reads a parked thread's shadow stack straight from
+ * shared memory (layout: ThreadInfo below). A thread blocked in a lock, sleep or `cin`, or inside uninstrumented
+ * code, does not reach a hook: a stop waits a short while for it, then reports it as running. Every stop frame names
+ * its thread.
  */
 #include <pthread.h>
 #include <stdint.h>
@@ -23,22 +28,45 @@
 #define MAX_FRAMES 2048
 #define MAX_ARMED 512
 #define MAX_MEM_READ 8192
+#define MAX_THREADS 64
+/* How long a stop waits for the other threads to park: WAIT_SLICES * 20 ms. */
+#define WAIT_SLICES 2
 
 typedef struct { uint32_t *guard; uintptr_t sp; } Frame;
+
+/* The host reads these in shared memory: 5 little-endian words per thread after the leading count. */
+typedef struct { uint32_t id; int32_t tid; uint32_t frames; uint32_t depth; uint32_t state; } ThreadInfo;
+/* TS_PARKED waits in park() for a resume; TS_QUEUED has hit a stop point and waits its turn to report it. The host treats both as stopped. */
+enum { TS_FREE, TS_RUNNING, TS_PARKED, TS_DEAD, TS_QUEUED };
+enum { CTL_PAUSE = 1, CTL_STOPPED = 2 };
 
 static _Thread_local Frame frames[MAX_FRAMES];
 static _Thread_local uint32_t depth;
 static uint32_t *armed[MAX_ARMED];
 static uint32_t armed_count;
 static int detached; /* host closed stdin: never stop again */
-/* Set by the host through shared memory (its address is in `hello`); the first hook to see it stops with "pause". */
-static uint32_t pause_requested;
+/* The host sets CTL_PAUSE through shared memory (the address is in `hello`); the first hook to see it stops with "pause". */
+static uint32_t control;
+static uint32_t resume_gen; /* bumped on every resume; parked threads wait on it */
+static uint32_t activity;   /* bumped when a thread parks, resumes or exits; a stop waits on it */
+static struct { uint32_t count; ThreadInfo threads[MAX_THREADS]; } registry;
+static ThreadInfo overflow_info; /* for threads beyond MAX_THREADS: they stop but are not listed */
+static pthread_key_t exit_key;
 enum { STEP_NONE, STEP_INTO, STEP_OVER, STEP_OUT };
 static _Thread_local int step_mode;
 static _Thread_local uintptr_t step_sp;
-static pthread_mutex_t stop_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t ticket_next, ticket_serving;
 static uint32_t next_thread_id = 1;
-static _Thread_local uint32_t thread_id; /* 1 for the thread that runs the startup hook, then in order of first stop */
+static _Thread_local ThreadInfo *self_info; /* id 1 is the thread that runs the startup hook, then in order of first hook */
+
+#ifdef __wasm_atomics__
+#define WAIT32(addr, expected, ns) __builtin_wasm_memory_atomic_wait32((int *)(addr), (int)(expected), (ns))
+#define NOTIFY_ALL(addr) __builtin_wasm_memory_atomic_notify((int *)(addr), UINT32_MAX)
+#else
+/* No atomics feature, so no other threads exist: nothing ever parks or waits. */
+#define WAIT32(addr, expected, ns) 0
+#define NOTIFY_ALL(addr) 0
+#endif
 
 static inline uintptr_t get_sp(void) {
   uintptr_t sp;
@@ -166,24 +194,122 @@ static void command_loop(void) {
   }
 }
 
+static void note_activity(void) {
+  __atomic_fetch_add(&activity, 1, __ATOMIC_SEQ_CST);
+  NOTIFY_ALL(&activity);
+}
+
+/* Runs when a thread exits (a pthread key destructor), so the host stops listing it. */
+static void thread_exited(void *info) {
+  __atomic_store_n(&((ThreadInfo *)info)->state, TS_DEAD, __ATOMIC_SEQ_CST);
+  note_activity();
+}
+
+/* Takes a slot for the calling thread: a dead thread's slot is reused, so many short-lived threads fit. */
+static void register_thread(void) {
+  ThreadInfo *slot = 0;
+  uint32_t count = __atomic_load_n(&registry.count, __ATOMIC_SEQ_CST);
+  for (uint32_t i = 0; i < count && !slot; i++) {
+    uint32_t dead = TS_DEAD;
+    if (__atomic_compare_exchange_n(&registry.threads[i].state, &dead, TS_RUNNING, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) slot = &registry.threads[i];
+  }
+  if (!slot) {
+    uint32_t i = __atomic_fetch_add(&registry.count, 1, __ATOMIC_SEQ_CST);
+    if (i < MAX_THREADS) slot = &registry.threads[i];
+    else { __atomic_fetch_sub(&registry.count, 1, __ATOMIC_SEQ_CST); slot = &overflow_info; }
+  }
+  slot->id = __atomic_fetch_add(&next_thread_id, 1, __ATOMIC_SEQ_CST);
+  slot->frames = (uint32_t)(uintptr_t)frames;
+  slot->depth = (uint32_t)(uintptr_t)&depth;
+  __atomic_store_n(&slot->state, TS_RUNNING, __ATOMIC_SEQ_CST);
+  self_info = slot;
+  if (slot != &overflow_info) pthread_setspecific(exit_key, slot);
+}
+
+/* True when no other registered thread is still running user code. */
+static int others_settled(void) {
+  uint32_t count = __atomic_load_n(&registry.count, __ATOMIC_SEQ_CST);
+  for (uint32_t i = 0; i < count; i++) {
+    if (&registry.threads[i] != self_info && __atomic_load_n(&registry.threads[i].state, __ATOMIC_SEQ_CST) == TS_RUNNING) return 0;
+  }
+  return 1;
+}
+
+/* Gives the other threads a moment to reach a hook and park; one blocked outside instrumented code is reported as running. */
+static void wait_for_others(void) {
+  for (int slice = 0; slice < WAIT_SLICES && !others_settled(); slice++) {
+    uint32_t seen = __atomic_load_n(&activity, __ATOMIC_SEQ_CST);
+    if (others_settled()) break;
+    WAIT32(&activity, seen, 20 * 1000 * 1000LL);
+  }
+}
+
+/* Called by a thread that finds the world stopped: parks until the stopping thread resumes it. */
+static void park(void) {
+  __atomic_store_n(&self_info->state, TS_PARKED, __ATOMIC_SEQ_CST);
+  note_activity();
+  for (;;) {
+    uint32_t gen = __atomic_load_n(&resume_gen, __ATOMIC_SEQ_CST);
+    if (!(__atomic_load_n(&control, __ATOMIC_SEQ_CST) & CTL_STOPPED)) break;
+    WAIT32(&resume_gen, gen, -1);
+  }
+  __atomic_store_n(&self_info->state, TS_RUNNING, __ATOMIC_SEQ_CST);
+  note_activity();
+}
+
+static int none_parked(void) {
+  uint32_t count = __atomic_load_n(&registry.count, __ATOMIC_SEQ_CST);
+  for (uint32_t i = 0; i < count; i++) {
+    if (__atomic_load_n(&registry.threads[i].state, __ATOMIC_SEQ_CST) == TS_PARKED) return 0;
+  }
+  return 1;
+}
+
+/* After a resume, lets the parked threads run past their hook before this one does, so a breakpoint this thread hits again at once cannot starve them. */
+static void wait_for_wake(void) {
+  for (int slice = 0; slice < WAIT_SLICES && !none_parked(); slice++) {
+    uint32_t seen = __atomic_load_n(&activity, __ATOMIC_SEQ_CST);
+    if (none_parked()) break;
+    WAIT32(&activity, seen, 20 * 1000 * 1000LL);
+  }
+}
+
 __attribute__((noinline)) static void stop(const char *reason) {
-  pthread_mutex_lock(&stop_lock);
+  /* Counts as stopped while it waits its turn, so the thread being served does not wait for this one. */
+  __atomic_store_n(&self_info->state, TS_QUEUED, __ATOMIC_SEQ_CST);
+  note_activity();
+  uint32_t mine = __atomic_fetch_add(&ticket_next, 1, __ATOMIC_SEQ_CST);
+  for (;;) {
+    uint32_t serving = __atomic_load_n(&ticket_serving, __ATOMIC_SEQ_CST);
+    if (serving == mine) break;
+    WAIT32(&ticket_serving, serving, -1);
+  }
   /* Any stop satisfies a pending pause; otherwise it would fire again right after the resume. */
-  __atomic_store_n(&pause_requested, 0, __ATOMIC_SEQ_CST);
-  if (!thread_id) thread_id = __atomic_fetch_add(&next_thread_id, 1, __ATOMIC_SEQ_CST);
-  out_begin("stop"); out_str(reason); out_str(" "); out_num(thread_id); out_str(" "); out_num(depth);
+  __atomic_fetch_and(&control, ~(uint32_t)CTL_PAUSE, __ATOMIC_SEQ_CST);
+  __atomic_fetch_or(&control, CTL_STOPPED, __ATOMIC_SEQ_CST);
+  wait_for_others();
+  out_begin("stop"); out_str(reason); out_str(" "); out_num(self_info->id); out_str(" "); out_num(depth);
   for (uint32_t i = depth; i-- > 0;) { out_str(" "); out_num((uintptr_t)frames[i].guard); out_str(" "); out_num(frames[i].sp); }
   out_end();
   command_loop();
-  pthread_mutex_unlock(&stop_lock);
+  __atomic_fetch_and(&control, ~(uint32_t)CTL_STOPPED, __ATOMIC_SEQ_CST);
+  __atomic_fetch_add(&resume_gen, 1, __ATOMIC_SEQ_CST);
+  NOTIFY_ALL(&resume_gen);
+  __atomic_store_n(&self_info->state, TS_RUNNING, __ATOMIC_SEQ_CST);
+  note_activity();
+  wait_for_wake();
+  __atomic_fetch_add(&ticket_serving, 1, __ATOMIC_SEQ_CST);
+  NOTIFY_ALL(&ticket_serving);
 }
 
 void __sanitizer_cov_trace_pc_guard_init(uint32_t *start, uint32_t *end) {
   static int announced;
   if (announced) return;
   announced = 1;
-  thread_id = __atomic_fetch_add(&next_thread_id, 1, __ATOMIC_SEQ_CST);
-  out_begin("hello"); out_num((uintptr_t)start); out_str(" "); out_num((uintptr_t)end); out_str(" "); out_num((uintptr_t)&pause_requested); out_end();
+  pthread_key_create(&exit_key, thread_exited);
+  register_thread();
+  out_begin("hello"); out_num((uintptr_t)start); out_str(" "); out_num((uintptr_t)end); out_str(" "); out_num((uintptr_t)&control);
+  out_str(" "); out_num((uintptr_t)&registry); out_str(" "); out_num(MAX_THREADS); out_end();
   command_loop();
 }
 
@@ -193,7 +319,13 @@ void __sanitizer_cov_trace_pc_guard(uint32_t *guard) {
   while (depth && frames[depth - 1].sp < sp) depth--;
   if (depth && frames[depth - 1].sp == sp) frames[depth - 1].guard = guard;
   else if (depth < MAX_FRAMES) { frames[depth].guard = guard; frames[depth].sp = sp; depth++; }
-  if (__atomic_load_n(&pause_requested, __ATOMIC_RELAXED) && __atomic_exchange_n(&pause_requested, 0, __ATOMIC_SEQ_CST)) { stop("pause"); return; }
+  if (!self_info) register_thread();
+  uint32_t ctl = __atomic_load_n(&control, __ATOMIC_RELAXED);
+  if (ctl) {
+    /* Parked first, so a thread that sits on a breakpoint while the world is stopped still reports it after the resume. */
+    if (ctl & CTL_STOPPED) { park(); ctl = __atomic_load_n(&control, __ATOMIC_RELAXED); }
+    if ((ctl & CTL_PAUSE) && (__atomic_fetch_and(&control, ~(uint32_t)CTL_PAUSE, __ATOMIC_SEQ_CST) & CTL_PAUSE)) { stop("pause"); return; }
+  }
   if (*guard & 1u) { stop("breakpoint"); return; }
   switch (step_mode) {
     case STEP_INTO: stop("step"); break;

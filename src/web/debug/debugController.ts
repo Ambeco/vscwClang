@@ -31,14 +31,27 @@ export interface DebugControllerOptions {
 }
 
 interface Location { file: string; line: number }
-interface StopState {
-	threadId: number;
+type LldbFrame = StopFrame & { funcIndex: number };
+/** One thread's stack at a stop. */
+interface ThreadView {
+	/** False for a thread that never reached a stop point (blocked); it has no frames. */
+	stopped: boolean;
 	frames: DebuggeeFrame[];
 	/** Frames lldb can decode (those with a frame-base local), innermost first; DAP frame ids index into this. */
-	lldbFrames: (StopFrame & { funcIndex: number })[];
+	lldbFrames: LldbFrame[];
+}
+interface StopState {
+	/** The thread that stopped (hit the breakpoint or step); the only one that can be stepped. */
+	threadId: number;
+	frames: DebuggeeFrame[];
+	lldbFrames: LldbFrame[];
+	/** Every thread known at this stop (just the stopped one unless the host does all-stop). */
+	views: Map<number, ThreadView>;
+	/** The thread whose frames the reactor currently holds; changes when the client asks about another thread's frames. */
+	focused: number;
 }
 /** What a DAP `variablesReference` stands for: a frame's variables (empty `path`) or one value's children. Valid for one stop. */
-interface VariableRef { frame: number; path: string }
+interface VariableRef { thread: number; frame: number; path: string }
 /** What a client attached to a breakpoint besides its place; `key` carries the hit count across the client's re-sends. */
 interface BreakpointSpec { key: string; condition?: string; hitCondition?: string; logMessage?: string }
 interface PlacedSpec { pcs: number[]; spec: BreakpointSpec }
@@ -47,6 +60,8 @@ interface FunctionBreakpoint { name: string; condition?: string; hitCondition?: 
 interface StepState { kind: 'into' | 'over'; sp: number; location: Location | undefined }
 
 const MAIN_THREAD_ID = 1;
+/** Frame ids of the stopped thread are `index + 1`; another thread's are `threadId * FRAME_ID_THREAD + index + 1`. */
+const FRAME_ID_THREAD = 65536;
 
 /**
  * The Debug Adapter Protocol logic, independent of both VS Code and the debuggee's host; vscode-free, so node tests
@@ -76,7 +91,7 @@ export class DebugController {
 	private readonly memory = new PagedMemory();
 	private readonly locations = new Map<number, Location | undefined>();
 	private stop: StopState | undefined;
-	/** Threads that have stopped so far (and main); the stub reports a thread only when it stops. */
+	/** Threads announced to the client (and main). Without all-stop a thread is known only once it has stopped. */
 	private readonly threads = new Set<number>([MAIN_THREAD_ID]);
 	private readonly variableRefs = new Map<number, VariableRef>();
 	private stepping: StepState | undefined;
@@ -108,8 +123,8 @@ export class DebugController {
 			case 'configurationDone':
 				this.respond(req, true, {});
 				return this.begin();
-			case 'threads': this.respond(req, true, { threads: [...this.threads].map(id => ({ id, name: id === MAIN_THREAD_ID ? 'main' : `thread ${id}` })) }); return;
-			case 'continue': return this.resumeFromRequest(req, 'continue', { allThreadsContinued: false }, args);
+			case 'threads': this.respond(req, true, { threads: [...this.threads].sort((a, b) => a - b).map(id => ({ id, name: this.threadName(id) })) }); return;
+			case 'continue': return this.resumeFromRequest(req, 'continue', { allThreadsContinued: this.requireTarget().session.capabilities.allStop }, args);
 			case 'next': return this.resumeFromRequest(req, 'over', {}, args);
 			case 'stepIn': return this.resumeFromRequest(req, 'into', {}, args);
 			case 'stepOut': return this.resumeFromRequest(req, 'out', {}, args);
@@ -140,6 +155,12 @@ export class DebugController {
 	private requireTarget(): DebugTarget {
 		if (!this.target) { throw new Error('vscwClang: the debug session has not been launched yet; did the launch request fail?'); }
 		return this.target;
+	}
+
+	private threadName(id: number): string {
+		const base = id === MAIN_THREAD_ID ? 'main' : `thread ${id}`;
+		const view = this.stop?.views.get(id);
+		return view && !view.stopped ? `${base} (still running: blocked or not at a statement)` : base;
 	}
 
 	private requireStopped(what: string): StopState {
@@ -241,7 +262,12 @@ export class DebugController {
 	private async resumeFromRequest(req: Request, how: ResumeKind, body: object, args: Args): Promise<void> {
 		const stop = this.requireStopped(how === 'continue' ? 'continue' : `step (${how})`);
 		if (args.threadId !== undefined && Number(args.threadId) !== stop.threadId) {
-			throw new Error(`vscwClang: thread ${args.threadId} is running; only thread ${stop.threadId} is stopped, and the debug stub resumes just the stopped thread. Did you mean to continue or step thread ${stop.threadId}?`);
+			if (this.requireTarget().session.capabilities.allStop) {
+				// Continue resumes every thread whichever one the client names; a step can only move the thread that stopped.
+				if (how !== 'continue') { throw new Error(`vscwClang: thread ${args.threadId} is stopped, but only thread ${stop.threadId}, which hit the stop, can be stepped (the other threads just wait). Did you mean to select thread ${stop.threadId}, or to continue?`); }
+			} else {
+				throw new Error(`vscwClang: thread ${args.threadId} is running; only thread ${stop.threadId} is stopped, and the debug stub resumes just the stopped thread. Did you mean to continue or step thread ${stop.threadId}?`);
+			}
 		}
 		const top = stop.frames[0];
 		this.stepping = (how === 'into' || how === 'over') && top ? { kind: how, sp: top.sp, location: this.locate(top.pc) } : undefined;
@@ -287,12 +313,15 @@ export class DebugController {
 			}
 		}
 		const target = this.requireTarget();
-		const lldbFrames = event.frames.filter(f => target.scan.frameBaseLocals.has(f.funcIndex)).map(f => ({ funcIndex: f.funcIndex, pc: f.pc, sp: f.sp, frameBaseLocal: target.scan.frameBaseLocals.get(f.funcIndex)! }));
-		this.stop = { threadId: event.threadId, frames: event.frames, lldbFrames };
-		if (!this.threads.has(event.threadId)) {
-			this.threads.add(event.threadId);
-			this.send({ type: 'event', event: 'thread', body: { reason: 'started', threadId: event.threadId } });
+		const lldbFramesOf = (frames: DebuggeeFrame[]): LldbFrame[] => frames.filter(f => target.scan.frameBaseLocals.has(f.funcIndex)).map(f => ({ funcIndex: f.funcIndex, pc: f.pc, sp: f.sp, frameBaseLocal: target.scan.frameBaseLocals.get(f.funcIndex)! }));
+		const lldbFrames = lldbFramesOf(event.frames);
+		const views = new Map<number, ThreadView>();
+		if (target.session.capabilities.allStop) {
+			for (const t of await target.session.threads()) { views.set(t.id, { stopped: t.stopped, frames: t.frames, lldbFrames: lldbFramesOf(t.frames) }); }
 		}
+		views.set(event.threadId, { stopped: true, frames: event.frames, lldbFrames });
+		this.stop = { threadId: event.threadId, frames: event.frames, lldbFrames, views, focused: event.threadId };
+		this.announceThreads(views);
 		this.variableRefs.clear();
 		this.memory.clear();
 		target.reactor.setMemory({ read: this.memory.read });
@@ -311,7 +340,40 @@ export class DebugController {
 		await this.syncBreakpoints();
 		const reason = event.reason === 'step' && this.entryPending ? 'entry' : event.reason;
 		this.entryPending = false;
-		this.send({ type: 'event', event: 'stopped', body: { reason, threadId: event.threadId, allThreadsStopped: false } });
+		this.send({ type: 'event', event: 'stopped', body: { reason, threadId: event.threadId, allThreadsStopped: target.session.capabilities.allStop } });
+	}
+
+	/** Tells the client about threads that appeared since the last stop (and, with all-stop, ones that ended). */
+	private announceThreads(views: Map<number, ThreadView>): void {
+		for (const id of views.keys()) {
+			if (this.threads.has(id)) { continue; }
+			this.threads.add(id);
+			this.send({ type: 'event', event: 'thread', body: { reason: 'started', threadId: id } });
+		}
+		if (!this.requireTarget().session.capabilities.allStop) { return; }
+		for (const id of [...this.threads]) {
+			if (id === MAIN_THREAD_ID || views.has(id)) { continue; }
+			this.threads.delete(id);
+			this.send({ type: 'event', event: 'thread', body: { reason: 'exited', threadId: id } });
+		}
+	}
+
+	/** Points the reactor at `threadId`'s frames (a no-op when it already is), so frame indexes mean that thread's frames. */
+	private focus(stop: StopState, threadId: number): void {
+		if (stop.focused === threadId) { return; }
+		const view = stop.views.get(threadId);
+		if (!view) { throw new Error(`vscwClang: thread ${threadId} is not part of this stop; did the program run on since its stack was listed?`); }
+		this.requireTarget().reactor.setStop(view.lldbFrames);
+		stop.focused = threadId;
+	}
+
+	/** The frames the reactor should hold, for the re-runs `evaluateWithMemory` makes after fetching pages. */
+	private focusedFrames(stop: StopState): LldbFrame[] { return stop.views.get(stop.focused)?.lldbFrames ?? stop.lldbFrames; }
+
+	private decodeFrameId(stop: StopState, frameId: unknown): { thread: number; frame: number } {
+		if (frameId === undefined) { return { thread: stop.threadId, frame: 0 }; }
+		const id = Number(frameId);
+		return id >= FRAME_ID_THREAD ? { thread: Math.floor(id / FRAME_ID_THREAD), frame: (id % FRAME_ID_THREAD) - 1 } : { thread: stop.threadId, frame: id - 1 };
 	}
 
 	/**
@@ -345,7 +407,7 @@ export class DebugController {
 		const stop = this.stop;
 		return evaluateWithMemory(this.memory, pages => this.fetchPages(pages),
 			() => evaluateExpression(expression, path => scalarFromFormatted(path, target.reactor.formatValue(frame, path))),
-			() => { if (stop) { target.reactor.setStop(stop.lldbFrames); } });
+			() => { if (stop) { target.reactor.setStop(this.focusedFrames(stop)); } });
 	}
 
 	private async evaluateCondition(condition: string): Promise<boolean> {
@@ -379,19 +441,22 @@ export class DebugController {
 	private async stackTrace(req: Request, args: Args): Promise<void> {
 		const target = this.requireTarget();
 		const stop = this.requireStopped('read the stack');
-		if (args.threadId !== undefined && Number(args.threadId) !== stop.threadId) {
-			// Running threads have no frames to show: the stub reports a thread's stack only when it stops.
+		const threadId = args.threadId === undefined ? stop.threadId : Number(args.threadId);
+		// Without all-stop only the stopped thread has a stack; a blocked thread has none either.
+		const view = stop.views.get(threadId);
+		if (!view?.stopped) {
 			this.respond(req, true, { stackFrames: [], totalFrames: 0 });
 			return;
 		}
-		const start = Number(args.startFrame ?? 0), levels = Number(args.levels ?? 0) || stop.lldbFrames.length;
-		const frames = stop.lldbFrames.map((f, i) => {
+		const idBase = threadId === stop.threadId ? 0 : threadId * FRAME_ID_THREAD;
+		const start = Number(args.startFrame ?? 0), levels = Number(args.levels ?? 0) || view.lldbFrames.length;
+		const frames = view.lldbFrames.map((f, i) => {
 			const location = this.locate(f.pc);
 			const dapPath = location && target.paths.guestToDap(location.file);
 			const wasmName = target.scan.module.names.get(f.funcIndex);
 			const name = wasmName === undefined ? `wasm-function[${f.funcIndex}]` : displayFunctionName(wasmName);
 			const source = location ? { name: location.file.slice(Math.max(location.file.lastIndexOf('/'), location.file.lastIndexOf('\\')) + 1), ...(dapPath ? { path: dapPath } : {}) } : undefined;
-			return { id: i + 1, name, ...(source ? { source } : {}), line: location?.line ?? 0, column: 1 };
+			return { id: idBase + i + 1, name, ...(source ? { source } : {}), line: location?.line ?? 0, column: 1 };
 		});
 		this.respond(req, true, { stackFrames: frames.slice(start, start + levels), totalFrames: frames.length });
 	}
@@ -404,9 +469,9 @@ export class DebugController {
 
 	private scopes(req: Request, args: Args): void {
 		const stop = this.requireStopped('list scopes');
-		const frame = Number(args.frameId) - 1;
-		if (!stop.lldbFrames[frame]) { throw new Error(`vscwClang: no frame ${args.frameId} in this stop's call stack; did the program run on since the stack was requested?`); }
-		this.respond(req, true, { scopes: [{ name: 'Locals', variablesReference: this.newVariableRef({ frame, path: '' }), expensive: false }] });
+		const { thread, frame } = this.decodeFrameId(stop, args.frameId);
+		if (!stop.views.get(thread)?.lldbFrames[frame]) { throw new Error(`vscwClang: no frame ${args.frameId} in this stop's call stack; did the program run on since the stack was requested?`); }
+		this.respond(req, true, { scopes: [{ name: 'Locals', variablesReference: this.newVariableRef({ thread, frame, path: '' }), expensive: false }] });
 	}
 
 	private async variables(req: Request, args: Args): Promise<void> {
@@ -414,13 +479,14 @@ export class DebugController {
 		const stop = this.requireStopped('list variables');
 		const ref = this.variableRefs.get(Number(args.variablesReference));
 		if (!ref) { throw new Error(`vscwClang: variablesReference ${args.variablesReference} is not from this stop; did the program run on since it was listed?`); }
-		const rows = await evaluateWithMemory(this.memory, pages => this.fetchPages(pages), () => target.reactor.variables(ref.frame, ref.path), () => target.reactor.setStop(stop.lldbFrames));
+		this.focus(stop, ref.thread);
+		const rows = await evaluateWithMemory(this.memory, pages => this.fetchPages(pages), () => target.reactor.variables(ref.frame, ref.path), () => target.reactor.setStop(this.focusedFrames(stop)));
 		const variables = rows.map(row => ({
 			name: row.name,
 			// An aggregate with no formatter summary has no text of its own; its type tells more than a blank.
 			value: row.value || `(${row.type})`,
 			type: row.type,
-			variablesReference: row.hasChildren ? this.newVariableRef({ frame: ref.frame, path: row.path }) : 0,
+			variablesReference: row.hasChildren ? this.newVariableRef({ thread: ref.thread, frame: ref.frame, path: row.path }) : 0,
 		}));
 		this.respond(req, true, { variables });
 	}
@@ -428,11 +494,12 @@ export class DebugController {
 	private async evaluate(req: Request, args: Args): Promise<void> {
 		const target = this.requireTarget();
 		const stop = this.requireStopped('evaluate');
-		const frame = args.frameId === undefined ? 0 : Number(args.frameId) - 1;
+		const { thread, frame } = this.decodeFrameId(stop, args.frameId);
+		this.focus(stop, thread);
 		const expression = String(args.expression ?? '').trim();
 		// A lone variable path keeps lldb's type and children; anything else (`a + b`, `i == 3`) is computed here.
 		const result = isPlainPath(expression)
-			? await evaluateWithMemory(this.memory, pages => this.fetchPages(pages), () => target.reactor.formatValue(frame, expression), () => target.reactor.setStop(stop.lldbFrames))
+			? await evaluateWithMemory(this.memory, pages => this.fetchPages(pages), () => target.reactor.formatValue(frame, expression), () => target.reactor.setStop(this.focusedFrames(stop)))
 			: String(await this.evaluateValue(expression, frame));
 		this.respond(req, true, { result, variablesReference: 0 });
 	}

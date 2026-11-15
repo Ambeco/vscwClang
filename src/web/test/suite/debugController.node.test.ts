@@ -5,7 +5,7 @@ import { nodeReactorThreads } from '../reactorThreads';
 import { artifactReactor } from '../artifacts';
 import { BreakpointIndex } from '../../debug/breakpointIndex';
 import { DebugController, type DebugTarget } from '../../debug/debugController';
-import type { DebuggeeEvent, DebuggeeSession, ResumeKind } from '../../debug/debuggeeSession';
+import type { DebuggeeEvent, DebuggeeSession, DebuggeeThread, ResumeKind } from '../../debug/debuggeeSession';
 import { parseLineTable } from '../../debug/dwarfLines';
 import { workspacePathMapper, type PathMapper } from '../../debug/pathMapper';
 import { ReactorHost } from '../../debug/reactorHost';
@@ -393,7 +393,9 @@ suiteIfChatty('DebugController program output (chatty.c: prompt, scanf, stderr, 
 
 /** A scripted host: the tests decide when it stops, so controller behavior that depends on timing is deterministic. */
 class FakeSession implements DebuggeeSession {
-	capabilities = { pause: false, breakpointsWhileRunning: false };
+	capabilities = { pause: false, breakpointsWhileRunning: false, allStop: false };
+	/** What `threads()` returns (only asked for when `capabilities.allStop`). */
+	threadList: DebuggeeThread[] = [];
 	listener: ((e: DebuggeeEvent) => void) | undefined;
 	armed: number[][] = [];
 	resumed: ResumeKind[] = [];
@@ -402,6 +404,7 @@ class FakeSession implements DebuggeeSession {
 	async resume(how: ResumeKind): Promise<void> { this.resumed.push(how); }
 	pauseWorks = false;
 	async pause(): Promise<void> { if (!this.pauseWorks) { throw new Error('no pause'); } }
+	async threads(): Promise<DebuggeeThread[]> { return this.threadList; }
 	async readMemory(): Promise<Uint8Array | undefined> { return new Uint8Array(4096); }
 	async terminate(): Promise<void> { /* nothing to stop */ }
 }
@@ -469,6 +472,58 @@ suiteIfFixtures('DebugController with a scripted host', function () {
 		assert.deepStrictEqual(fake.resumed, ['continue']);
 		assert.deepStrictEqual(await client.ok('continue', { threadId: 4 }), { allThreadsContinued: false });
 		assert.deepStrictEqual(fake.resumed, ['continue', 'continue']);
+	});
+
+	test('with all-stop every thread is listed with its own stack, only the stopped thread can be stepped, and continue resumes them all', async () => {
+		const program = new Uint8Array(readFileSync(PROG));
+		const scan = scanProgram(program);
+		const reactor = await ReactorHost.create(readFileSync(REACTOR), undefined, undefined, nodeReactorThreads());
+		reactor.createTarget(program);
+		const fake = new FakeSession();
+		fake.capabilities = { pause: true, breakpointsWhileRunning: true, allStop: true };
+		const client = makeClient(async () => ({ session: fake, reactor, program, scan, paths: identity }));
+		await client.ok('initialize'); await client.ok('launch', {}); await client.event('initialized');
+		await client.ok('configurationDone');
+
+		const add = [...scan.guardSites].filter(([, s]) => scan.module.names.get(s.funcIndex) === 'add').sort((a, b) => a[1].pc - b[1].pc)[0];
+		const frame = (sp: number) => ({ funcIndex: add[1].funcIndex, pc: add[1].pc, sp });
+		fake.threadList = [
+			{ id: 1, stopped: true, frames: [frame(2000)] },
+			{ id: 4, stopped: true, frames: [frame(1000)] },
+			{ id: 5, stopped: false, frames: [] },
+		];
+		fake.listener!({ kind: 'stopped', reason: 'breakpoint', threadId: 4, frames: [frame(1000)] });
+		const started = [(await client.event('thread')).body, (await client.event('thread')).body];
+		assert.deepStrictEqual(started, [{ reason: 'started', threadId: 4 }, { reason: 'started', threadId: 5 }]);
+		assert.deepStrictEqual((await client.event('stopped')).body, { reason: 'breakpoint', threadId: 4, allThreadsStopped: true });
+		assert.deepStrictEqual((await client.ok('threads')).threads, [
+			{ id: 1, name: 'main' }, { id: 4, name: 'thread 4' }, { id: 5, name: 'thread 5 (still running: blocked or not at a statement)' },
+		]);
+
+		const own = (await client.ok('stackTrace', { threadId: 4 })).stackFrames;
+		const other = (await client.ok('stackTrace', { threadId: 1 })).stackFrames;
+		assert.deepStrictEqual([own[0].id, other[0].id], [1, 65537], 'frame ids of another thread are tagged with its thread id');
+		assert.strictEqual(other[0].line, own[0].line, 'same function, same line');
+		assert.deepStrictEqual(await client.ok('stackTrace', { threadId: 5 }), { stackFrames: [], totalFrames: 0 }, 'a blocked thread has no stack');
+
+		const scopes = (await client.ok('scopes', { frameId: other[0].id })).scopes;
+		assert.strictEqual(scopes.length, 1, 'a frame of the other thread has scopes too');
+		const scopesOwn = (await client.ok('scopes', { frameId: own[0].id })).scopes;
+		assert.strictEqual(scopesOwn.length, 1);
+		await client.ok('variables', { variablesReference: scopes[0].variablesReference });
+
+		const wrong = await client.request('stepIn', { threadId: 1 });
+		assert.strictEqual(wrong.success, false);
+		assert.match(String(wrong.message), /thread 1 is stopped, but only thread 4, which hit the stop, can be stepped/);
+		assert.deepStrictEqual(fake.resumed, ['continue']);
+		assert.deepStrictEqual(await client.ok('continue', { threadId: 1 }), { allThreadsContinued: true });
+		assert.deepStrictEqual(fake.resumed, ['continue', 'continue']);
+
+		fake.threadList = [{ id: 1, stopped: true, frames: [frame(2000)] }, { id: 4, stopped: true, frames: [frame(1000)] }];
+		fake.listener!({ kind: 'stopped', reason: 'breakpoint', threadId: 1, frames: [frame(2000)] });
+		assert.deepStrictEqual((await client.event('thread')).body, { reason: 'exited', threadId: 5 });
+		await client.event('stopped');
+		assert.deepStrictEqual((await client.ok('threads')).threads.map((t: { id: number }) => t.id), [1, 4]);
 	});
 
 	test("the target's notice is shown in the Debug Console when the launch succeeds", async () => {

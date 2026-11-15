@@ -91,7 +91,7 @@ suite('breakpoint changes and Pause while the program runs (shared memory)', fun
 		const p = startSpin(true);
 		try {
 			assert.strictEqual((await p.nextStop()).reason, 'start');
-			assert.deepStrictEqual(p.debuggee.capabilities, { pause: true, breakpointsWhileRunning: true });
+			assert.deepStrictEqual(p.debuggee.capabilities, { pause: true, breakpointsWhileRunning: true, allStop: true });
 			await p.debuggee.resume('continue');
 			assert.ok(await p.stillRunning(300), 'the loop runs free');
 
@@ -140,7 +140,7 @@ suite('breakpoint changes and Pause while the program runs (shared memory)', fun
 		const p = startSpin(false);
 		try {
 			await p.nextStop();
-			assert.deepStrictEqual(p.debuggee.capabilities, { pause: false, breakpointsWhileRunning: false });
+			assert.deepStrictEqual(p.debuggee.capabilities, { pause: false, breakpointsWhileRunning: false, allStop: false });
 			await assert.rejects(p.debuggee.pause(), /vscwclang\.threads/);
 			await p.debuggee.resume('continue');
 			await assert.rejects(p.debuggee.setBreakpoints(p.tickGuards), /while the program is running/);
