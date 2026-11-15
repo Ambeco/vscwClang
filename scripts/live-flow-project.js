@@ -15,8 +15,13 @@ const seeded = await seedDir(CFG.src, { include: r => inc.test(r) && !(exc && ex
   patch: CFG.mode === 'open' || CFG.mode === 'warm' ? { [CFG.open]: t => CFG.prependBad + t } : {} });
 out.push('seeded ' + seeded.files + ' files, ' + (seeded.bytes / 1e6).toFixed(1) + ' MB');
 const openFile = async (name) => { await p.keyboard.press('Escape'); await sleep(200); await p.keyboard.press('Control+p'); await sleep(300); await p.keyboard.type(name); await sleep(600); await p.keyboard.press('Enter'); };
+// A tab restored from the previous seed can steal focus after Ctrl+P; reopen until the wanted file is the active tab.
+const activeTab = () => p.evaluate(() => (document.querySelector('.tab.active') || {}).innerText || '');
+const ensureOpen = async (name) => {
+  for (let i = 0; i < 4; i++) { await openFile(name); await sleep(2000); if ((await activeTab()).includes(name.split('/').pop())) { return; } }
+};
 if (CFG.mode === 'warm') {
-  await openFile(CFG.open);
+  await ensureOpen(CFG.open);
   let seen = false, quiet = 0; const t0 = Date.now();
   while (Date.now() - t0 < 300000) {
     const s = await p.evaluate(() => (document.querySelector('.part.statusbar') || {}).innerText || '');
@@ -28,7 +33,7 @@ if (CFG.mode === 'warm') {
   out.push('warm: index ' + (seen ? 'ran' : 'never seen') + ', done after ' + ((Date.now() - t0) / 1000).toFixed(0) + ' s');
 } else if (CFG.mode === 'open') {
   const t0 = Date.now(); const T = () => ((Date.now() - t0) / 1000).toFixed(1) + 's';
-  await openFile(CFG.open);
+  await ensureOpen(CFG.open);
   await sleep(300); await p.mouse.click(700, 300); await p.keyboard.press('Control+Home'); // the editor restores the old scroll position
   const tokLoc = () => p.locator('.view-lines span', { hasText: new RegExp('^' + CFG.hoverTok + '$') }).first();
   const hoverTry = async () => {
@@ -62,10 +67,20 @@ if (CFG.mode === 'warm') {
   });
   let n = 0;
   const typeAtEnd = async (text) => { await p.mouse.click(700, 400); await p.keyboard.press('Control+End'); await p.keyboard.type(text); await p.keyboard.press('Control+s'); await sleep(300); };
+  // Keyboard-only palette pick: a click on the row can time out behind a notification.
+  const runCmd = async (name) => {
+    await p.keyboard.press('F1'); await sleep(500); await p.keyboard.type(name); await sleep(900);
+    const rows = p.locator('.quick-input-list .monaco-list-row'); const cnt = await rows.count();
+    for (let i = 0; i < cnt; i++) {
+      const label = (await rows.nth(i).locator('.label-name').first().innerText()).trim();
+      if (label === name || label.startsWith(name + ' (')) { for (let k = 0; k < i; k++) { await p.keyboard.press('ArrowDown'); } await p.keyboard.press('Enter'); return; }
+    }
+    throw new Error('no palette row ' + name);
+  };
   const build = async (label, edit) => {
     if (edit) { await edit(); }
     await p.keyboard.press('Escape'); await sleep(200);
-    await cmd('vscwClang: Build C++'); const t0 = Date.now();
+    await runCmd('vscwClang: Build C++'); const t0 = Date.now();
     while (Date.now() - t0 < CFG.timeoutMs) {
       const l = await readLog();
       if (l && l.mtime >= t0 - 200) {
@@ -77,7 +92,7 @@ if (CFG.mode === 'warm') {
     }
     out.push(label + ': TIMEOUT');
   };
-  await openFile(CFG.leaf); await sleep(CFG.settleMs);
+  await ensureOpen(CFG.leaf); await sleep(CFG.settleMs);
   await build('first build (page warm)');
   await build('unchanged');
   for (let i = 0; i < CFG.runs; i++) { await build('edit leaf ' + CFG.leaf, async () => { await openFile(CFG.leaf); await sleep(500); await typeAtEnd(CFG.leafSnippet.replaceAll('N', ++n)); }); }
