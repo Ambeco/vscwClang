@@ -219,7 +219,7 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 	objectPaths.push(...compiles.flatMap(c => c?.objectPath ? [c.objectPath] : []));
 	if (exitCode === 0) {
 		const link = flags.link[slice].map(sub);
-		const linkArgs = ['wasm-ld', link[0], ...objectPaths, ...(abortShim ? [abortShim] : []), ...(uncaughtShim ? [uncaughtShim, '--wrap=__main_void'] : []), ...(debugStub ? [debugStub, '--export=__sanitizer_cov_trace_pc_guard'] : []), ...DEFAULT_LINK_FLAGS, ...linkFlags, ...link.slice(1), '-o', output];
+		const linkArgs = ['wasm-ld', link[0], ...objectPaths, ...(abortShim ? [abortShim] : []), ...(uncaughtShim ? [uncaughtShim, '--wrap=__main_void'] : []), ...(debugStub ? [debugStub, '--export=__sanitizer_cov_trace_pc_guard', '--export=__stack_pointer'] : []), ...DEFAULT_LINK_FLAGS, ...linkFlags, ...link.slice(1), '-o', output];
 		const linkKey = await hashText([toolchainVersion, request.output.toString(), objectIds.join(','), ...linkArgs].join(NL));
 		const previous = lastLinks.get(request.output.toString());
 		const outputStat = previous?.key === linkKey ? await vscode.workspace.fs.stat(request.output).then(s => s, () => undefined) : undefined;

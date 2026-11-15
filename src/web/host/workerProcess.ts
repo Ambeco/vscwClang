@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { GuestProcess, StdinQueue } from './guestProcess';
+import { GuestProcess, StdinQueue, type TrapReport } from './guestProcess';
 import { VscodeGuestFs, type GuestMount } from './vscodeGuestFs';
 import type { MemoryLimits } from './sharedMemory';
 import { createGuestWorker, threadOptions } from './workerHost';
@@ -49,7 +49,15 @@ export interface WorkerProcessOptions {
 	terminal?: boolean;
 	/** For a wasi-threads module: `sharedMemoryLimits` of its binary. */
 	memoryLimits?: MemoryLimits;
+	/**
+	 * Debug: asked when a thread traps; returning true keeps the process (and its shared memory) alive so the trap can
+	 * be shown as a stop. `run()` then resolves, as for any trap, only when `terminate()` is called. Needs `memoryLimits`
+	 * (a program without shared memory has nothing a debugger could read after a trap).
+	 */
+	onTrap?: (trap: TrapReport) => boolean;
 }
+
+export type { TrapReport };
 
 export async function createWorkerProcess(context: vscode.ExtensionContext, options: WorkerProcessOptions): Promise<PipedProcess> {
 	const stdin = new StdinQueue();
@@ -62,7 +70,7 @@ export async function createWorkerProcess(context: vscode.ExtensionContext, opti
 		preopens: options.mounts.map(m => m.guestPath), terminal: options.terminal, fs: new VscodeGuestFs(options.mounts), stdin,
 		onOutput: (fd, data) => (fd === 1 ? stdout : stderr).emit(data),
 		createWorker: () => worker,
-		...threads,
+		...threads, onTrap: options.memoryLimits ? options.onTrap : undefined,
 	});
 	return {
 		memory: threads.sharedMemory,

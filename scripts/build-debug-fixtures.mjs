@@ -1,4 +1,4 @@
-// Rebuilds the debug-stub test fixtures (progstub.wasm, chattystub.wasm, loopstub.wasm, threadsstub.wasm, spinstub.wasm, allstopstub.wasm, manythreadsstub.wasm, locals.wasm) from
+// Rebuilds the debug-stub test fixtures (progstub.wasm, chattystub.wasm, loopstub.wasm, threadsstub.wasm, spinstub.wasm, allstopstub.wasm, manythreadsstub.wasm, trapstub.wasm, locals.wasm) from
 // src/web/debug/debugStub.c with the fork's own clang.wasm and lld.wasm under node:wasi, so they track the stub. Run
 // after changing debugStub.c:
 //   node scripts/build-debug-fixtures.mjs --release <llvm-project>/release/<tag> [--llvm <llvm-project>]
@@ -41,7 +41,7 @@ async function run(wasmFile, toolArgs, work) {
 const instrument = ['-O0', '-g', '-fsanitize-coverage=trace-pc-guard,no-prune', ...debugCoverage, '-fdebug-prefix-map=/src/=', '-fdebug-prefix-map=/work='];
 const work = mkdtempSync(join(tmpdir(), 'vscw-fixtures-'));
 try {
-	for (const [slice, names] of [['wasm32-wasip1', ['prog', 'chatty', 'loop', 'stepcall']], ['wasm32-wasip1-threads', ['threads', 'spin', 'stepcallmt', 'allstop', 'manythreads']]]) {
+	for (const [slice, names] of [['wasm32-wasip1', ['prog', 'chatty', 'loop', 'stepcall']], ['wasm32-wasip1-threads', ['threads', 'spin', 'stepcallmt', 'allstop', 'manythreads', 'trap']]]) {
 		const compile = flags.compile[slice].map(sub);
 		const link = flags.link[slice].map(sub);
 		// The threaded driver spawns cc1 as a subprocess unless told not to (see notes.md 2026-10-29).
@@ -49,7 +49,7 @@ try {
 		await run('clang.wasm', ['clang', ...compile, ...driver, '-O2', '-c', '/stub/debugStub.c', '-o', `/work/debugStub-${slice}.o`], work);
 		for (const name of names) {
 			await run('clang.wasm', ['clang', ...compile, ...driver, ...instrument, '-c', `/src/${name}.c`, '-o', `/work/${name}.o`], work);
-			await run('lld.wasm', ['wasm-ld', link[0], `/work/${name}.o`, `/work/debugStub-${slice}.o`, '--export=__sanitizer_cov_trace_pc_guard', ...link.slice(1), '-o', `/work/${name}stub.wasm`], work);
+			await run('lld.wasm', ['wasm-ld', link[0], `/work/${name}.o`, `/work/debugStub-${slice}.o`, '--export=__sanitizer_cov_trace_pc_guard', '--export=__stack_pointer', ...link.slice(1), '-o', `/work/${name}stub.wasm`], work);
 			copyFileSync(join(work, `${name}stub.wasm`), join(fixtures, `${name}stub.wasm`));
 			console.log(`rebuilt ${name}stub.wasm (${slice})`);
 		}

@@ -54,8 +54,11 @@ export function fixturePath(name: string): string {
 
 export type StoppedEvent = Extract<DebuggeeEvent, { kind: 'stopped' }>;
 
-/** Starts the fixture held at its start stop; `withMemory` false hides the shared memory from the host, as `vscwclang.threads` off does. */
-export function startProgram(name: string, withMemory = true) {
+/**
+ * Starts the fixture held at its start stop; `withMemory` false hides the shared memory from the host, as
+ * `vscwclang.threads` off does (a trap then ends the program instead of stopping it).
+ */
+export function startProgram(name: string, withMemory = true, args: string[] = []) {
 	const bytes = readFileSync(fixturePath(name));
 	const scan = scanProgram(bytes);
 	const guardsOf = (funcName: string) => {
@@ -69,15 +72,16 @@ export function startProgram(name: string, withMemory = true) {
 	let stderr = '';
 	const decoder = new TextDecoder();
 	const guest = new GuestProcess({
-		module: new WebAssembly.Module(bytes), args: ['prog'], env: {}, preopens: [], fs: noFiles, stdin,
+		module: new WebAssembly.Module(bytes), args: ['prog', ...args], env: {}, preopens: [], fs: noFiles, stdin,
 		onOutput: (fd, data) => { if (fd === 2) { debuggee.feedStderr(data); } else { stdout += decoder.decode(data, { stream: true }); } },
 		createWorker: nodeWorker, createThreadWorker: nodeWorker, sharedMemory: memory,
+		onTrap: trap => withMemory && debuggee.holdTrap(trap),
 	});
 	const exited = guest.run().then(outcome => (outcome.kind === 'exit' ? outcome.code : 139));
-	const debuggee = new StubDebuggee({
+	const debuggee: StubDebuggee = new StubDebuggee({
 		send: text => stdin.push(new TextEncoder().encode(text)), exited, terminate: () => guest.terminate(),
 		onOutput: (stream, text) => { if (stream === 'stderr') { stderr += text; } },
-		guardSites: scan.guardSites, memory: withMemory ? memory : undefined,
+		guardSites: scan.guardSites, memory: withMemory ? memory : undefined, codeStart: scan.module.codeStart,
 	});
 	void debuggee.start();
 	const stops: StoppedEvent[] = [];

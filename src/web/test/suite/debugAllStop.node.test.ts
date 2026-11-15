@@ -107,7 +107,7 @@ suite('all-stop: a stop halts every thread (real stub, shared memory)', function
 		try {
 			await p.nextStop();
 			assert.strictEqual(p.debuggee.capabilities.allStop, false);
-			assert.deepStrictEqual(await p.debuggee.threads(), []);
+			assert.deepStrictEqual(await p.debuggee.threads(), [{ id: 1, stopped: true, frames: [] }], 'just the thread of the latest stop');
 		} finally { p.stop(); }
 	});
 });

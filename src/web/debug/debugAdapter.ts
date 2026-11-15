@@ -34,7 +34,9 @@ export interface DebugHost {
  * By default (`console` is `integratedTerminal`) the program's stdin, stdout and stderr are a terminal: typed lines
  * reach the program while it runs and wait for the next resume while it is stopped (see `StubDebuggee`). There is no
  * end-of-file key. With `"console": "internalConsole"` its output goes to the Debug Console and its stdin is not
- * connected, so a program that reads input waits forever. A program that traps (out-of-bounds, `__builtin_trap`) exits 139 with a message.
+ * connected, so a program that reads input waits forever. A program that traps (out-of-bounds, `__builtin_trap`)
+ * stops in the debugger with the trap's message and a stack when it has threads' shared memory; Continue or a step
+ * then ends it with exit code 139. Without shared memory it ends at once with exit code 139 and a message.
  */
 export class VscwClangDebugAdapter implements vscode.DebugAdapter {
 	private readonly emitter = new vscode.EventEmitter<vscode.DebugProtocolMessage>();
@@ -64,8 +66,10 @@ export class VscwClangDebugAdapter implements vscode.DebugAdapter {
 		reactor.createTarget(program);
 
 		const environment = await workerProgramEnvironment(this.context);
-		const process = await createWorkerProcess(this.context, { name, module, args: plan.args, ...environment, memoryLimits: sharedMemoryLimits(program) });
+		const memoryLimits = sharedMemoryLimits(program);
 		let debuggee: StubDebuggee | undefined;
+		// A trap becomes a stop (threaded builds only: its shared memory is what survives to be read); otherwise the program just ends.
+		const process = await createWorkerProcess(this.context, { name, module, args: plan.args, ...environment, memoryLimits, onTrap: trap => debuggee?.holdTrap(trap) ?? false });
 		process.stdout?.onData(chunk => debuggee?.feedStdout(chunk));
 		process.stderr?.onData(chunk => debuggee?.feedStderr(chunk));
 		const exited = process.run();
@@ -76,12 +80,16 @@ export class VscwClangDebugAdapter implements vscode.DebugAdapter {
 			send: text => process.stdin!.write(encoder.encode(text)),
 			sendInput: data => process.stdin!.write(data),
 			onOutput: terminal && ((_stream, text) => terminal.write(text)),
-			exited, terminate: () => void process.terminate(), guardSites: scan.guardSites, memory: process.memory,
+			exited, terminate: () => void process.terminate(), guardSites: scan.guardSites, memory: process.memory, codeStart: scan.module.codeStart,
 		});
 
 		const folder = this.session.workspaceFolder?.uri ?? vscode.workspace.workspaceFolders?.[0]?.uri;
 		if (!folder) { throw new Error('vscwClang: open a workspace folder before debugging.'); }
-		const notice = terminal ? `vscwClang: ${name}'s input and output are in the terminal "${terminalName(name)}". To see output here instead, set "console": "internalConsole" in launch.json (the program then gets no input).` : undefined;
+		const notices = [
+			terminal ? `vscwClang: ${name}'s input and output are in the terminal "${terminalName(name)}". To see output here instead, set "console": "internalConsole" in launch.json (the program then gets no input).` : undefined,
+			process.memory ? undefined : 'vscwClang: this program was built without threads (is vscwclang.threads off?), so Pause, all-stop and stopping at a trap are unavailable: a trap ends the session instead.',
+		].filter(n => n !== undefined);
+		const notice = notices.length > 0 ? notices.join('\n') : undefined;
 		this.target = { session: debuggee, reactor, program, scan, paths: workspacePathMapper({ uri: folder.toString(), scheme: folder.scheme, path: folder.path, fsPath: folder.fsPath }), notice };
 		return this.target;
 	}

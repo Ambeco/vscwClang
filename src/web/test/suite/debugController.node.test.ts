@@ -526,6 +526,37 @@ suiteIfFixtures('DebugController with a scripted host', function () {
 		assert.deepStrictEqual((await client.ok('threads')).threads.map((t: { id: number }) => t.id), [1, 4]);
 	});
 
+	test('a trap is an exception stop with its message, a stack and exceptionInfo; Continue hands the end of the program to the host', async () => {
+		const program = new Uint8Array(readFileSync(PROG));
+		const scan = scanProgram(program);
+		const reactor = await ReactorHost.create(readFileSync(REACTOR), undefined, undefined, nodeReactorThreads());
+		reactor.createTarget(program);
+		const fake = new FakeSession();
+		const client = makeClient(async () => ({ session: fake, reactor, program, scan, paths: identity }));
+		await client.ok('initialize'); await client.ok('launch', {}); await client.event('initialized');
+		await client.ok('configurationDone');
+
+		const add = [...scan.guardSites].filter(([, s]) => scan.module.names.get(s.funcIndex) === 'add').sort((a, b) => a[1].pc - b[1].pc)[0];
+		const frames = [{ funcIndex: add[1].funcIndex, pc: add[1].pc, sp: 1000 }];
+		fake.listener!({ kind: 'stopped', reason: 'breakpoint', threadId: 1, frames });
+		await client.event('stopped');
+		const notATrap = await client.request('exceptionInfo', { threadId: 1 });
+		assert.strictEqual(notATrap.success, false);
+		assert.match(String(notATrap.message), /not stopped at a trap/);
+
+		await client.ok('continue', { threadId: 1 });
+		fake.listener!({ kind: 'stopped', reason: 'exception', threadId: 1, frames, text: 'RuntimeError: unreachable' });
+		assert.deepStrictEqual((await client.event('stopped')).body, { reason: 'exception', description: 'Paused on a trap', text: 'RuntimeError: unreachable', threadId: 1, allThreadsStopped: false });
+		assert.ok((await client.ok('stackTrace', { threadId: 1 })).stackFrames.length > 0, 'the trap has a stack');
+		assert.deepStrictEqual(await client.ok('exceptionInfo', { threadId: 1 }), { exceptionId: 'trap', description: 'RuntimeError: unreachable', breakMode: 'always' });
+
+		await client.ok('continue', { threadId: 1 });
+		assert.deepStrictEqual(fake.resumed, ['continue', 'continue', 'continue'], 'the host, not the controller, decides that a trapped program ends');
+		fake.listener!({ kind: 'exited', exitCode: 139 });
+		assert.strictEqual((await client.event('exited')).body.exitCode, 139);
+		await client.event('terminated');
+	});
+
 	test("the target's notice is shown in the Debug Console when the launch succeeds", async () => {
 		const program = new Uint8Array(readFileSync(PROG));
 		const scan = scanProgram(program);

@@ -42,7 +42,8 @@ export interface GuestOptions {
 
 export type GuestResult =
 	| { kind: 'exit'; code: number }
-	| { kind: 'trap'; message: string };
+	/** `stack` is the engine's stack trace at the trap; `stackPointer` the instance's `__stack_pointer` then, when the module exports it (debug builds do). */
+	| { kind: 'trap'; message: string; stack?: string; stackPointer?: number };
 
 /** Thrown by `proc_exit` to unwind the guest. */
 class GuestExit {
@@ -97,6 +98,7 @@ export class GuestWasi {
 	private readonly decoder = new TextDecoder();
 	private readonly start0 = performance.now();
 	private exitCode: number | undefined;
+	private instance: WebAssembly.Instance | undefined;
 
 	constructor(private readonly options: GuestOptions) {
 		this.services = options.services;
@@ -109,6 +111,7 @@ export class GuestWasi {
 	/** Runs the instance's `_start` to its end; flushes unsaved files whatever happens. */
 	start(instance: WebAssembly.Instance): GuestResult {
 		this.memory = this.options.memory ?? instance.exports.memory as WebAssembly.Memory;
+		this.instance = instance;
 		const entry = instance.exports._start as (() => void) | undefined;
 		if (!entry) { throw new Error('vscwClang: the module has no _start export, so it is not a WASI command. Did you mean to link an executable (not -shared or --no-entry)?'); }
 		return this.guarded(entry);
@@ -120,6 +123,7 @@ export class GuestWasi {
 	 */
 	runThread(instance: WebAssembly.Instance, tid: number, startArg: number): GuestResult | undefined {
 		this.memory = this.options.memory!;
+		this.instance = instance;
 		const entry = instance.exports.wasi_thread_start as ((tid: number, startArg: number) => void) | undefined;
 		if (!entry) { throw new Error('vscwClang: the module has no wasi_thread_start export, so it cannot run threads. Did you mean to link with -pthread (target wasm32-wasip1-threads)?'); }
 		const result = this.guarded(() => entry(tid, startArg));
@@ -133,15 +137,25 @@ export class GuestWasi {
 		} catch (e) {
 			// A C++ `catch (...)` (or a cleanup `catch_all`, as in `std::terminate`) can swallow the unwinding exception, so the first `proc_exit` code wins whatever ends `_start`.
 			if (this.exitCode !== undefined) { return { kind: 'exit', code: this.exitCode }; }
-			if (e instanceof WebAssembly.RuntimeError) { return { kind: 'trap', message: `RuntimeError: ${e.message}` }; }
+			if (e instanceof WebAssembly.RuntimeError) { return this.trap(`RuntimeError: ${e.message}`, e); }
 			// A stack overflow surfaces as a plain RangeError in V8.
-			if (e instanceof RangeError) { return { kind: 'trap', message: `RangeError: ${e.message}` }; }
+			if (e instanceof RangeError) { return this.trap(`RangeError: ${e.message}`, e); }
 			// An uncaught C++ `throw` escapes _start as a wasm exception, not a RuntimeError.
-			if (typeof WebAssembly.Exception === 'function' && e instanceof WebAssembly.Exception) { return { kind: 'trap', message: 'uncaught C++ exception (type and message unavailable: it was thrown outside main(), e.g. in a static constructor)' }; }
+			if (typeof WebAssembly.Exception === 'function' && e instanceof WebAssembly.Exception) { return this.trap('uncaught C++ exception (type and message unavailable: it was thrown outside main(), e.g. in a static constructor)', e); }
 			throw e;
 		} finally {
 			this.flushAll();
 		}
+	}
+
+	/** What a debugger needs to stop at the trap: the engine's stack and, if exported, this thread's stack pointer (the globals keep their values after a trap). */
+	private trap(message: string, error: { stack?: unknown }): GuestResult {
+		const sp = (this.instance?.exports.__stack_pointer as WebAssembly.Global | undefined)?.value;
+		return {
+			kind: 'trap', message,
+			...(typeof error.stack === 'string' ? { stack: error.stack } : {}),
+			...(typeof sp === 'number' ? { stackPointer: sp >>> 0 } : {}),
+		};
 	}
 
 	flushAll(): void {

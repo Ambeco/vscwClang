@@ -305,6 +305,11 @@ export function captureWasmFrames(codeStart: number, onlyInnermost = false): Tru
 	errorClass.stackTraceLimit = onlyInnermost ? 3 : Infinity;
 	const stack = new Error().stack ?? '';
 	errorClass.stackTraceLimit = saved;
+	return wasmFramesFromStack(stack, codeStart);
+}
+
+/** The wasm frames of an engine stack trace (an `Error.stack`, e.g. a trap's), innermost first. */
+export function wasmFramesFromStack(stack: string, codeStart: number): TrueFrame[] {
 	return [...stack.matchAll(CALL_SITE)].map(m => ({ funcIndex: Number(m[1]), pc: parseInt(m[2], 16) - codeStart }));
 }
 

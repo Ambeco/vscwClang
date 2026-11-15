@@ -1,6 +1,7 @@
 import type { DebuggeeEvent, DebuggeeFrame, DebuggeeSession, DebuggeeThread, ResumeKind } from './debuggeeSession';
 import { StubSession } from './stubChannel';
 import { readStubThreads } from './stubRegistry';
+import { pickTrappedThread, refineFrames, type TrapInput } from './trapStop';
 import type { GuardSite } from './wasmScan';
 
 export interface StubDebuggeeOptions {
@@ -14,9 +15,14 @@ export interface StubDebuggeeOptions {
 	exited: Promise<number>;
 	terminate(): void | Promise<void>;
 	guardSites: Map<number, GuardSite>;
-	/** The program's shared linear memory (threaded programs); enables breakpoint changes and Pause while it runs. */
+	/** The program's shared linear memory (threaded programs); enables breakpoint changes, Pause and all-stop while it runs, and traps as stops. */
 	memory?: WebAssembly.Memory;
+	/** Offset of the code section payload (`ScanResult.module.codeStart`); lets a trap's stack trace give exact pcs. */
+	codeStart?: number;
 }
+
+/** The bit of the stub's control word that parks every thread (`CTL_STOPPED` in `debugStub.c`). */
+const CTL_STOPPED = 2;
 
 /** Longer than any wait a user will sit through, but under `setTimeout`'s 2^31 ms limit. */
 const FOREVER_MS = 2_000_000_000;
@@ -35,6 +41,11 @@ const FOREVER_MS = 2_000_000_000;
  * With shared memory a stop is also an all-stop: every other thread parks at its next guard, and `threads()` reads
  * each parked thread's shadow stack out of the stub's registry (`stubRegistry.ts`). A blocked thread (see above) is
  * listed as not stopped, with no frames; it parks later if it reaches a guard while the program is still stopped.
+ *
+ * A trap in the program (`holdTrap`, called by the process owner) becomes a stop with reason `exception`: the host
+ * parks the other threads itself, finds the trapped thread's shadow stack in the registry (`trapStop.ts`), and reads
+ * memory straight from the shared `WebAssembly.Memory`, since the stub never runs again. The program cannot
+ * continue: any resume ends it (`options.terminate`), which the owner reports as a trap exit.
  *
  * `writeInput` forwards what the user types to the program: straight to the pipe while the program runs, queued
  * while it is stopped (the stub would read it as a command). Input forwarded just before a stop may still sit
@@ -55,6 +66,8 @@ export class StubDebuggee implements DebuggeeSession {
 	private handedBack = 0;
 	/** Program input was written while running since the last resume, so the stub may still hold some. */
 	private inputInFlight = false;
+	/** A trap is being shown as a stop: the stub is gone, so only memory reads and ending the program work. */
+	private trapped = false;
 	/** The latest stop's thread and stack, which `threads()` reports as is. */
 	private lastStop: { threadId: number; frames: DebuggeeFrame[] } | undefined;
 
@@ -96,7 +109,13 @@ export class StubDebuggee implements DebuggeeSession {
 	}
 
 	async resume(how: ResumeKind): Promise<void> {
+		if (this.trapped) {
+			// The trapped thread cannot continue; ending the process reports the trap as its exit.
+			await this.options.terminate();
+			return;
+		}
 		this.requireStopped('resume');
+		this.lastStop = undefined;
 		if (this.inputInFlight) { await this.session.sync(); }
 		this.inputInFlight = false;
 		await this.session.resume(how === 'continue' ? 'go' : how);
@@ -141,12 +160,16 @@ export class StubDebuggee implements DebuggeeSession {
 		}
 		return readStubThreads(this.options.memory.buffer, registry).map(t => ({
 			id: t.id,
-			stopped: t.state === 'parked',
+			stopped: t.state === 'parked' || t.id === this.lastStop?.threadId,
 			frames: t.id === this.lastStop?.threadId ? this.lastStop.frames : this.mapFrames(t.frames),
 		}));
 	}
 
 	async readMemory(addr: number, len: number): Promise<Uint8Array | undefined> {
+		if (this.trapped) {
+			const bytes = new Uint8Array(this.options.memory!.buffer);
+			return addr >= 0 && len >= 0 && addr + len <= bytes.length ? bytes.slice(addr, addr + len) : undefined;
+		}
 		this.requireStopped('read memory');
 		return this.session.readMemory(addr, len);
 	}
@@ -173,16 +196,40 @@ export class StubDebuggee implements DebuggeeSession {
 		this.waiting = true;
 		void this.session.nextStop(FOREVER_MS).then(stop => {
 			this.waiting = false;
-			const frames = stop.frames.map(f => {
-				const site = this.options.guardSites.get(f.guard);
-				if (!site) { throw new Error(`the debug stub reported guard ${f.guard}, which is not in the program's coverage table; did the program and debug stub drift apart?`); }
-				return { funcIndex: site.funcIndex, pc: site.pc, sp: f.sp };
-			});
+			if (this.trapped) { return; }
+			const frames = this.mapFrames(stop.frames);
+			this.lastStop = { threadId: stop.threadId, frames };
 			this.emit({ kind: 'stopped', reason: stop.reason as 'start' | 'breakpoint' | 'step' | 'pause', threadId: stop.threadId, frames });
 		}, e => {
 			this.waiting = false;
 			if (!this.done) { this.emit({ kind: 'error', message: e instanceof Error ? e.message : String(e) }); }
 		});
+	}
+
+	/**
+	 * Takes a trap over as a stop. Returns false (the process then ends as it always did) when it cannot: no shared
+	 * memory, the stub has not reached its start stop, or the session is over.
+	 */
+	holdTrap(trap: TrapInput & { message: string; stack?: string }): boolean {
+		if (this.done || this.trapped || !this.options.memory || !this.session.registry) { return false; }
+		this.trapped = true;
+		void this.reportTrap(trap).catch(e => this.emit({ kind: 'error', message: `could not show the trap as a stop: ${e instanceof Error ? e.message : String(e)}` }));
+		return true;
+	}
+
+	private async reportTrap(trap: TrapInput & { message: string; stack?: string }): Promise<void> {
+		const memory = this.options.memory!, registry = this.session.registry!;
+		const flag = this.session.pauseFlag;
+		// The stub's own stop would park the other threads; the trapped thread never reaches it, so do that here.
+		if (flag !== undefined) { Atomics.or(new Uint32Array(memory.buffer), flag >>> 2, CTL_STOPPED); }
+		for (let i = 0; i < 6 && readStubThreads(memory.buffer, registry).filter(t => t.state === 'running').length > 1; i++) {
+			await new Promise(resolve => setTimeout(resolve, 10));
+		}
+		const trapped = pickTrappedThread(readStubThreads(memory.buffer, registry, { framesOfRunning: true }), trap);
+		const frames = refineFrames(this.mapFrames(trapped?.frames ?? []), trap.stack, this.options.codeStart);
+		this.waiting = false;
+		this.lastStop = { threadId: trapped?.id ?? 1, frames };
+		this.emit({ kind: 'stopped', reason: 'exception', threadId: this.lastStop.threadId, frames, text: trap.message });
 	}
 
 	private mapFrames(raw: { guard: number; sp: number }[]): DebuggeeFrame[] {

@@ -41,6 +41,8 @@ interface ThreadView {
 	lldbFrames: LldbFrame[];
 }
 interface StopState {
+	/** Set for a trap: what the engine said. The program cannot continue; any resume ends it. */
+	exception?: string;
 	/** The thread that stopped (hit the breakpoint or step); the only one that can be stepped. */
 	threadId: number;
 	frames: DebuggeeFrame[];
@@ -114,7 +116,7 @@ export class DebugController {
 		const args = req.arguments ?? {};
 		switch (req.command) {
 			case 'initialize':
-				this.respond(req, true, { supportsConfigurationDoneRequest: true, supportsTerminateRequest: true, supportsEvaluateForHovers: true, supportsConditionalBreakpoints: true, supportsHitConditionalBreakpoints: true, supportsLogPoints: true, supportsFunctionBreakpoints: true });
+				this.respond(req, true, { supportsConfigurationDoneRequest: true, supportsTerminateRequest: true, supportsEvaluateForHovers: true, supportsConditionalBreakpoints: true, supportsHitConditionalBreakpoints: true, supportsLogPoints: true, supportsFunctionBreakpoints: true, supportsExceptionInfoRequest: true });
 				return;
 			case 'launch': return this.launch(req, args);
 			case 'setBreakpoints': return this.setBreakpoints(req, args);
@@ -136,6 +138,12 @@ export class DebugController {
 				}
 				this.respond(req, true, {});
 				return;
+			case 'exceptionInfo': {
+				const stop = this.requireStopped('describe the exception');
+				if (stop.exception === undefined) { throw new Error('vscwClang: the program is not stopped at a trap, so there is no exception to describe; did you mean to ask at a stop with reason "exception"?'); }
+				this.respond(req, true, { exceptionId: 'trap', description: stop.exception, breakMode: 'always' });
+				return;
+			}
 			case 'stackTrace': return this.stackTrace(req, args);
 			case 'scopes': return this.scopes(req, args);
 			case 'variables': return this.variables(req, args);
@@ -320,7 +328,7 @@ export class DebugController {
 			for (const t of await target.session.threads()) { views.set(t.id, { stopped: t.stopped, frames: t.frames, lldbFrames: lldbFramesOf(t.frames) }); }
 		}
 		views.set(event.threadId, { stopped: true, frames: event.frames, lldbFrames });
-		this.stop = { threadId: event.threadId, frames: event.frames, lldbFrames, views, focused: event.threadId };
+		this.stop = { threadId: event.threadId, frames: event.frames, lldbFrames, views, focused: event.threadId, ...(event.reason === 'exception' ? { exception: event.text ?? 'the program trapped' } : {}) };
 		this.announceThreads(views);
 		this.variableRefs.clear();
 		this.memory.clear();
@@ -340,7 +348,8 @@ export class DebugController {
 		await this.syncBreakpoints();
 		const reason = event.reason === 'step' && this.entryPending ? 'entry' : event.reason;
 		this.entryPending = false;
-		this.send({ type: 'event', event: 'stopped', body: { reason, threadId: event.threadId, allThreadsStopped: target.session.capabilities.allStop } });
+		const trap = event.reason === 'exception' ? { description: 'Paused on a trap', text: event.text } : {};
+		this.send({ type: 'event', event: 'stopped', body: { reason, ...trap, threadId: event.threadId, allThreadsStopped: target.session.capabilities.allStop } });
 	}
 
 	/** Tells the client about threads that appeared since the last stop (and, with all-stop, ones that ended). */

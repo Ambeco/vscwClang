@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
-import { GuestProcess, StdinQueue, type GuestFileSystem, type ProcessOutcome, type WorkerLike } from '../../host/guestProcess';
+import { GuestProcess, StdinQueue, type GuestFileSystem, type ProcessOutcome, type TrapReport, type WorkerLike } from '../../host/guestProcess';
 import { createSharedMemory } from '../../host/sharedMemory';
 import { GuestFsError, type GuestDirEntry, type GuestStat } from '../../host/wasiGuest';
 
@@ -74,7 +74,7 @@ class MemoryFs implements GuestFileSystem {
 
 interface Session { process: GuestProcess; stdin: StdinQueue; out: () => string; err: () => string; fs: MemoryFs; outcome: Promise<ProcessOutcome> }
 
-function start(name: string, args: string[] = [], env: Record<string, string> = {}, terminal = false): Session {
+function start(name: string, args: string[] = [], env: Record<string, string> = {}, terminal = false, onTrap?: (trap: TrapReport) => boolean): Session {
 	const bytes = readFileSync(join(FIXTURES, `${name}.wasm`));
 	const module = new WebAssembly.Module(bytes);
 	const stdin = new StdinQueue();
@@ -86,7 +86,7 @@ function start(name: string, args: string[] = [], env: Record<string, string> = 
 		onOutput: (fd, data) => { if (fd === 1) { out += decoder.decode(data); } else { err += decoder.decode(data); } },
 		createWorker: () => nodeWorker(GUEST_WORKER),
 		createThreadWorker: () => nodeWorker(GUEST_WORKER),
-		sharedMemory: createSharedMemory(bytes),
+		sharedMemory: createSharedMemory(bytes), onTrap,
 	});
 	return { process, stdin, out: () => out, err: () => err, fs, outcome: process.run() };
 }
@@ -176,6 +176,34 @@ suite('GuestProcess over a real Worker', function () {
 			assert.strictEqual(s.out(), 'before\n');
 		});
 	}
+
+	test('a trap carries the engine stack trace of the wasm frames', async () => {
+		const outcome = await start('trap', ['trap']).outcome;
+		assert.strictEqual(outcome.kind, 'trap');
+		assert.match((outcome as { stack?: string }).stack ?? '', /wasm-function\[\d+\]:0x[0-9a-f]+/);
+	});
+
+	test('onTrap returning true holds the process alive until terminate(), which then ends it as the trap', async () => {
+		const reports: TrapReport[] = [];
+		const s = start('trap', ['oob'], {}, false, report => { reports.push(report); return true; });
+		await until(() => reports.length === 1, 'the trap report');
+		assert.deepStrictEqual([reports[0].tid, /out of bounds/.test(reports[0].message), typeof reports[0].stack], [0, true, 'string']);
+		let settled = false;
+		void s.outcome.then(() => { settled = true; });
+		await new Promise(resolve => setTimeout(resolve, 150));
+		assert.strictEqual(settled, false, 'the held process has not ended');
+		s.process.terminate();
+		const outcome = await s.outcome;
+		assert.strictEqual(outcome.kind, 'trap');
+		assert.match((outcome as { message: string }).message, /out of bounds/);
+	});
+
+	test('onTrap returning false ends the run at once, as without a handler', async () => {
+		const reports: TrapReport[] = [];
+		const s = start('trap', ['div'], {}, false, report => { reports.push(report); return false; });
+		assert.strictEqual((await s.outcome).kind, 'trap');
+		assert.strictEqual(reports.length, 1);
+	});
 
 	test('terminate ends a Worker that is blocked reading stdin', async () => {
 		const s = start('echo');

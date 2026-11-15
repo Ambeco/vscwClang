@@ -160,6 +160,41 @@ suite('vscwClang debug adapter (in browser)', function () {
 		assert.strictEqual(client.events('output').filter(m => m.body.category === 'stdout').map(m => m.body.output).join(''), 'result=41\n');
 	});
 
+	test('a trap stops in the debugger on the faulting line with its message and stack, and Continue ends the run with exit code 139', async () => {
+		const nl = String.fromCharCode(10);
+		await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, 'crash.cpp'), new TextEncoder().encode([
+			'#include <cstdio>',
+			'static void crash(int depth) {',
+			'  if (depth > 0)',
+			'    crash(depth - 1);',
+			'  else',
+			'    __builtin_trap();',
+			'}',
+			'int main() {',
+			'  crash(2);',
+			'  return 0;',
+			'}', ''].join(nl)));
+		const client = newClient('crash.cpp');
+		await client.ok('initialize', { adapterID: 'vscwclang' });
+		await client.ok('launch', { console: 'internalConsole' });
+		await client.event('initialized');
+		await client.ok('configurationDone');
+
+		const stopped = (await client.event('stopped')).body;
+		assert.strictEqual(stopped.reason, 'exception', JSON.stringify(stopped));
+		assert.match(String(stopped.text), /unreachable/);
+		const frames = (await client.ok('stackTrace', { threadId: stopped.threadId })).stackFrames as { name: string; line: number }[];
+		assert.match(frames[0].name, /crash/, JSON.stringify(frames));
+		assert.strictEqual(frames[0].line, 6, JSON.stringify(frames));
+		assert.ok(frames.some(f => /main/.test(f.name)), `main is on the stack: ${JSON.stringify(frames)}`);
+		const info = await client.ok('exceptionInfo', { threadId: stopped.threadId });
+		assert.match(String(info.description), /unreachable/);
+
+		await client.ok('continue', { threadId: stopped.threadId });
+		assert.strictEqual((await client.event('exited')).body.exitCode, 139);
+		await client.event('terminated');
+	});
+
 	const INPUT_SOURCE = [
 		'#include <iostream>',
 		'static int twice(int v) {',

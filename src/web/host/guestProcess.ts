@@ -63,6 +63,15 @@ function newTidCounter(): SharedArrayBuffer {
 	return buffer;
 }
 
+/** A trap in one of the program's threads, as `GuestProcessOptions.onTrap` sees it. */
+export interface TrapReport {
+	/** 0 is the main thread, then the ids `thread-spawn` hands out. */
+	tid: number;
+	message: string;
+	stack?: string;
+	stackPointer?: number;
+}
+
 export type ProcessOutcome = GuestResult | { kind: 'terminated' } | { kind: 'failed'; message: string };
 
 export interface GuestProcessOptions {
@@ -80,6 +89,12 @@ export interface GuestProcessOptions {
 	createThreadWorker?: () => WorkerLike | Promise<WorkerLike>;
 	/** For a wasi-threads module: the shared memory it imports, from `createSharedMemory`. */
 	sharedMemory?: WebAssembly.Memory;
+	/**
+	 * Asked when a thread traps: returning true holds the process, with every Worker alive and the shared memory
+	 * intact, so a debugger can inspect it; the process then ends (as the trap, not as terminated) when `terminate()`
+	 * is called. Only the first trap is held; a later one (another thread) is ignored.
+	 */
+	onTrap?: (trap: TrapReport) => boolean;
 }
 
 /**
@@ -92,6 +107,7 @@ export class GuestProcess {
 	private worker: WorkerLike | undefined;
 	private readonly threadWorkers: WorkerLike[] = [];
 	private settle: ((outcome: ProcessOutcome) => void) | undefined;
+	private heldTrap: ProcessOutcome | undefined;
 
 	constructor(private readonly options: GuestProcessOptions) {}
 
@@ -110,17 +126,24 @@ export class GuestProcess {
 			this.settle = finish;
 			const channel = new SharedArrayBuffer(CHANNEL_BYTES);
 			const threads = options.sharedMemory ? { memory: options.sharedMemory, tidCounter: newTidCounter() } : undefined;
-			this.serve(worker, channel, finish, threads);
+			this.serve(worker, channel, finish, threads, 0);
 			worker.postMessage({ type: 'start', module: options.module, args: options.args, env: options.env, preopens: options.preopens, terminal: options.terminal, channel, threads } satisfies StartMessage);
 		});
 	}
 
 	/** Answers one Worker's messages: its end, its failure, a request to spawn a thread, or a file/stdio request. */
-	private serve(worker: WorkerLike, channel: SharedArrayBuffer, finish: (outcome: ProcessOutcome) => void, threads: StartMessage['threads']): void {
+	private serve(worker: WorkerLike, channel: SharedArrayBuffer, finish: (outcome: ProcessOutcome) => void, threads: StartMessage['threads'], tid: number): void {
 		const server = new SyncRpcServer(channel, this.makeHandler());
 		worker.onMessage(message => {
 			const done = message as DoneMessage;
-			if (done.type === 'done') { finish(done.result); }
+			if (done.type === 'done') {
+				if (done.result.kind === 'trap' && this.options.onTrap) {
+					if (this.heldTrap) { return; }
+					const { message: text, stack, stackPointer } = done.result;
+					if (this.options.onTrap({ tid, message: text, stack, stackPointer })) { this.heldTrap = done.result; return; }
+				}
+				finish(done.result);
+			}
 			else if (done.type === 'failed') { finish({ kind: 'failed', message: done.message }); }
 			else if ((message as RpcRequest).op === SPAWN_THREAD_OP) { void this.spawnThread((message as RpcRequest).args as { tid: number; startArg: number }, finish, threads); }
 			else { void server.handle(message as RpcRequest); }
@@ -136,7 +159,7 @@ export class GuestProcess {
 			if (!this.settle) { worker.terminate(); return; }
 			this.threadWorkers.push(worker);
 			const channel = new SharedArrayBuffer(CHANNEL_BYTES);
-			this.serve(worker, channel, finish, threads);
+			this.serve(worker, channel, finish, threads, tid);
 			worker.postMessage({ type: 'thread', module: options.module, args: options.args, env: options.env, preopens: options.preopens, terminal: options.terminal, channel, threads, tid, startArg } satisfies ThreadMessage);
 		} catch (e) {
 			finish({ kind: 'failed', message: `could not start thread ${tid}: ${e instanceof Error ? e.message : String(e)}` });
@@ -144,7 +167,7 @@ export class GuestProcess {
 	}
 
 	terminate(): void {
-		this.settle?.({ kind: 'terminated' });
+		this.settle?.(this.heldTrap ?? { kind: 'terminated' });
 	}
 
 	private makeHandler(): RpcHandler {
