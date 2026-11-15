@@ -201,7 +201,7 @@ export class StubDebuggee implements DebuggeeSession {
 			this.lastStop = { threadId: stop.threadId, frames };
 			// The stub's "abort" stop comes from the abort shim, before the program exits 134.
 			const abort = stop.reason === 'abort';
-			this.emit({ kind: 'stopped', reason: abort ? 'exception' : stop.reason as 'start' | 'breakpoint' | 'step' | 'pause', threadId: stop.threadId, frames, ...(abort ? { text: 'abort() called: a failed assert, std::terminate, an uncaught exception or abort(); continuing ends the program with exit code 134' } : {}) });
+			this.emit({ kind: 'stopped', reason: abort ? 'exception' : stop.reason as 'start' | 'breakpoint' | 'step' | 'pause', threadId: stop.threadId, frames, ...(abort ? { text: 'abort() called: a failed assert, std::terminate, an uncaught exception or abort(); continuing ends the program with exit code 134', aborted: true } : {}) });
 		}, e => {
 			this.waiting = false;
 			if (!this.done) { this.emit({ kind: 'error', message: e instanceof Error ? e.message : String(e) }); }

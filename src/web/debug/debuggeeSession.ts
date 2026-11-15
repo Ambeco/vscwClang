@@ -26,7 +26,7 @@ export interface DebuggeeFrame {
 }
 
 export type DebuggeeEvent =
-	| { kind: 'stopped'; reason: StopReason; /** 1 is the main thread. */ threadId: number; frames: DebuggeeFrame[]; /** For `exception`: what the engine said. */ text?: string }
+	| { kind: 'stopped'; reason: StopReason; /** 1 is the main thread. */ threadId: number; frames: DebuggeeFrame[]; /** For `exception`: what the engine said. */ text?: string; /** For `exception`: the stop is an abort before exit 134, not a trap. */ aborted?: boolean }
 	| { kind: 'exited'; exitCode: number }
 	| { kind: 'output'; stream: 'stdout' | 'stderr'; text: string }
 	| { kind: 'error'; message: string };

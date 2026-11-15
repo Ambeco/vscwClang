@@ -497,7 +497,7 @@ suiteIfFixtures('DebugController with a scripted host', function () {
 		assert.deepStrictEqual(started, [{ reason: 'started', threadId: 4 }, { reason: 'started', threadId: 5 }]);
 		assert.deepStrictEqual((await client.event('stopped')).body, { reason: 'breakpoint', threadId: 4, allThreadsStopped: true });
 		assert.deepStrictEqual((await client.ok('threads')).threads, [
-			{ id: 1, name: 'main' }, { id: 4, name: 'thread 4' }, { id: 5, name: 'thread 5 [blocked or running; stack as of its last statement]' },
+			{ id: 1, name: 'main' }, { id: 4, name: 'thread 4' }, { id: 5, name: 'thread 5 [blocked or running]' },
 		]);
 
 		const own = (await client.ok('stackTrace', { threadId: 4 })).stackFrames;

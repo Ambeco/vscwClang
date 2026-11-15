@@ -10,7 +10,7 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 **Near-term plan (decided 2026-10-27, replaces the 2026-10-21 one):** in order: (1) main critical user journeys feature complete; (2) pick a large, pure, portable C++ project from GitHub (many translation units, builds without extra dependencies) as the profiling workload; (3) profile and fix the low-hanging fruit, with incremental build+test speed first (see the Priority item in Milestone 1); (4) secondary journeys feature complete; (5) Make support (pseudo, i.e. interpret the common subset); (6) Python support (partial). Multithreading is on (threaded tools, clangd and user programs) and changes the numbers: re-profile, and expect it to affect concurrent compiles, clangd and the threaded toolchain more than a single-file edit.
 
 **Main critical user journeys (decided 2026-10-27), with the known gaps:**
-- Debug: view local variables, step through statements, conditional breakpoints. No known gaps; all-stop, trap and abort stops are not yet checked on real vscode.dev (Milestone 5).
+- Debug: view local variables, step through statements, conditional breakpoints. No known gaps.
 - Code intelligence via clangd: completion, IntelliSense, go to definition, go to declaration and similar. Mostly wired (Milestone 3).
 - Other core cpptools functionality: Open: remaining inventory (cpptools features with no counterpart yet): none known.
 
@@ -106,7 +106,7 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Remaining gaps:
 ## Milestone 5: lldb reactor integration
 - Open: outer frames show the line of their last guard, not the call line (true call-site pcs need the custom runner's `captureWasmFrames`).
 - Open: `demangle.ts` decodes plain, nested, constructor/destructor and operator names only; templates and substitutions (`St`, `S_`) stay mangled, as do `std` frames. `launch.json` `program` is ignored (Debug always rebuilds), `.debug_line` is parsed for every launch (unmeasured on large programs), and the line index and breakpoint resolution have no cache. Conditions have no function calls, casts, `*p`, `&x` or strings (lldb's reactor formats variable paths only).
-- Open: Pause and live breakpoint edits (shared memory) work on vscode.dev; a non-threaded debug build still queues edits to the next stop and ends at a trap instead of stopping. All-stop and trap stops are tested under Node and test-web only: check on vscode.dev, in particular a `std::thread` program whose main waits in `join` (marked blocked or running, with its last stack) and one that traps in a thread. The debug terminal has no end-of-file key and no Ctrl+C.
+- Open: Pause and live breakpoint edits (shared memory) work on vscode.dev; a non-threaded debug build still queues edits to the next stop and ends at a trap instead of stopping. The debug terminal has no end-of-file key and no Ctrl+C.
 - Open: the first stop waits up to 40 ms (`WAIT_SLICES` in `debugStub.c`) for each thread blocked outside instrumented code (later stops ~1 ms, see the laggard note in design.md); a step on a thread other than the one that stopped is refused; a trap thrown outside `main` as an uncaught C++ exception is untested (fixtures are C) and has no wasm stack trace.
 
 - Write a lit test in the `llvm-project` fork for the SanitizerCoverage `funclet` bundle on guard calls in EH pads (wasm EH).

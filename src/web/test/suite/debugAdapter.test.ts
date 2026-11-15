@@ -215,6 +215,7 @@ suite('vscwClang debug adapter (in browser)', function () {
 		const stopped = (await client.event('stopped')).body;
 		assert.strictEqual(stopped.reason, 'exception', JSON.stringify(stopped));
 		assert.match(String(stopped.text), /abort\(\) called/);
+		assert.strictEqual((await client.ok('exceptionInfo', { threadId: stopped.threadId })).exceptionId, 'abort');
 		const frames = (await client.ok('stackTrace', { threadId: stopped.threadId })).stackFrames as { name: string; line: number }[];
 		assert.match(frames[0].name, /check/, JSON.stringify(frames));
 		assert.ok(frames.some(f => /main/.test(f.name)), JSON.stringify(frames));
