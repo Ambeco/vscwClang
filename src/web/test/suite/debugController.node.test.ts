@@ -490,21 +490,21 @@ suiteIfFixtures('DebugController with a scripted host', function () {
 		fake.threadList = [
 			{ id: 1, stopped: true, frames: [frame(2000)] },
 			{ id: 4, stopped: true, frames: [frame(1000)] },
-			{ id: 5, stopped: false, frames: [] },
+			{ id: 5, stopped: false, frames: [frame(3000)] },
 		];
 		fake.listener!({ kind: 'stopped', reason: 'breakpoint', threadId: 4, frames: [frame(1000)] });
 		const started = [(await client.event('thread')).body, (await client.event('thread')).body];
 		assert.deepStrictEqual(started, [{ reason: 'started', threadId: 4 }, { reason: 'started', threadId: 5 }]);
 		assert.deepStrictEqual((await client.event('stopped')).body, { reason: 'breakpoint', threadId: 4, allThreadsStopped: true });
 		assert.deepStrictEqual((await client.ok('threads')).threads, [
-			{ id: 1, name: 'main' }, { id: 4, name: 'thread 4' }, { id: 5, name: 'thread 5 (still running: blocked or not at a statement)' },
+			{ id: 1, name: 'main' }, { id: 4, name: 'thread 4' }, { id: 5, name: 'thread 5 [blocked or running; stack as of its last statement]' },
 		]);
 
 		const own = (await client.ok('stackTrace', { threadId: 4 })).stackFrames;
 		const other = (await client.ok('stackTrace', { threadId: 1 })).stackFrames;
 		assert.deepStrictEqual([own[0].id, other[0].id], [1, 65537], 'frame ids of another thread are tagged with its thread id');
 		assert.strictEqual(other[0].line, own[0].line, 'same function, same line');
-		assert.deepStrictEqual(await client.ok('stackTrace', { threadId: 5 }), { stackFrames: [], totalFrames: 0 }, 'a blocked thread has no stack');
+		assert.strictEqual((await client.ok('stackTrace', { threadId: 5 })).stackFrames.length, 1, 'a blocked thread shows the stack it had at its last statement');
 
 		const scopes = (await client.ok('scopes', { frameId: other[0].id })).scopes;
 		assert.strictEqual(scopes.length, 1, 'a frame of the other thread has scopes too');

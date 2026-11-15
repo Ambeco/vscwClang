@@ -114,7 +114,11 @@ suite('all-stop: a stop halts every thread (real stub, shared memory)', function
 				const stop = await p.nextStop();
 				assert.strictEqual(stop.reason, 'breakpoint');
 				stops++;
-				if (stops === 1) { assert.strictEqual((await p.debuggee.threads()).find(t => t.id === 1)!.stopped, false, 'main is blocked in join, so it is listed as running'); }
+				if (stops === 1) {
+					const main = (await p.debuggee.threads()).find(t => t.id === 1)!;
+					assert.strictEqual(main.stopped, false, 'main is blocked in join, so it is listed as not stopped');
+					assert.strictEqual(main.frames[0]?.funcIndex, p.guardsOf('__original_main').index, 'but its stack, with the function that called join on top, is shown');
+				}
 				if (stops === 50) { break; }
 				await p.debuggee.resume('continue');
 			}

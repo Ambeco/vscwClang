@@ -43,9 +43,9 @@ export interface DebuggeeCapabilities {
 export interface DebuggeeThread {
 	/** The id used in `stopped` events (1 is main). */
 	id: number;
-	/** False for a thread that did not reach a stop point in time (blocked in a lock, sleep or `cin`): it has no frames. */
+	/** False for a thread that did not reach a stop point in time: blocked in a lock, sleep, `join` or `cin`, or just slow. */
 	stopped: boolean;
-	/** Innermost first. */
+	/** Innermost first. For a thread that is not stopped, the stack as of its last statement (the call that blocks is in its top frame); empty if unreadable. */
 	frames: DebuggeeFrame[];
 }
 

@@ -79,6 +79,7 @@ suite('traps as stopped states (real stub, shared memory)', function () {
 			assert.ok(spinner.stopped && spinner.frames.length >= 1, 'the spinning thread is parked with a stack');
 			assert.ok([spin.index, p.guardsOf('spinner').index].includes(spinner.frames[0].funcIndex), 'it was spinning in its loop or in spin_tick');
 			assert.strictEqual(byId.get(1)!.stopped, false, 'main is blocked in pthread_join, outside any statement');
+			assert.strictEqual(byId.get(1)!.frames[0]?.funcIndex, p.guardsOf('main').index, 'its stack ends in the function that called join');
 
 			await new Promise(r => setTimeout(r, 300));
 			assert.deepStrictEqual((await p.debuggee.threads()).find(t => t.id === spinner.id)!.frames, spinner.frames, 'the spinner does not advance while the trap is shown');

@@ -158,10 +158,10 @@ export class StubDebuggee implements DebuggeeSession {
 		if (!this.options.memory || !registry) {
 			return this.lastStop ? [{ id: this.lastStop.threadId, stopped: true, frames: this.lastStop.frames }] : [];
 		}
-		return readStubThreads(this.options.memory.buffer, registry).map(t => ({
+		return readStubThreads(this.options.memory.buffer, registry, { framesOfRunning: true }).map(t => ({
 			id: t.id,
 			stopped: t.state === 'parked' || t.id === this.lastStop?.threadId,
-			frames: t.id === this.lastStop?.threadId ? this.lastStop.frames : this.mapFrames(t.frames),
+			frames: t.id === this.lastStop?.threadId ? this.lastStop.frames : this.framesOrNone(t.frames, t.state === 'running'),
 		}));
 	}
 
@@ -230,6 +230,12 @@ export class StubDebuggee implements DebuggeeSession {
 		this.waiting = false;
 		this.lastStop = { threadId: trapped?.id ?? 1, frames };
 		this.emit({ kind: 'stopped', reason: 'exception', threadId: this.lastStop.threadId, frames, text: trap.message });
+	}
+
+	/** A thread that did not park may be mid-update, so a stack that does not make sense is dropped rather than reported. */
+	private framesOrNone(raw: { guard: number; sp: number }[], mayBeTorn: boolean): DebuggeeFrame[] {
+		if (!mayBeTorn) { return this.mapFrames(raw); }
+		try { return this.mapFrames(raw); } catch { return []; }
 	}
 
 	private mapFrames(raw: { guard: number; sp: number }[]): DebuggeeFrame[] {

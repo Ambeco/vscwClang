@@ -168,7 +168,7 @@ export class DebugController {
 	private threadName(id: number): string {
 		const base = id === MAIN_THREAD_ID ? 'main' : `thread ${id}`;
 		const view = this.stop?.views.get(id);
-		return view && !view.stopped ? `${base} (still running: blocked or not at a statement)` : base;
+		return view && !view.stopped ? `${base} [blocked or running; stack as of its last statement]` : base;
 	}
 
 	private requireStopped(what: string): StopState {
@@ -451,9 +451,9 @@ export class DebugController {
 		const target = this.requireTarget();
 		const stop = this.requireStopped('read the stack');
 		const threadId = args.threadId === undefined ? stop.threadId : Number(args.threadId);
-		// Without all-stop only the stopped thread has a stack; a blocked thread has none either.
+		// Without all-stop only the stopped thread has a stack. A thread that never parked shows its last known one.
 		const view = stop.views.get(threadId);
-		if (!view?.stopped) {
+		if (!view) {
 			this.respond(req, true, { stackFrames: [], totalFrames: 0 });
 			return;
 		}

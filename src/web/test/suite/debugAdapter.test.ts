@@ -146,8 +146,8 @@ suite('vscwClang debug adapter (in browser)', function () {
 		assert.strictEqual(stopped.allThreadsStopped, true, 'a threaded debug build stops every thread');
 		const threads = (await client.ok('threads')).threads as { id: number; name: string }[];
 		assert.ok(threads.some(t => t.id === stopped.threadId) && threads.some(t => t.id === 1), JSON.stringify(threads));
-		// main is blocked in join(), which is not an instrumented statement, so it is listed as still running without a stack.
-		assert.match(threads.find(t => t.id === 1)!.name, /^main( \(still running.*\))?$/, JSON.stringify(threads));
+		// main is blocked in join(), which is not an instrumented statement, so it is listed as blocked or running.
+		assert.match(threads.find(t => t.id === 1)!.name, /^main( \[blocked or running.*\])?$/, JSON.stringify(threads));
 		const frames = (await client.ok('stackTrace', { threadId: stopped.threadId })).stackFrames as { name: string; line: number }[];
 		assert.match(frames[0].name, /worker/, JSON.stringify(frames));
 		assert.strictEqual(frames[0].line, 8);
