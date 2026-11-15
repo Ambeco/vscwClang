@@ -29,7 +29,7 @@
 #define MAX_ARMED 512
 #define MAX_MEM_READ 8192
 #define MAX_THREADS 64
-/* How long a stop waits for the other threads to park: WAIT_SLICES * 20 ms. */
+/* How long a stop waits for threads that have not been seen blocked to park: WAIT_SLICES * 20 ms. */
 #define WAIT_SLICES 2
 
 typedef struct { uint32_t *guard; uintptr_t sp; } Frame;
@@ -51,6 +51,7 @@ static uint32_t resume_gen; /* bumped on every resume; parked threads wait on it
 static uint32_t activity;   /* bumped when a thread parks, resumes or exits; a stop waits on it */
 static struct { uint32_t count; ThreadInfo threads[MAX_THREADS]; } registry;
 static ThreadInfo overflow_info; /* for threads beyond MAX_THREADS: they stop but are not listed */
+static uint8_t laggard[MAX_THREADS]; /* per registry slot: a stop timed out waiting for this thread; kept out of the registry so the host's layout is unchanged */
 static pthread_key_t exit_key;
 enum { STEP_NONE, STEP_INTO, STEP_OVER, STEP_OUT };
 static _Thread_local int step_mode;
@@ -218,6 +219,7 @@ static void register_thread(void) {
     if (i < MAX_THREADS) slot = &registry.threads[i];
     else { __atomic_fetch_sub(&registry.count, 1, __ATOMIC_SEQ_CST); slot = &overflow_info; }
   }
+  if (slot != &overflow_info) laggard[slot - registry.threads] = 0;
   slot->id = __atomic_fetch_add(&next_thread_id, 1, __ATOMIC_SEQ_CST);
   slot->frames = (uint32_t)(uintptr_t)frames;
   slot->depth = (uint32_t)(uintptr_t)&depth;
@@ -226,26 +228,41 @@ static void register_thread(void) {
   if (slot != &overflow_info) pthread_setspecific(exit_key, slot);
 }
 
-/* True when no other registered thread is still running user code. */
-static int others_settled(void) {
+/* How many other threads are still running user code, and how many of those are not known laggards. */
+static void count_runners(uint32_t *running, uint32_t *fresh) {
   uint32_t count = __atomic_load_n(&registry.count, __ATOMIC_SEQ_CST);
+  *running = *fresh = 0;
   for (uint32_t i = 0; i < count; i++) {
-    if (&registry.threads[i] != self_info && __atomic_load_n(&registry.threads[i].state, __ATOMIC_SEQ_CST) == TS_RUNNING) return 0;
+    if (&registry.threads[i] == self_info || __atomic_load_n(&registry.threads[i].state, __ATOMIC_SEQ_CST) != TS_RUNNING) continue;
+    (*running)++;
+    if (!laggard[i]) (*fresh)++;
   }
-  return 1;
 }
 
-/* Gives the other threads a moment to reach a hook and park; one blocked outside instrumented code is reported as running. */
+/*
+ * Gives the other threads a moment to reach a hook and park. One that does not (blocked in a lock, sleep or join,
+ * or in uninstrumented code) is reported as running and remembered as a laggard until it next parks, so later stops
+ * wait only ~1 ms for it instead of the full time: a program with main in join() would otherwise pay it on every
+ * internal stop (false conditions, logpoints, step repeats).
+ */
 static void wait_for_others(void) {
-  for (int slice = 0; slice < WAIT_SLICES && !others_settled(); slice++) {
+  for (int slice = 0; slice < WAIT_SLICES; slice++) {
+    uint32_t running, fresh;
+    count_runners(&running, &fresh);
+    if (!running) return;
     uint32_t seen = __atomic_load_n(&activity, __ATOMIC_SEQ_CST);
-    if (others_settled()) break;
-    WAIT32(&activity, seen, 20 * 1000 * 1000LL);
+    WAIT32(&activity, seen, (fresh ? 20 : 1) * 1000 * 1000LL);
+    if (!fresh) break;
+  }
+  uint32_t count = __atomic_load_n(&registry.count, __ATOMIC_SEQ_CST);
+  for (uint32_t i = 0; i < count; i++) {
+    if (&registry.threads[i] != self_info && __atomic_load_n(&registry.threads[i].state, __ATOMIC_SEQ_CST) == TS_RUNNING) laggard[i] = 1;
   }
 }
 
 /* Called by a thread that finds the world stopped: parks until the stopping thread resumes it. */
 static void park(void) {
+  if (self_info != &overflow_info) laggard[self_info - registry.threads] = 0;
   __atomic_store_n(&self_info->state, TS_PARKED, __ATOMIC_SEQ_CST);
   note_activity();
   for (;;) {

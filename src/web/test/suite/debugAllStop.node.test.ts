@@ -102,6 +102,27 @@ suite('all-stop: a stop halts every thread (real stub, shared memory)', function
 		} finally { p.stop(); }
 	});
 
+	test('a thread blocked in join costs a stop 40 ms at most once: 50 internal stops stay fast', async () => {
+		const p = startProgram('joinloop');
+		try {
+			await p.nextStop();
+			await p.debuggee.setBreakpoints(p.guardsOf('tick').guards);
+			await p.debuggee.resume('continue');
+			const began = Date.now();
+			let stops = 0;
+			for (;;) {
+				const stop = await p.nextStop();
+				assert.strictEqual(stop.reason, 'breakpoint');
+				stops++;
+				if (stops === 1) { assert.strictEqual((await p.debuggee.threads()).find(t => t.id === 1)!.stopped, false, 'main is blocked in join, so it is listed as running'); }
+				if (stops === 50) { break; }
+				await p.debuggee.resume('continue');
+			}
+			const elapsed = Date.now() - began;
+			assert.ok(elapsed < 1000, `${stops} stops took ${elapsed} ms; a blocked thread must not cost the full wait on every stop`);
+		} finally { p.stop(); }
+	});
+
 	test('without shared memory a stop only knows its own thread', async () => {
 		const p = startProgram('allstop', false);
 		try {
