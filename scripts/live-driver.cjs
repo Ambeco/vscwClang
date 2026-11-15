@@ -1,6 +1,6 @@
 // Drives a Chrome that is already running with --remote-debugging-port=9333 on vscode.dev (see
 // documents/live_testing.md for the whole setup). Start it, then POST an async function body to
-// http://127.0.0.1:9444/run; the body sees {p, ctx, sleep, step, shot, cmd, palette, seed, log}.
+// http://127.0.0.1:9444/run; the body sees {p, ctx, sleep, step, shot, cmd, palette, seed, seedDir, log}.
 //
 //   node scripts/live-driver.cjs            # outputs (console.log, screenshots) go to $VSCW_LIVE_DIR
 //   curl -s --data-binary @test.js http://127.0.0.1:9444/run
@@ -52,19 +52,40 @@ const log = (kind, msg) => fs.appendFileSync(LOG, `[${new Date().toISOString().s
     },
     palette: async (t, enter = true) => { await p.keyboard.press('F1'); await sleep(500); await p.keyboard.type(t); await sleep(800); if (enter) { await p.keyboard.press('Enter'); } },
     seed: async (files) => {
-      await p.evaluate(async (files) => {
-        const root = await navigator.storage.getDirectory();
-        try { await root.removeEntry('proj', { recursive: true }); } catch (e) { /* first run */ }
-        const dir = await root.getDirectoryHandle('proj', { create: true });
-        for (const [file, text] of Object.entries(files)) {
-          let d = dir; const parts = file.split('/');
-          for (const s of parts.slice(0, -1)) { d = await d.getDirectoryHandle(s, { create: true }); }
-          const f = await d.getFileHandle(parts.at(-1), { create: true });
-          const w = await f.createWritable(); await w.write(text); await w.close();
-        }
-      }, files);
+      // Written in chunks of about 3 MB so a big tree does not become one huge CDP message.
+      const entries = Object.entries(files); let first = true;
+      for (let i = 0; i < entries.length || first;) {
+        const chunk = []; let size = 0;
+        while (i < entries.length && (chunk.length === 0 || size + entries[i][1].length < 3e6)) { chunk.push(entries[i]); size += entries[i][1].length; i++; }
+        await p.evaluate(async ([chunk, reset]) => {
+          const root = await navigator.storage.getDirectory();
+          if (reset) { try { await root.removeEntry('proj', { recursive: true }); } catch (e) { /* first run */ } }
+          const dir = await root.getDirectoryHandle('proj', { create: true });
+          for (const [file, text] of chunk) {
+            let d = dir; const parts = file.split('/');
+            for (const s of parts.slice(0, -1)) { d = await d.getDirectoryHandle(s, { create: true }); }
+            const f = await d.getFileHandle(parts.at(-1), { create: true });
+            const w = await f.createWritable(); await w.write(text); await w.close();
+          }
+        }, [chunk, first]);
+        first = false;
+      }
       await p.goto('https://vscode.dev/'); await sleep(6000);
       await p.getByRole('button', { name: 'Open Folder' }).first().click(); await sleep(5000);
+    },
+    // seedDir(srcDir, { include: relPath => bool, extra: {relPath: text}, patch: {relPath: text => text} }): seed from a folder on disk; returns { files, bytes }.
+    seedDir: async (srcDir, opts = {}) => {
+      const files = {}; let bytes = 0;
+      const rec = (rel) => {
+        for (const e of fs.readdirSync(path.join(srcDir, rel), { withFileTypes: true })) {
+          const r = rel ? rel + '/' + e.name : e.name;
+          if (e.isDirectory()) { rec(r); } else if (!opts.include || opts.include(r)) { let t = fs.readFileSync(path.join(srcDir, r), 'utf8'); if (opts.patch && opts.patch[r]) { t = opts.patch[r](t); } files[r] = t; bytes += t.length; }
+        }
+      };
+      rec('');
+      for (const [k, v0] of Object.entries(opts.extra || {})) { const v = typeof v0 === 'string' ? v0 : fs.readFileSync(v0.file, 'utf8'); files[k] = v; bytes += v.length; } // {file: diskPath} copies a file
+      await api.seed(files);
+      return { files: Object.keys(files).length, bytes };
     },
   };
   http.createServer((q, r) => {
@@ -72,7 +93,7 @@ const log = (kind, msg) => fs.appendFileSync(LOG, `[${new Date().toISOString().s
     q.on('data', d => { body += d; });
     q.on('end', async () => {
       try {
-        const fn = new Function('api', `return (async()=>{ const {p,ctx,sleep,step,shot,palette,cmd,seed,log}=api; ${body} })()`);
+        const fn = new Function('api', `return (async()=>{ const {p,ctx,sleep,step,shot,palette,cmd,seed,seedDir,log}=api; ${body} })()`);
         const out = await fn(api);
         r.end(JSON.stringify(out === undefined ? 'ok' : out));
       } catch (e) { log('DRIVER-ERROR', e.message); r.end('ERROR: ' + e.message); }
