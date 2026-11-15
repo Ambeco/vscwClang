@@ -8,13 +8,13 @@ import { INTELLISENSE_FILES } from '../toolchain/toolchainStore';
 import { chooseSlice } from '../toolchain/threadSlice';
 import { GUEST_WORKSPACE, TOOLCHAIN_SCHEME, fromGuestPath, isToolchainGuestPath, toGuestPath } from '../toolchain/guestPaths';
 import { ToolchainFileSystem } from '../toolchain/toolchainFileSystem';
-import { clangdLogLevel, compileCommandsPath, logsClangdStderr } from '../toolchain/cppToolsSettings';
-import { intelliSenseEnabled, loggingLevel, projectSettings, userFlags, workspaceRelativeGlobs } from '../projectConfig';
+import { clangdLogLevel, logsClangdStderr } from '../toolchain/cppToolsSettings';
+import { configuredCompileCommands, intelliSenseEnabled, loggingLevel, projectSettings, readCppProperties, userFlags, workspaceRelativeGlobs } from '../projectConfig';
 import { indexTargetsFromTasks } from '../toolchain/indexTargets';
 import { GUEST_CACHE, GUEST_CONFIG, OVERLAY_BATCH_SIZE, SEMANTIC_TOKENS_MAX_LINES, batches, clangdArgs, clangdThreadCount, compilationDatabaseChanges, shardMountPoint } from './clangdConfig';
 import { discoverTargetSources, discoverWorkspaceSources, findCompilationDatabaseDir } from './compileOverlay';
 import { ClangdStatus } from './clangdStatus';
-import { clangdUserConfig, headersAreCpp, mapClangdSettings } from './clangdSettings';
+import { clangdUserConfig, headersAreCpp, INLAY_UNSUPPORTED, mapClangdSettings } from './clangdSettings';
 import { removeStaleTempFiles, type TempDirFs } from './staleTempFiles';
 import { raiseTidyHints } from './tidySeverity';
 
@@ -59,7 +59,8 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	const modulePromise = getModule(toolchain, 'clangd.wasm');
 	const [, { module, limits: memoryLimits }, sysrootFiles, flags, sysroot] = await Promise.all([toolchain.ensure(INTELLISENSE_FILES), modulePromise, loadSysrootFiles(toolchain), loadCompileFlags(toolchain), loadSysrootGuestFs(toolchain)]);
 	mark('toolchain');
-	const mappedFlags = userFlags(log, true);
+	const properties = await readCppProperties(log);
+	const mappedFlags = userFlags(log, true, properties);
 	const extraFlags = mappedFlags.flags;
 	// The same slice Build picks, or <thread> and <mutex> would be errors here but not there.
 	const compileFlags = flags.compile[chooseSlice(Object.keys(flags.compile), vscode.workspace.getConfiguration('vscwclang').get<boolean>('threads', true), [extraFlags])].map(f => f.replace('${SYSROOT}', '/sysroot').replace('${RESOURCE}', '/resource'));
@@ -71,7 +72,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	const cacheDir = vscode.Uri.joinPath(context.globalStorageUri, CLANGD_CACHE, await workspaceKey(folder));
 	await vscode.workspace.fs.createDirectory(tmpDir);
 	await vscode.workspace.fs.createDirectory(cacheDir);
-	const configured = compileCommandsPath(projectSettings('vscwclang').get<unknown>('compileCommands')) ?? compileCommandsPath(projectSettings('C_Cpp').get<unknown>('default.compileCommands'));
+	const configured = configuredCompileCommands(properties);
 	const databaseDir = await findCompilationDatabaseDir(folder, configured);
 	const shardMount = databaseDir === undefined ? undefined : shardMountPoint(databaseDir);
 
@@ -96,6 +97,9 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 		tidyConfig: cpptools.get('codeAnalysis.clangTidy.config'),
 		tidyFallbackConfig: cpptools.get('codeAnalysis.clangTidy.fallbackConfig'),
 		tidyArgs: cpptools.get('codeAnalysis.clangTidy.args'),
+		inlayParameterNames: cpptools.get('inlayHints.parameterNames.enabled'),
+		inlayAutoTypes: cpptools.get('inlayHints.autoDeclarationTypes.enabled'),
+		inlayUnsupported: Object.fromEntries(INLAY_UNSUPPORTED.map(k => [k, cpptools.get(`inlayHints.${k}`)])),
 	});
 	mapped.notes.forEach(n => log.appendLine(`[vscwclang] ${n}`));
 	const userSetsStd = extraFlags.some(f => f.startsWith('-std=') || f.startsWith('--std='));
@@ -108,6 +112,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 		cStd: useStd ? mappedFlags.c[0] : undefined,
 		tidyAdd: mapped.tidyAdd,
 		tidyRemove: mapped.tidyRemove,
+		inlayHints: mapped.inlayHints,
 	})));
 
 	const args = clangdArgs(clangdLogLevel(level), clangdThreadCount(globalThis.navigator?.hardwareConcurrency), mapped.args);

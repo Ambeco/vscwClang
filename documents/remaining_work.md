@@ -12,7 +12,7 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 **Main critical user journeys (decided 2026-10-27), with the known gaps:**
 - Debug: view local variables, step through statements, conditional breakpoints. Gaps today: all-stop for threads and traps as stopped states need the custom runner (Milestone 6).
 - Code intelligence via clangd: completion, IntelliSense, go to definition, go to declaration and similar. Mostly wired (Milestone 3).
-- Other core cpptools functionality: Open: remaining inventory (cpptools features with no counterpart yet): formatting (clang-format is not shipped), `C_Cpp.default.forcedInclude`, `c_cpp_properties.json`, inlay-hint toggles.
+- Other core cpptools functionality: Open: remaining inventory (cpptools features with no counterpart yet): formatting (clang-format is not shipped).
 
 **Secondary user journeys (draft 2026-10-27; to extend; "?" = built but never checked end to end):**
 - Open a GitHub repository on vscode.dev/github.dev (`vscode-vfs://github/...`), edit files, build, run and debug. Edits are an uncommitted working copy until committed from Source Control (to a branch, which is VS Code's job, not ours). Open: DWARF source paths (`/workspace/...`) mapping back to `vscode-vfs` URIs for breakpoints and stack frames?; `findFiles` and clangd indexing on a large repo?; a repo with no `compile_commands.json` (sources come from `sourceGlobs`); includes that live outside the folder.
@@ -94,10 +94,10 @@ Open, most important first (all observed on the local `v24.0.2` toolchain):
 
 Compared against cpptools' `C_Cpp.*` (2026-10-11). Remaining gaps:
 - Per-language `-std` and the `.h` language reach clangd through a generated user config only when there is no compilation database (a database entry is authoritative); a startup-only config, so changing `C_Cpp.default.cppStandard` needs a window reload.
-- Read `.vscode/c_cpp_properties.json` (a separate JSONC file, not settings) as a further fallback; `C_Cpp.default.*` settings are not visible on real vscode.dev (`documents/live_testing.md` finding 5).
+- Check live that `.vscode/c_cpp_properties.json` is read on real vscode.dev (`C_Cpp.default.*` settings are not visible there, `documents/live_testing.md` finding 5), and decide whether a configuration picker is wanted (the first configuration is always used).
 - `C_Cpp.autocompleteAddParentheses`/`suggestSnippets` are not mapped: clangd's `-function-arg-placeholders` has different semantics (argument placeholders versus bare parentheses); decide if a mapping is worth it.
 - clang-tidy: `enabled`, `checks.enabled` and `checks.disabled` are mapped; `config`, `fallbackConfig`, `headerFilter` and `args` only log a note (clangd reads `.clang-tidy` files); `codeAnalysis.runAutomatically/exclude` are not read.
-- Optional: inlay-hint toggles (`C_Cpp.inlayHints.*`) as pass-through to clangd config; `intelliSenseUpdateDelay`, `maxSymbolSearchResults` (clangd `--limit-results`).
+- Optional: `intelliSenseUpdateDelay`, `maxSymbolSearchResults` (clangd `--limit-results`).
 - Deliberately skipped: `default.compilerPath/intelliSenseMode/macFrameworkPath/windowsSdkVersion` (one wasm32 target), `vcFormat.*` (clang-format would be a separate item), `vcpkg`, `debugger.*`, `copilotHover`, resource caps (`maxMemory`, `maxConcurrentThreads`, caches), `doxygen.*`, `enhancedColorization`.
 
 ## Milestone 4: debug build + hook runtime

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type { BuildOptions } from './buildWorkspace';
+import { overlayProperties, parseCppProperties, type CppProperties } from './toolchain/cppProperties';
 import { compileCommandsPath, cppToolsFlags, mergeExclude } from './toolchain/cppToolsSettings';
 import { GUEST_WORKSPACE, stripWorkspaceFolder, toGuestPath } from './toolchain/guestPaths';
 import { DEFAULT_EXCLUDE, makeSourceExcluder } from './toolchain/sourceFilter';
@@ -48,20 +49,41 @@ export function isUserSet(config: vscode.WorkspaceConfiguration, key: string): b
  * The C and C++ standards are returned apart (`c`, `cpp`) because `-std=` is an error for the other language;
  * clangd's single fallback flag list therefore ignores them.
  */
-export function userFlags(log?: vscode.OutputChannel, lenient = false): { flags: string[]; c: string[]; cpp: string[] } {
+export function userFlags(log?: vscode.OutputChannel, lenient = false, properties?: CppProperties): { flags: string[]; c: string[]; cpp: string[] } {
 	const settings = projectSettings('vscwclang');
 	const own = resolveSettingStrings(settings.get<string[]>('flags', []), 'vscwclang.flags', log, lenient);
 	if (isUserSet(settings, 'flags') || !settings.get<boolean>('useCppToolsSettings', true)) { return { flags: own, c: [], cpp: [] }; }
 	const cpptools = projectSettings('C_Cpp');
-	const mapped = cppToolsFlags({
+	const mapped = cppToolsFlags(overlayProperties({
 		defines: cpptools.get('default.defines'),
 		includePath: cpptools.get('default.includePath'),
+		forcedInclude: cpptools.get('default.forcedInclude'),
 		compilerArgs: cpptools.get('default.compilerArgs'),
 		cppStandard: cpptools.get('default.cppStandard'),
 		cStandard: cpptools.get('default.cStandard'),
-	}, text => resolveVariables(text, settingsContext()));
+	}, properties), text => resolveVariables(text, settingsContext()));
 	mapped.notes.forEach(n => log?.appendLine(`[vscwclang] ${n}`));
 	return { flags: [...own, ...mapped.flags], c: mapped.cFlags, cpp: mapped.cppFlags };
+}
+
+/**
+ * The first folder's `.vscode/c_cpp_properties.json` (undefined when absent or when `vscwclang.useCppToolsSettings` is
+ * off); notes about it go to `log`. Pass the result to `userFlags` and `cppPropertiesCompileCommands`.
+ */
+export async function readCppProperties(log?: vscode.OutputChannel): Promise<CppProperties | undefined> {
+	const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
+	if (!folder || !projectSettings('vscwclang').get<boolean>('useCppToolsSettings', true)) { return undefined; }
+	const text = await readText(vscode.Uri.joinPath(folder, '.vscode', 'c_cpp_properties.json'));
+	if (text === undefined) { return undefined; }
+	const properties = parseCppProperties(text);
+	properties.notes.forEach(n => log?.appendLine(`[vscwclang] ${n}`));
+	if (properties.configName !== undefined) { log?.appendLine(`[vscwclang] using configuration '${properties.configName}' of c_cpp_properties.json (the first one)`); }
+	return properties;
+}
+
+/** The `compile_commands.json` path to use: `vscwclang.compileCommands`, else c_cpp_properties.json's, else `C_Cpp.default.compileCommands`. */
+export function configuredCompileCommands(properties: CppProperties | undefined): string | undefined {
+	return compileCommandsPath(projectSettings('vscwclang').get<unknown>('compileCommands')) ?? compileCommandsPath(properties?.compileCommands) ?? compileCommandsPath(projectSettings('C_Cpp').get<unknown>('default.compileCommands'));
 }
 
 function settingsContext(): VariableContext {
@@ -215,7 +237,7 @@ async function readText(uri: vscode.Uri): Promise<string | undefined> {
  */
 export async function chooseCompileDatabase(context: vscode.ExtensionContext, folder: vscode.Uri, log: vscode.OutputChannel): Promise<{ cancelled: boolean; options?: BuildOptions }> {
 	const settings = projectSettings('vscwclang');
-	const configured = compileCommandsPath(settings.get<unknown>('compileCommands')) ?? compileCommandsPath(projectSettings('C_Cpp').get<unknown>('default.compileCommands')) ?? '';
+	const configured = configuredCompileCommands(await readCppProperties()) ?? '';
 	for (const name of configured !== '' ? [configured] : ['compile_commands.json', 'build/compile_commands.json']) {
 		const text = await readText(vscode.Uri.joinPath(folder, name));
 		if (text === undefined) { continue; }

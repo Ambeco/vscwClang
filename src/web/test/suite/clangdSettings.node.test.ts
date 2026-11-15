@@ -1,10 +1,10 @@
 import * as assert from 'assert';
-import { clangdUserConfig, headersAreCpp, mapClangdSettings } from '../../clangd/clangdSettings';
+import { clangdUserConfig, headersAreCpp, INLAY_UNSUPPORTED, mapClangdSettings } from '../../clangd/clangdSettings';
 import { clangdArgs } from '../../clangd/clangdConfig';
 
 suite('clangd settings mapping', () => {
 	test('unset or null settings map to nothing', () => {
-		assert.deepStrictEqual(mapClangdSettings({}), { args: [], tidyAdd: [], tidyRemove: [], notes: [] });
+		assert.deepStrictEqual(mapClangdSettings({}), { args: [], tidyAdd: [], tidyRemove: [], inlayHints: {}, notes: [] });
 		assert.deepStrictEqual(mapClangdSettings({ includeHeader: null, clangTidyEnabled: null, tidyChecksEnabled: null }).args, []);
 	});
 
@@ -65,5 +65,33 @@ suite('clangd user config', () => {
 		const text = clangdUserConfig({ headersAsCpp: false, tidyAdd: ['bugprone-*'], tidyRemove: ['x-y'] });
 		assert.ok(text.includes("Diagnostics:\n  ClangTidy:\n    Add: ['bugprone-*']\n    Remove: ['x-y']"), text);
 		assert.ok(!clangdUserConfig({ headersAsCpp: false, tidyAdd: [], tidyRemove: [] }).includes('If:'));
+	});
+});
+
+suite('clangd inlay hints', () => {
+	test('explicit booleans map to clangd hint kinds; unset leaves clangd defaults', () => {
+		assert.deepStrictEqual(mapClangdSettings({ inlayParameterNames: true, inlayAutoTypes: false }).inlayHints, { parameterNames: true, deducedTypes: false });
+		assert.deepStrictEqual(mapClangdSettings({ inlayParameterNames: null }).inlayHints, {});
+	});
+
+	test('a non-boolean value is noted and ignored', () => {
+		const m = mapClangdSettings({ inlayAutoTypes: 'yes' });
+		assert.deepStrictEqual(m.inlayHints, {});
+		assert.match(m.notes[0], /autoDeclarationTypes\.enabled 'yes' is not true or false/);
+	});
+
+	test('keys clangd cannot honor are noted only when set', () => {
+		assert.deepStrictEqual(mapClangdSettings({ inlayUnsupported: { 'referenceOperator.enabled': null } }).notes, []);
+		const notes = mapClangdSettings({ inlayUnsupported: { 'referenceOperator.enabled': true, 'parameterNames.hideLeadingUnderscores': false } }).notes;
+		assert.strictEqual(notes.length, 2);
+		assert.match(notes[0], /referenceOperator\.enabled is not supported.*editor\.inlayHints\.enabled/);
+		assert.strictEqual(INLAY_UNSUPPORTED.length, 5);
+	});
+
+	test('the user config gets an InlayHints fragment only for set kinds', () => {
+		const base = { headersAsCpp: false, tidyAdd: [], tidyRemove: [] };
+		assert.ok(!clangdUserConfig({ ...base, inlayHints: {} }).includes('InlayHints'));
+		assert.match(clangdUserConfig({ ...base, inlayHints: { parameterNames: false } }), /InlayHints:\n {2}ParameterNames: No\n/);
+		assert.match(clangdUserConfig({ ...base, inlayHints: { parameterNames: true, deducedTypes: true } }), /ParameterNames: Yes\n {2}DeducedTypes: Yes/);
 	});
 });

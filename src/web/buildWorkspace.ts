@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { projectSettings, sourceExcluder, userFlags, workspaceRelativeGlobs } from './projectConfig';
+import { projectSettings, readCppProperties, sourceExcluder, userFlags, workspaceRelativeGlobs } from './projectConfig';
 import { artifactsBelongInFolder, artifactSubdir, storageKeyFor } from './toolchain/artifactPolicy';
 import { build, type BuildResult } from './toolchain/toolchain';
 import type { ParsedDiagnostic } from './toolchain/diagnostics';
@@ -67,7 +67,7 @@ export async function buildWorkspace(context: vscode.ExtensionContext, log: vsco
 	const sources = [...found.values()].filter(uri => explicit.has(uri.toString()) || !isExcluded(uri.path.slice(folder.path.length)));
 	log.appendLine(`[vscwclang] ${sources.length} source file(s) found (skipping what vscwclang.files.exclude matches)`);
 	const sourceFlags = Object.fromEntries(Object.entries(options.sourceFlags ?? {}).map(([relative, flags]) => [`/workspace/${relative}`, flags]));
-	const settingsFlags = userFlags(log);
+	const settingsFlags = userFlags(log, false, await readCppProperties(log));
 	onDiagnostics?.([], folder, output);
 	const result = await build({ sources, output, flags: options.flags ?? settingsFlags.flags, languageFlags: options.flags ? undefined : { c: settingsFlags.c, cpp: settingsFlags.cpp }, sourceFlags, mode, onDiagnostics: onDiagnostics && (parsed => onDiagnostics(parsed, folder, output)) }, log, context);
 	log.appendLine(result.diagnostics);

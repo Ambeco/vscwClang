@@ -4,6 +4,7 @@ import { GUEST_WORKSPACE, stripWorkspaceFolder } from './guestPaths';
 export interface CppToolsDefaults {
 	defines?: unknown;
 	includePath?: unknown;
+	forcedInclude?: unknown;
 	compilerArgs?: unknown;
 	cppStandard?: unknown;
 	cStandard?: unknown;
@@ -17,7 +18,7 @@ function strings(value: unknown): string[] {
  * Compile flags equivalent to what the user's `C_Cpp.default.*` settings ask for, so a project configured for the
  * C/C++ extension on desktop builds and indexes the same here without re-entering them.
  *
- * Only `defines`, `includePath`, `compilerArgs` and the two standards are mapped. `resolve` expands `${...}`
+ * Only `defines`, `includePath`, `forcedInclude` (as `-include`), `compilerArgs` and the two standards are mapped. `resolve` expands `${...}`
  * variables (`projectModel.resolveVariables`); entries it rejects are dropped with a note. Include paths must end up
  * inside the workspace (`${workspaceFolder}/x`, or relative to it); a trailing `/**` (recursive) is read as the
  * directory itself. The standards come back as `cFlags` and `cppFlags` (a `-std=` is an error for the other
@@ -35,23 +36,33 @@ export function cppToolsFlags(settings: CppToolsDefaults, resolve: (text: string
 			return undefined;
 		}
 	};
-	for (const raw of strings(settings.includePath)) {
-		if (raw.trim() === '${default}') { continue; }
+	const workspacePath = (name: string, raw: string, recursiveOk: boolean): string | undefined => {
 		const recursive = /[\\/]\*\*$/.test(raw);
-		const resolved = expand('C_Cpp.default.includePath', raw.trim().replace(/[\\/]\*\*$/, ''));
-		if (resolved === undefined) { continue; }
+		const resolved = expand(name, raw.trim().replace(/[\\/]\*\*$/, ''));
+		if (resolved === undefined) { return undefined; }
 		const trimmed = resolved.replace(/\\/g, '/');
 		let guest: string | undefined;
 		if (trimmed === GUEST_WORKSPACE || trimmed.startsWith(`${GUEST_WORKSPACE}/`)) { guest = trimmed; }
 		else if (!/^([a-zA-Z]:|\/|\$|~)/.test(trimmed)) { guest = `${GUEST_WORKSPACE}/${trimmed}`; }
 		if (guest === undefined) {
-			notes.push(`C_Cpp.default.includePath entry '${raw}' is outside the workspace, so it was skipped. Did you mean a path relative to the workspace folder, such as \${workspaceFolder}/include?`);
-			continue;
+			notes.push(`${name} entry '${raw}' is outside the workspace, so it was skipped. Did you mean a path relative to the workspace folder, such as \${workspaceFolder}/${recursiveOk ? 'include' : 'config.h'}?`);
+			return undefined;
 		}
 		guest = guest.replace(/\/\.(?=\/|$)/g, '').replace(/\/+$/, '').replace(/\/{2,}/g, '/') || GUEST_WORKSPACE;
-		if (recursive) { notes.push(`C_Cpp.default.includePath entry '${raw}' is recursive; only '${guest}' itself was added. List subfolders separately if needed.`); }
+		if (recursive && recursiveOk) { notes.push(`${name} entry '${raw}' is recursive; only '${guest}' itself was added. List subfolders separately if needed.`); }
+		return guest;
+	};
+	for (const raw of strings(settings.includePath)) {
+		if (raw.trim() === '${default}') { continue; }
+		const guest = workspacePath('C_Cpp.default.includePath', raw, true);
+		if (guest === undefined) { continue; }
 		const flag = `-I${guest}`;
 		if (!seen.has(flag)) { seen.add(flag); flags.push(flag); }
+	}
+	for (const raw of strings(settings.forcedInclude)) {
+		if (raw.trim() === '${default}') { continue; }
+		const guest = workspacePath('C_Cpp.default.forcedInclude', raw, false);
+		if (guest !== undefined) { flags.push('-include', guest); }
 	}
 	for (const define of strings(settings.defines)) {
 		const resolved = expand('C_Cpp.default.defines', define.trim());

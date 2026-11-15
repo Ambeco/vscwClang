@@ -100,3 +100,17 @@ suite('mergeExclude', () => {
 		for (const v of [undefined, null, ['x'], 'x']) { assert.deepStrictEqual(mergeExclude({ a: true }, false, v), { a: true }); }
 	});
 });
+
+suite('forcedInclude', () => {
+	test('workspace files become -include flags', () => {
+		const r = flagsFor({ forcedInclude: ['${workspaceFolder}/config.h', 'src/pre.h'] });
+		assert.deepStrictEqual(r.flags, ['-include', '/workspace/config.h', '-include', '/workspace/src/pre.h']);
+		assert.deepStrictEqual(r.notes, []);
+	});
+
+	test('files outside the workspace and ${default} are skipped, the former with a suggestion', () => {
+		const r = flagsFor({ forcedInclude: ['${default}', 'C:/other/x.h'] });
+		assert.deepStrictEqual(r.flags, []);
+		assert.match(r.notes[0], /forcedInclude entry 'C:\/other\/x\.h' is outside the workspace.*Did you mean/);
+	});
+});

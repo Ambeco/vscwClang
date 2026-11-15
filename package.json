@@ -92,6 +92,54 @@
           "scope": "resource",
           "markdownDescription": "cpptools-compatible. Read as `vscwclang.compileCommands` when that is empty."
         },
+        "C_Cpp.default.forcedInclude": {
+          "type": ["array", "null"],
+          "default": null,
+          "scope": "resource",
+          "markdownDescription": "cpptools-compatible. Workspace files added to every compile as `-include <file>`; also read from `.vscode/c_cpp_properties.json`, which wins when both set it. Needs `vscwclang.useCppToolsSettings` and is replaced by an explicit `vscwclang.flags`."
+        },
+        "C_Cpp.inlayHints.parameterNames.enabled": {
+          "type": ["boolean", "null"],
+          "default": null,
+          "scope": "resource",
+          "markdownDescription": "cpptools-compatible. Sets clangd's `InlayHints: ParameterNames`. cpptools defaults this to off and clangd to on, so nothing changes until it is set. Reload the window to apply; `editor.inlayHints.enabled` still decides whether hints are shown."
+        },
+        "C_Cpp.inlayHints.autoDeclarationTypes.enabled": {
+          "type": ["boolean", "null"],
+          "default": null,
+          "scope": "resource",
+          "markdownDescription": "cpptools-compatible. Sets clangd's `InlayHints: DeducedTypes` (the types of `auto` declarations). cpptools defaults this to off and clangd to on, so nothing changes until it is set. Reload the window to apply."
+        },
+        "C_Cpp.inlayHints.autoDeclarationTypes.showOnLeft": {
+          "type": ["boolean", "null"],
+          "default": null,
+          "scope": "resource",
+          "markdownDescription": "Not supported (clangd has no option for it); a note is logged when it is set."
+        },
+        "C_Cpp.inlayHints.parameterNames.hideLeadingUnderscores": {
+          "type": ["boolean", "null"],
+          "default": null,
+          "scope": "resource",
+          "markdownDescription": "Not supported (clangd has no option for it); a note is logged when it is set."
+        },
+        "C_Cpp.inlayHints.parameterNames.suppressWhenArgumentContainsName": {
+          "type": ["boolean", "null"],
+          "default": null,
+          "scope": "resource",
+          "markdownDescription": "Not supported (clangd has no option for it); a note is logged when it is set."
+        },
+        "C_Cpp.inlayHints.referenceOperator.enabled": {
+          "type": ["boolean", "null"],
+          "default": null,
+          "scope": "resource",
+          "markdownDescription": "Not supported (clangd has no option for it); a note is logged when it is set."
+        },
+        "C_Cpp.inlayHints.referenceOperator.showSpace": {
+          "type": ["boolean", "null"],
+          "default": null,
+          "scope": "resource",
+          "markdownDescription": "Not supported (clangd has no option for it); a note is logged when it is set."
+        },
         "C_Cpp.files.exclude": {
           "type": "object",
           "default": {},
