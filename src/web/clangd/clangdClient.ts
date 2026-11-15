@@ -16,6 +16,7 @@ import { discoverTargetSources, discoverWorkspaceSources, findCompilationDatabas
 import { ClangdStatus } from './clangdStatus';
 import { clangdUserConfig, headersAreCpp, mapClangdSettings } from './clangdSettings';
 import { removeStaleTempFiles, type TempDirFs } from './staleTempFiles';
+import { raiseTidyHints } from './tidySeverity';
 
 const CLANGD_TMP = 'clangd-tmp';
 const CLANGD_CACHE = 'clangd-cache';
@@ -184,7 +185,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 		synchronize: { fileEvents: sourceWatcher },
 		middleware: {
 			// The user config's own (empty) diagnostics arrive before any source's, so they do not count.
-			handleDiagnostics: (uri, diagnostics, next) => { if (!uri.path.endsWith('.yaml')) { markIntelliSenseSettled(); } next(uri, diagnostics); },
+			handleDiagnostics: (uri, diagnostics, next) => { if (!uri.path.endsWith('.yaml')) { markIntelliSenseSettled(); } next(uri, raiseTidyHints(diagnostics) as vscode.Diagnostic[]); },
 			provideDocumentSemanticTokens: (document, token, next) => document.lineCount > SEMANTIC_TOKENS_MAX_LINES ? null : next(document, token),
 			provideDocumentSemanticTokensEdits: (document, resultId, token, next) => document.lineCount > SEMANTIC_TOKENS_MAX_LINES ? null : next(document, resultId, token),
 		},

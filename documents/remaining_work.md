@@ -12,7 +12,7 @@ toolchain boundary, all failing loudly); everything below replaces a stub.
 **Main critical user journeys (decided 2026-10-27), with the known gaps:**
 - Debug: view local variables, step through statements, conditional breakpoints. Gaps today: all-stop for threads and traps as stopped states need the custom runner (Milestone 6).
 - Code intelligence via clangd: completion, IntelliSense, go to definition, go to declaration and similar. Mostly wired (Milestone 3).
-- Other core cpptools functionality: Open: clang-tidy ships since v24.0.11 (clangd built with `CLANGD_TIDY_CHECKS=ON`). clangd reports `modernize-use-nullptr` as a Hint, so it never reaches Problems; decide whether to raise tidy hints to warnings. Remaining inventory (cpptools features with no counterpart yet): formatting (clang-format is not shipped), `C_Cpp.default.forcedInclude`, `c_cpp_properties.json`, inlay-hint toggles.
+- Other core cpptools functionality: Open: remaining inventory (cpptools features with no counterpart yet): formatting (clang-format is not shipped), `C_Cpp.default.forcedInclude`, `c_cpp_properties.json`, inlay-hint toggles.
 
 **Secondary user journeys (draft 2026-10-27; to extend; "?" = built but never checked end to end):**
 - Open a GitHub repository on vscode.dev/github.dev (`vscode-vfs://github/...`), edit files, build, run and debug. Edits are an uncommitted working copy until committed from Source Control (to a branch, which is VS Code's job, not ours). Open: DWARF source paths (`/workspace/...`) mapping back to `vscode-vfs` URIs for breakpoints and stack frames?; `findFiles` and clangd indexing on a large repo?; a repo with no `compile_commands.json` (sources come from `sourceGlobs`); includes that live outside the folder.

@@ -6,6 +6,9 @@ Tree format: folders end in `/`, files have an extension, names sit below their 
 
 ```
 src/web/
+  clangd/
+    tidySeverity.ts
+      raiseTidyHints           # clang-tidy Hints -> Warnings so they reach Problems
   host/
     sharedMemory.ts
       createSharedMemory       # imported shared memory of a wasi-threads module
