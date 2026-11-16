@@ -9,6 +9,7 @@ import { chooseSlice } from '../toolchain/threadSlice';
 import { GUEST_WORKSPACE, TOOLCHAIN_SCHEME, fromGuestPath, isToolchainGuestPath, toGuestPath } from '../toolchain/guestPaths';
 import { ToolchainFileSystem } from '../toolchain/toolchainFileSystem';
 import { clangdLogLevel, logsClangdStderr } from '../toolchain/cppToolsSettings';
+import { ClippedLog } from './clippedLog';
 import { configuredCompileCommands, intelliSenseEnabled, loggingLevel, projectSettings, readCppProperties, userFlags, workspaceRelativeGlobs } from '../projectConfig';
 import { indexTargetsFromTasks } from '../toolchain/indexTargets';
 import { GUEST_CACHE, GUEST_CONFIG, OVERLAY_BATCH_SIZE, SEMANTIC_TOKENS_MAX_LINES, batches, clangdArgs, clangdThreadCount, compilationDatabaseChanges, shardMountPoint } from './clangdConfig';
@@ -141,15 +142,17 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	const tmpAccess: TempDirFs<vscode.Uri> = { readDirectory: d => tmpFs.readDirectory(d), stat: f => tmpFs.stat(f), delete: f => tmpFs.delete(f), child: (d, name) => vscode.Uri.joinPath(d, name) };
 	void removeStaleTempFiles(tmpAccess, tmpDir, Date.now(), STALE_TEMP_MS).then(
 		n => { if (n > 0) { log.appendLine(`[vscwclang] clangd: removed ${n} stale temporary file(s) left by earlier sessions`); } });
-	const stderrChunks: string[] = [];
+	let stderrTailText = '';
+	const stderrLog = new ClippedLog(t => log.append(t));
+	const stderrDecoder = new TextDecoder();
 	process.stderr?.onData(d => {
-		const text = new TextDecoder().decode(d);
-		stderrChunks.push(text);
-		if (logsClangdStderr(level)) { log.append(text); }
+		const text = stderrDecoder.decode(d, { stream: true });
+		stderrTailText = (stderrTailText + text).slice(-4000);
+		if (logsClangdStderr(level)) { stderrLog.append(text); }
 	});
 	const exited = process.run();
 	const transports = makeMessageTransports(process, exited, log);
-	const stderrTail = () => stderrChunks.join('').slice(-800);
+	const stderrTail = () => stderrTailText.slice(-800);
 	void exited.then(
 		code => { if (code !== 0) { log.appendLine(`[vscwclang] clangd exited unexpectedly (code ${code}): ${stderrTail()}`); } },
 		e => log.appendLine(`[vscwclang] clangd could not run: ${errorText(e)} ${stderrTail()}`));

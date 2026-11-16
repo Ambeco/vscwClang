@@ -7,6 +7,8 @@ Tree format: folders end in `/`, files have an extension, names sit below their 
 ```
 src/web/
   clangd/
+    clippedLog.ts
+      ClippedLog               # batched, line-clipped output-channel writer
     tidySeverity.ts
       raiseTidyHints           # clang-tidy Hints -> Warnings so they reach Problems
   host/

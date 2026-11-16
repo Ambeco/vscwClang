@@ -34,8 +34,8 @@ export class RpcStats {
 
 	get callCount(): number { let n = 0; for (const t of this.ops.values()) { n += t.calls; } return n; }
 
-	/** Time spent serving requests since the last `takeReport`, which is the time the extension host was not free for anything else. */
-	get busyMs(): number { let n = 0; for (const t of this.ops.values()) { n += t.handlerMs + t.streamMs; } return n; }
+	/** Time spent serving requests since the last `takeReport` (a `stdin` read only waits for the user, so it does not count). */
+	get busyMs(): number { let n = 0; for (const [op, t] of this.ops) { if (op !== 'stdin') { n += t.handlerMs + t.streamMs; } } return n; }
 
 	takeReport(label: string, extra = ''): string {
 		if (this.ops.size === 0) { return ''; }

@@ -55,22 +55,54 @@ export interface ChildWorker { postMessage(message: unknown): void; onMessage(li
 /** What the Worker sends back, once. */
 export type DoneMessage = { type: 'done'; result: GuestResult } | { type: 'failed'; message: string };
 
-/** `GuestServices` that forward every call to the extension host over the blocking channel. */
+/** Output held back at most this long in bytes (a line ends it sooner), so a guest that writes one byte at a time costs one message per line. */
+const OUTPUT_BATCH_BYTES = 8192;
+
+/**
+ * `GuestServices` that forward every call to the extension host over the blocking channel.
+ *
+ * stdout/stderr writes are coalesced: they wait in `pending` until a write ends a line or reaches `OUTPUT_BATCH_BYTES`,
+ * the stream changes, any other request is made (so output precedes a stdin read, a sleep or a file operation), or
+ * `flush` is called (the Worker does at the end of the program). A partial last line of a guest that then runs a long
+ * computation without any request is therefore not shown until it does.
+ */
 export class RpcGuestServices implements GuestServices {
 	private readonly sleeper = new Int32Array(new SharedArrayBuffer(4));
+	private pending: Uint8Array[] = [];
+	private pendingBytes = 0;
+	private pendingFd: 1 | 2 = 1;
 
 	constructor(private readonly client: SyncRpcClient) {}
 
-	readStdin(maxBytes: number): Uint8Array { return this.client.call('stdin', { maxBytes }).bytes; }
-	writeOutput(fd: 1 | 2, data: Uint8Array): void { this.client.post('output', { fd }, data); }
-	stat(path: string): GuestStat { return this.client.call('stat', { path }).value as GuestStat; }
-	readFile(path: string): Uint8Array { return this.client.call('readFile', { path }).bytes; }
-	writeFile(path: string, data: Uint8Array): void { this.client.call('writeFile', { path }, data); }
-	readDirectory(path: string): GuestDirEntry[] { return this.client.call('readDirectory', { path }).value as GuestDirEntry[]; }
-	createDirectory(path: string): void { this.client.call('createDirectory', { path }); }
-	delete(path: string): void { this.client.call('delete', { path }); }
-	rename(from: string, to: string): void { this.client.call('rename', { from, to }); }
-	sleep(ms: number): void { Atomics.wait(this.sleeper, 0, 0, ms); }
+	flush(): void {
+		if (this.pendingBytes === 0) { return; }
+		const joined = this.pending.length === 1 ? this.pending[0] : new Uint8Array(this.pendingBytes);
+		if (this.pending.length > 1) { let at = 0; for (const chunk of this.pending) { joined.set(chunk, at); at += chunk.length; } }
+		this.pending = [];
+		this.pendingBytes = 0;
+		this.client.post('output', { fd: this.pendingFd }, joined);
+	}
+
+	private call(op: string, args: unknown, bytes?: Uint8Array): { value: unknown; bytes: Uint8Array } {
+		this.flush();
+		return this.client.call(op, args, bytes);
+	}
+
+	readStdin(maxBytes: number): Uint8Array { return this.call('stdin', { maxBytes }).bytes; }
+	writeOutput(fd: 1 | 2, data: Uint8Array): void {
+		if (fd !== this.pendingFd) { this.flush(); this.pendingFd = fd; }
+		this.pending.push(data);
+		this.pendingBytes += data.length;
+		if (this.pendingBytes >= OUTPUT_BATCH_BYTES || data.includes(10)) { this.flush(); }
+	}
+	stat(path: string): GuestStat { return this.call('stat', { path }).value as GuestStat; }
+	readFile(path: string): Uint8Array { return this.call('readFile', { path }).bytes; }
+	writeFile(path: string, data: Uint8Array): void { this.call('writeFile', { path }, data); }
+	readDirectory(path: string): GuestDirEntry[] { return this.call('readDirectory', { path }).value as GuestDirEntry[]; }
+	createDirectory(path: string): void { this.call('createDirectory', { path }); }
+	delete(path: string): void { this.call('delete', { path }); }
+	rename(from: string, to: string): void { this.call('rename', { from, to }); }
+	sleep(ms: number): void { this.flush(); Atomics.wait(this.sleeper, 0, 0, ms); }
 }
 
 /** Services for a thread with no extension host: it reads the shared `files`, output is dropped, anything else fails loudly. */
@@ -102,10 +134,11 @@ class NoHostServices implements GuestServices {
 }
 
 /** Instantiates `message.module` against a new guest; a wasi-threads module also gets its shared memory and `thread-spawn`. */
-function instantiate(endpoint: Endpoint, message: StartMessage | ThreadMessage): { guest: GuestWasi; instance: WebAssembly.Instance } {
+function instantiate(endpoint: Endpoint, message: StartMessage | ThreadMessage): { guest: GuestWasi; instance: WebAssembly.Instance; flush: () => void } {
 	const client = message.channel ? new SyncRpcClient(endpoint, message.channel) : undefined;
 	const { threads } = message;
-	const guest = new GuestWasi({ args: message.args, env: message.env, preopens: message.preopens, terminal: message.terminal, services: client ? new RpcGuestServices(client) : new NoHostServices('files' in message ? message.files : undefined), memory: threads?.memory });
+	const services = client ? new RpcGuestServices(client) : new NoHostServices('files' in message ? message.files : undefined);
+	const guest = new GuestWasi({ args: message.args, env: message.env, preopens: message.preopens, terminal: message.terminal, services, memory: threads?.memory });
 	const imports: WebAssembly.Imports = { wasi_snapshot_preview1: guest.imports };
 	const importsMemory = WebAssembly.Module.imports(message.module).some(i => i.module === 'env' && i.name === 'memory');
 	if (importsMemory && !threads) {
@@ -130,7 +163,7 @@ function instantiate(endpoint: Endpoint, message: StartMessage | ThreadMessage):
 		if (i.kind !== 'function' || provided.has(i.module)) { continue; }
 		(imports[i.module] ??= {})[i.name] = () => { throw new Error(`vscwClang: a thread called the host import ${i.module}.${i.name}, which only the main thread has.`); };
 	}
-	return { guest, instance: new WebAssembly.Instance(message.module, imports) };
+	return { guest, instance: new WebAssembly.Instance(message.module, imports), flush: () => (services instanceof RpcGuestServices ? services.flush() : undefined) };
 }
 
 /**
@@ -153,15 +186,22 @@ export function runGuestWorker(endpoint: Endpoint, createChild?: () => ChildWork
 			return;
 		}
 		if (request.type !== 'start' && request.type !== 'thread') { return; }
+		let flush = (): void => undefined;
 		try {
-			const { guest, instance } = instantiate(endpoint, request);
+			const started = instantiate(endpoint, request);
+			const { guest, instance } = started;
+			flush = started.flush;
 			if (request.type === 'thread') {
 				const result = guest.runThread(instance, request.tid, request.startArg);
+				flush();
 				if (result) { endpoint.postMessage({ type: 'done', result } satisfies DoneMessage); }
 			} else {
-				endpoint.postMessage({ type: 'done', result: guest.start(instance) } satisfies DoneMessage);
+				const result = guest.start(instance);
+				flush();
+				endpoint.postMessage({ type: 'done', result } satisfies DoneMessage);
 			}
 		} catch (e) {
+			flush();
 			endpoint.postMessage({ type: 'failed', message: e instanceof Error ? e.message : String(e) } satisfies DoneMessage);
 		}
 	});
