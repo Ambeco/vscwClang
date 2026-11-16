@@ -16,6 +16,11 @@ suite('splitIncludeTrace', () => {
 		assert.strictEqual(r.stderr, '');
 	});
 
+	test('collapses ./ and ../ segments so the header can be read back', () => {
+		const r = splitIncludeTrace(['. /workspace/Eigen/src/Core/./Check.h', '.. /workspace/Eigen/src/Core/arch/../util/X.h', '. /workspace/../outside.h', ''].join('\n'), '/workspace');
+		assert.deepStrictEqual(r.headers.sort(), ['/workspace/Eigen/src/Core/Check.h', '/workspace/Eigen/src/Core/util/X.h']);
+	});
+
 	test('does not match lookalike folders', () => {
 		assert.deepStrictEqual(splitIncludeTrace('. /workspace2/a.h\n', '/workspace').headers, []);
 	});

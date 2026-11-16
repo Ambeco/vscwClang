@@ -78,7 +78,9 @@ if (CFG.mode === 'warm') {
     throw new Error('no palette row ' + name);
   };
   const build = async (label, edit) => {
+    log('PROGRESS', label + ' start');
     if (edit) { await edit(); }
+    log('PROGRESS', label + ' edited');
     await p.keyboard.press('Escape'); await sleep(200);
     await runCmd('vscwClang: Build C++'); const t0 = Date.now();
     while (Date.now() - t0 < CFG.timeoutMs) {

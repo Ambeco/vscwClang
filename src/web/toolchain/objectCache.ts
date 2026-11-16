@@ -65,6 +65,16 @@ interface Meta {
 
 export type ReadGuestFile = (guestPath: string) => Promise<Uint8Array<ArrayBuffer> | undefined>;
 
+// -H prints `#include "./x.h"` as `<dir>/./x.h`; the workspace reader cannot open `.`/`..` segments, so such a header would make the object uncacheable.
+function collapseDots(path: string): string {
+	const out: string[] = [];
+	for (const part of path.split('/')) {
+		if (part === '.') { continue; }
+		if (part === '..' && out.length > 1) { out.pop(); } else { out.push(part); }
+	}
+	return out.join('/');
+}
+
 /**
  * Parses `clang -H` output: returns the `/workspace` headers it included and the stderr with the `-H` lines removed.
  *
@@ -77,7 +87,8 @@ export function splitIncludeTrace(stderr: string, workspace: string): { headers:
 	for (const line of stderr.split('\n')) {
 		const m = /^\.+ (\S.*)$/.exec(line.replace(/\r$/, ''));
 		if (m) {
-			if (m[1] === workspace || m[1].startsWith(`${workspace}/`)) { headers.add(m[1]); }
+			const header = collapseDots(m[1]);
+			if (header === workspace || header.startsWith(`${workspace}/`)) { headers.add(header); }
 		} else if (!line.startsWith('Multiple include guards may be useful for:') && !/^\S+\.(h|hh|hpp|hxx|inc|tcc|ipp)$/.test(line)) {
 			kept.push(line);
 		}
