@@ -97,7 +97,10 @@ export async function chooseArtifactDir(context: vscode.ExtensionContext, folder
 
 async function writeBuildLog(dir: vscode.Uri, result: BuildResult): Promise<void> {
 	const text = `exit code ${result.exitCode}
-${result.diagnostics}`;
+${result.diagnostics}
+--- timings ---
+${result.report}
+`;
 	try {
 		await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, 'build.log'), new TextEncoder().encode(text));
 	} catch (e) {

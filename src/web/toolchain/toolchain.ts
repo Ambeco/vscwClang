@@ -41,6 +41,8 @@ export interface BuildResult {
 	/** Combined compiler/linker output, in clang's text format. */
 	diagnostics: string;
 	parsed: ParsedDiagnostic[];
+	/** Per-source reuse/compile times and the phase line, for build.log. */
+	report: string;
 }
 
 /** Compiled objects (kept in the browser's Cache API) and link results (this session only), so an unchanged tree skips the build and an edit recompiles only what it touches. */
@@ -168,6 +170,7 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 	};
 	const cacheScope = `${folder.toString()}|${request.mode}|`;
 	const stderrs: string[] = sources.map(() => '');
+	const report: string[] = [];
 	const compiles: (CompiledSource | undefined)[] = [];
 	const compileSource = async (source: (typeof sources)[number], i: number): Promise<CompiledSource> => {
 		const base = source.guest.slice(source.guest.lastIndexOf('/') + 1);
@@ -186,6 +189,7 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 		const cached = sourceHash ? await objectCache.lookup(cacheKey, argsKey, sourceHash, readGuest) : undefined;
 		if (cached) {
 			log.appendLine(`[vscwclang] up to date ${source.guest} (reused object)`);
+			report.push(`up to date ${source.guest}`);
 			stderrs[i] = cached.stderr;
 			if (cached.stderr !== '') { request.onDiagnostics?.(parseDiagnostics(stderrs.join(''))); }
 			objects.setFile(objectName, cached.object);
@@ -203,6 +207,7 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 		}
 		cc ??= await run('clang.wasm', [...compileArgsWith(undefined), '-H', '-o', '-'], { captureStdout: true, objects });
 		log.appendLine(`[vscwclang] compiled ${source.guest} in ${Date.now() - started} ms (exit ${cc.exitCode}${withPch ? ', precompiled headers' : ''})`);
+		report.push(`compiled ${source.guest} in ${Date.now() - started} ms`);
 		const trace = splitIncludeTrace(cc.stderr, GUEST_WORKSPACE);
 		stderrs[i] = trace.stderr;
 		if (trace.stderr !== '') { request.onDiagnostics?.(parseDiagnostics(stderrs.join(''))); }
@@ -241,8 +246,9 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 		}
 	}
 	endPhase('link');
-	log.appendLine(`[vscwclang] build phases (ms): ${phases.join(', ')}, total ${Date.now() - buildStarted}`);
-	return { exitCode, diagnostics, parsed: withFailureFallback(parseDiagnostics(diagnostics), exitCode, diagnostics) };
+	const phaseLine = `build phases (ms): ${phases.join(', ')}, total ${Date.now() - buildStarted}`;
+	log.appendLine(`[vscwclang] ${phaseLine}`);
+	return { exitCode, diagnostics, report: [...report, phaseLine].join(NL), parsed: withFailureFallback(parseDiagnostics(diagnostics), exitCode, diagnostics) };
 }
 
 interface CompiledSource { exitCode: number; objectPath?: string; objectId?: string }

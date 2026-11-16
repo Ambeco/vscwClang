@@ -25,7 +25,7 @@ suite('package.json setting scopes', () => {
 	const props = pkg.contributes.configuration.properties as Record<string, { scope?: string }>;
 
 	test('per-project vscwclang settings are resource-scoped', () => {
-		const wrong = ['flags', 'sourceGlobs', 'compileCommands', 'compileCommandsInclude', 'files.exclude', 'run.args', 'run.env', 'useCppToolsSettings']
+		const wrong = ['flags', 'sourceGlobs', 'compileCommands', 'compileCommandsInclude', 'files.exclude', 'run.args', 'run.env', 'useCppToolsSettings', 'intelliSense.enabled', 'loggingLevel']
 			.filter(k => props[`vscwclang.${k}`]?.scope !== 'resource').map(k => `vscwclang.${k} needs "scope": "resource"`);
 		assert.deepStrictEqual(wrong, []);
 	});

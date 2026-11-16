@@ -394,11 +394,13 @@
           "markdownDescription": "Use the C/C++ extension's `C_Cpp.default.*` settings (`defines`, `includePath`, `cppStandard`, `cStandard`, `compilerArgs`) as extra flags when `vscwclang.flags` is not set, and its `C_Cpp.files.exclude`, `C_Cpp.default.compileCommands`, `C_Cpp.loggingLevel` and `C_Cpp.intelliSenseEngine` as defaults. Lets a project configured for cpptools on desktop work here unchanged."
         },
         "vscwclang.intelliSense.enabled": {
+          "scope": "resource",
           "type": "boolean",
           "default": true,
           "markdownDescription": "Run the clangd language server for completion, hover, go-to-definition and as-you-type diagnostics. Turn off to skip clangd's download, memory use and indexing when you only need Build and Run. Defaults to off if `C_Cpp.intelliSenseEngine` is `disabled`. Reload the window to apply."
         },
         "vscwclang.loggingLevel": {
+          "scope": "resource",
           "type": "string",
           "enum": [
             "None",

@@ -98,7 +98,8 @@ if (CFG.mode === 'warm') {
       const l = await readLog();
       if (l && l.mtime >= t0 - 200) {
         const ph = /build phases[^\n]*/.exec(l.text);
-        out.push(label + ': ' + ((l.mtime - t0) / 1000).toFixed(2) + ' s' + (ph ? '  [' + ph[0] + ']' : '') + (/error/i.test(l.text) ? '  (log mentions error)' : ''));
+        const tm = (l.text.split('--- timings ---')[1] || '').trim().replace(/\/workspace\//g, '').split('\n').join('; ');
+        out.push(label + ': ' + ((l.mtime - t0) / 1000).toFixed(2) + ' s' + (tm ? '  {' + tm + '}' : ''));
         return;
       }
       await sleep(50);
