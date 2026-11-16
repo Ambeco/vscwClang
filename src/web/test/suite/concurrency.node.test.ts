@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { forEachLimited } from '../../toolchain/concurrency';
+import { forEachLimited, longestFirst } from '../../toolchain/concurrency';
 
 const tick = () => new Promise<void>(resolve => setTimeout(resolve, 5));
 
@@ -33,5 +33,13 @@ suite('forEachLimited', () => {
 		}), /boom/);
 		assert.ok(started.length < 6, `started ${started.join(',')}`);
 		assert.ok(started.includes(0) && started.includes(1));
+	});
+});
+
+suite('longestFirst', () => {
+	test('orders by last duration descending, unknown first, ties stable', () => {
+		const ms = [5, undefined, 9, 5, 1];
+		assert.deepStrictEqual(longestFirst(5, i => ms[i]), [1, 2, 0, 3, 4]);
+		assert.deepStrictEqual(longestFirst(3, () => undefined), [0, 1, 2]);
 	});
 });

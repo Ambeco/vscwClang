@@ -145,3 +145,15 @@ Scripts: `scripts/live-flow-project.sh <cfg> warm|open|edit` (`live-flow-project
 - Fixed: `vscwclang.intelliSense.enabled` and `vscwclang.loggingLevel` lacked `"scope": "resource"`, so a folder-level `.vscode/settings.json` could not set them in a multi-root workspace although the code reads them through the folder URI; `settingsSchema.node.test.ts` now covers both. Needs the extension reinstalled on vscode.dev to take effect. The first runs with clangd really off then hung the test page (main thread blocked, two Chrome processes at 150% of a core), not yet understood.
 - Open: SQLite with `shell.c` (40k lines) open gets no clangd diagnostic and the status bar stays at `indexing 0/1` (`sqlite3.c`, one 9 MB unit, is being indexed) in four clean runs; builds started then do not complete either. With IntelliSense off and no big file open Build took 8.1 s (one run, load not sampled). The warm step saw the index in one run and not in the next.
 - Harness gotchas: after a go-to-definition into a big header the next `seed()` restores that tab and steals focus (the script now reopens until the wanted tab is active); the test Chrome loses its page or slows after about 40 reloads, so restart it and run the 3-file control first; Build must be picked from the palette by keyboard because row clicks time out behind notifications; a `curl --max-time` that expires leaves the script running, so check the driver before the next step.
+
+## Incremental builds re-profiled (vscode.dev test Chrome, toolchain v24.0.13, 12 cores, Dropbox stopped, 2026-11-16)
+Flow 2 (`live-flow-project.sh <cfg> edit`) with the project settings in the User settings JSON and `loggingLevel` `Error` (build.log `--- timings ---`; 3 runs each). Per project, never blended:
+| Project | unchanged | leaf edit (compile + link) | header edit |
+|---|---|---|---|
+| fmt `core-test` (7 units) | 0.34 s | 8.5 s (7.9 + 0.37) | 10.9 s before, 9.4 s after longest-first |
+| json (`unit-conversions1`) | 0.17 s | 9.2-9.4 s (8.6 + 0.43) | 8.6-9.8 s (one unit) |
+| Eigen `basicstuff` | 0.57 s (sources 354 ms for 495 headers) | 15.6-15.8 s (14.1-14.6 + 0.3-0.55; ~0.7 s of `sources` is not compile) | 14.7 s |
+| SQLite `shell.c` | 0.18 s | 1.5 s (1.1 + 0.27) | 1.25 s |
+- Everything except the compile itself is under ~1 s: link 0.25-0.55 s, unchanged-tree 0.2-0.6 s. Edit latency is clang time; the remaining non-compile cost is Eigen's ~0.7 s of header hashing/trace per edit.
+- Fixed: the pool started units in source-list order, so a long unit listed last (fmt `core-test.cc`, 8 s) began after a short one finished; `longestFirst` now starts the units that took longest last time first (unknown first). fmt header edit 10.9 to 9.4 s; what is left over the 7.9 s solo compile is contention among 5 parallel clangs.
+- The earlier SQLite stall did not reproduce (builds 1.1 s, no hang).

@@ -26,6 +26,7 @@ src/web/
   toolchain/
     concurrency.ts
       forEachLimited           # bounded-parallel loop
+      longestFirst             # job order by last duration
     chunkedFile.ts
       readChunked
     guestPaths.ts              # host path <-> /workspace guest path

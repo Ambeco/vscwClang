@@ -6,7 +6,7 @@ import { sharedMemoryLimits, type MemoryLimits } from '../host/sharedMemory';
 import { createGuestWorker, threadOptions } from '../host/workerHost';
 import { parseDiagnostics, withFailureFallback, type ParsedDiagnostic } from './diagnostics';
 import { DEFAULT_COMPILE_FLAGS, DEFAULT_C_COMPILE_FLAGS, DEFAULT_LINK_FLAGS } from './defaultFlags';
-import { forEachLimited } from './concurrency';
+import { forEachLimited, longestFirst } from './concurrency';
 import { checkUserFlags, splitFlags } from './flagPolicy';
 import { GUEST_WORKSPACE, fromGuestPath, toGuestPath } from './guestPaths';
 import { ObjectCache, defaultByteStore, hashText, splitIncludeTrace, type LinkRecord, type ReadGuestFile } from './objectCache';
@@ -48,10 +48,12 @@ export interface BuildResult {
 /** Compiled objects (kept in the browser's Cache API) and link results (this session only), so an unchanged tree skips the build and an edit recompiles only what it touches. */
 const objectCache = new ObjectCache(defaultByteStore('vscwclang-objects-v1'));
 const lastLinks = new Map<string, LinkRecord>();
+const lastCompileMs = new Map<string, number>();
 
 /** Drops every cached object and link result; the next build recompiles everything. */
 export async function clearBuildCache(): Promise<void> {
 	lastLinks.clear();
+	lastCompileMs.clear();
 	await objectCache.clear();
 }
 
@@ -207,6 +209,7 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 		}
 		cc ??= await run('clang.wasm', [...compileArgsWith(undefined), '-H', '-o', '-'], { captureStdout: true, objects });
 		log.appendLine(`[vscwclang] compiled ${source.guest} in ${Date.now() - started} ms (exit ${cc.exitCode}${withPch ? ', precompiled headers' : ''})`);
+		lastCompileMs.set(cacheKey, Date.now() - started);
 		report.push(`compiled ${source.guest} in ${Date.now() - started} ms`);
 		const trace = splitIncludeTrace(cc.stderr, GUEST_WORKSPACE);
 		stderrs[i] = trace.stderr;
@@ -216,7 +219,7 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 		const entry = sourceHash ? await objectCache.store(cacheKey, argsKey, sourceHash, trace.headers, cc.stdout, trace.stderr, readGuest) : undefined;
 		return { exitCode: 0, objectPath: `/obj/${objectName}`, objectId: entry?.id };
 	};
-	await forEachLimited(sources, compileParallelism(sources.length), async (source, i) => { compiles[i] = await compileSource(source, i); });
+	await forEachLimited(longestFirst(sources.length, i => lastCompileMs.get(cacheScope + sources[i].guest)), compileParallelism(sources.length), async i => { compiles[i] = await compileSource(sources[i], i); });
 	endPhase('sources');
 	diagnostics += stderrs.join('');
 	exitCode = compiles.find(c => c && c.exitCode !== 0)?.exitCode ?? 0;

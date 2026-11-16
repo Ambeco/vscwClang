@@ -16,3 +16,15 @@ export async function forEachLimited<T>(items: readonly T[], limit: number, work
 	}));
 	if (failure) { throw failure.error; }
 }
+
+/**
+ * Indices `0..count-1` ordered so the items that took longest last time start first (unknown durations lead, then stable).
+ *
+ * Starting the longest job last leaves the pool idle behind it; longest-first shortens the makespan.
+ *
+ * @helper longestFirst
+ */
+export function longestFirst(count: number, lastMs: (index: number) => number | undefined): number[] {
+	return Array.from({ length: count }, (_, i) => i)
+		.sort((a, b) => (lastMs(b) ?? Infinity) === (lastMs(a) ?? Infinity) ? a - b : (lastMs(b) ?? Infinity) > (lastMs(a) ?? Infinity) ? 1 : -1);
+}
