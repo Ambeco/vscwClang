@@ -189,7 +189,7 @@ if (!isMainThread && workerData?.clangWasiThread) {
 export async function runWasi(module, args, preopens, bytes, { stdinFd } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), 'clang-wasi-'));
 	try {
-		const outPath = join(dir, 'out'), errPath = join(dir, 'err');
+		const outPath = join(dir, 'out'), errPath = process.env.PERF_STDERR_FILE ?? join(dir, 'err'); // PERF_STDERR_FILE: lets a harness read stderr live or after killing a guest that will not exit
 		const stdoutFd = openSync(outPath, 'w'), stderrFd = openSync(errPath, 'w');
 		const started = performance.now();
 		const worker = new Worker(new URL(import.meta.url), { workerData: { clangWasi: true, t0: performance.timeOrigin + performance.now(), module, bytes, args, preopens: process.env.PERF_PROFILE_DIR ? { ...preopens, '/prof': process.env.PERF_PROFILE_DIR } : preopens, stdoutFd, stderrFd, stdinFd } });
