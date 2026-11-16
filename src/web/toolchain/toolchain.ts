@@ -48,12 +48,10 @@ export interface BuildResult {
 /** Compiled objects (kept in the browser's Cache API) and link results (this session only), so an unchanged tree skips the build and an edit recompiles only what it touches. */
 const objectCache = new ObjectCache(defaultByteStore('vscwclang-objects-v1'));
 const lastLinks = new Map<string, LinkRecord>();
-const lastCompileMs = new Map<string, number>();
 
 /** Drops every cached object and link result; the next build recompiles everything. */
 export async function clearBuildCache(): Promise<void> {
 	lastLinks.clear();
-	lastCompileMs.clear();
 	await objectCache.clear();
 }
 
@@ -199,6 +197,8 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 		}
 		log.appendLine(`[vscwclang] compiling ${source.guest}`);
 		const started = Date.now();
+		// Warms the header reads that store() needs afterwards, off the critical path; a new header is simply read later.
+		void objectCache.previous(cacheKey).then(p => p.headers.forEach(h => void readGuest(h)));
 		// -H lists the included headers on stderr (stripped below); they decide when the cached object goes stale.
 		let withPch = pch !== undefined && await loadPch(pch);
 		let cc = withPch ? await run('clang.wasm', [...compileArgs, '-H', '-o', '-'], { captureStdout: true, objects }) : undefined;
@@ -209,17 +209,20 @@ async function buildUncached(request: BuildRequest, log: vscode.OutputChannel, c
 		}
 		cc ??= await run('clang.wasm', [...compileArgsWith(undefined), '-H', '-o', '-'], { captureStdout: true, objects });
 		log.appendLine(`[vscwclang] compiled ${source.guest} in ${Date.now() - started} ms (exit ${cc.exitCode}${withPch ? ', precompiled headers' : ''})`);
-		lastCompileMs.set(cacheKey, Date.now() - started);
 		report.push(`compiled ${source.guest} in ${Date.now() - started} ms`);
 		const trace = splitIncludeTrace(cc.stderr, GUEST_WORKSPACE);
 		stderrs[i] = trace.stderr;
 		if (trace.stderr !== '') { request.onDiagnostics?.(parseDiagnostics(stderrs.join(''))); }
 		if (cc.exitCode !== 0) { return { exitCode: cc.exitCode }; }
 		objects.setFile(objectName, cc.stdout);
-		const entry = sourceHash ? await objectCache.store(cacheKey, argsKey, sourceHash, trace.headers, cc.stdout, trace.stderr, readGuest) : undefined;
+		const entry = sourceHash ? await objectCache.store(cacheKey, argsKey, sourceHash, trace.headers, cc.stdout, trace.stderr, readGuest, Date.now() - started) : undefined;
 		return { exitCode: 0, objectPath: `/obj/${objectName}`, objectId: entry?.id };
 	};
-	await forEachLimited(longestFirst(sources.length, i => lastCompileMs.get(cacheScope + sources[i].guest)), compileParallelism(sources.length), async i => { compiles[i] = await compileSource(sources[i], i); });
+	// Slowest first, by the last compile time kept in the cache; a never-built source counts as slower than any, biggest first.
+	const sourceSizes = await Promise.all(sources.map(async s => (await readGuest(s.guest))?.byteLength ?? 0));
+	const priorMs = await Promise.all(sources.map(async s => (await objectCache.previous(cacheScope + s.guest)).compileMs));
+	const order = longestFirst(sources.length, i => priorMs[i] ?? 1e9 + sourceSizes[i]);
+	await forEachLimited(order, compileParallelism(sources.length), async i => { compiles[i] = await compileSource(sources[i], i); });
 	endPhase('sources');
 	diagnostics += stderrs.join('');
 	exitCode = compiles.find(c => c && c.exitCode !== 0)?.exitCode ?? 0;

@@ -61,6 +61,7 @@ interface Meta {
 	stderr: string;
 	size: number;
 	lastUsed: number;
+	compileMs?: number;
 }
 
 export type ReadGuestFile = (guestPath: string) => Promise<Uint8Array<ArrayBuffer> | undefined>;
@@ -171,8 +172,15 @@ export class ObjectCache {
 		return { id: m.id, object, stderr: m.stderr };
 	}
 
+	/** What the last successful compile of `key` took and the headers it read, even when that entry is now stale; used to order and prefetch. */
+	async previous(key: string): Promise<{ compileMs?: number; headers: string[] }> {
+		await this.load();
+		const m = this.meta.get(key);
+		return { compileMs: m?.compileMs, headers: m?.headers.map(([path]) => path) ?? [] };
+	}
+
 	/** Stores a successful compile; `headers` are guest paths, hashed through `read` now. Undefined if it could not be kept. */
-	async store(key: string, argsKey: string, sourceHash: string, headers: string[], object: Uint8Array<ArrayBuffer>, stderr: string, read: ReadGuestFile): Promise<CacheEntry | undefined> {
+	async store(key: string, argsKey: string, sourceHash: string, headers: string[], object: Uint8Array<ArrayBuffer>, stderr: string, read: ReadGuestFile, compileMs?: number): Promise<CacheEntry | undefined> {
 		await this.load();
 		const hashes: [string, string][] = [];
 		for (const path of headers) {
@@ -186,7 +194,7 @@ export class ObjectCache {
 		} catch {
 			return undefined;
 		}
-		this.meta.set(key, { id, argsKey, sourceHash, headers: hashes, stderr, size: object.byteLength, lastUsed: this.now() });
+		this.meta.set(key, { id, argsKey, sourceHash, headers: hashes, stderr, size: object.byteLength, lastUsed: this.now(), compileMs });
 		this.dirty = true;
 		if (this.now() - this.lastSave >= this.saveIntervalMs) { await this.saveIndex(); }
 		return { id, object, stderr };

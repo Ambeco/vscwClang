@@ -44,6 +44,16 @@ suite('ObjectCache', () => {
 		assert.deepStrictEqual(hit?.object, obj);
 	});
 
+	test('previous() keeps the compile time and headers of a stale entry, across a reload', async () => {
+		const c = new ObjectCache(store);
+		await c.store('k', 'args', 'src', ['/workspace/a.h'], obj, '', read, 1234);
+		assert.strictEqual(await c.lookup('k', 'args', 'changed', read), undefined);
+		assert.deepStrictEqual(await c.previous('k'), { compileMs: 1234, headers: ['/workspace/a.h'] });
+		assert.deepStrictEqual(await c.previous('never'), { compileMs: undefined, headers: [] });
+		await c.flush();
+		assert.strictEqual((await new ObjectCache(store).previous('k')).compileMs, 1234);
+	});
+
 	test('misses when the source, the args or a header changes, or a header vanishes', async () => {
 		const c = new ObjectCache(store);
 		await c.store('k', 'args', 'src', ['/workspace/a.h'], obj, '', read);
