@@ -77,6 +77,17 @@ if (CFG.mode === 'warm') {
     }
     throw new Error('no palette row ' + name);
   };
+  // On a stalled build: the tail of the vscwclang output channel (copied through the clipboard) shows what the extension was doing.
+  const dumpOutput = async () => {
+    try {
+      await runCmd('Output: Show Output Channels...'); await sleep(800); await p.keyboard.type('vscwclang'); await sleep(600); await p.keyboard.press('Enter'); await sleep(1500);
+      await ctx.grantPermissions(['clipboard-read', 'clipboard-write']);
+      await runCmd('Output: Focus on Output View'); await sleep(700); await p.keyboard.press('Control+a'); await p.keyboard.press('Control+c'); await sleep(500);
+      const text = await p.evaluate(() => navigator.clipboard.readText()); await ctx.clearPermissions();
+      const lines = text.split('\n').map(l => l.replace(/\r$/, ''));
+      out.push('output tail: ' + (CFG.dumpFilter ? lines.filter(l => new RegExp(CFG.dumpFilter).test(l)).slice(-40) : lines.slice(-12)).join(' | ').slice(-6000));
+    } catch (e) { out.push('dumpOutput failed: ' + e.message.slice(0, 120)); }
+  };
   const build = async (label, edit) => {
     log('PROGRESS', label + ' start');
     if (edit) { await edit(); }
@@ -93,12 +104,14 @@ if (CFG.mode === 'warm') {
       await sleep(50);
     }
     out.push(label + ': TIMEOUT');
+    await dumpOutput();
   };
   await ensureOpen(CFG.leaf); await sleep(CFG.settleMs);
   await build('first build (page warm)');
   await build('unchanged');
   for (let i = 0; i < CFG.runs; i++) { await build('edit leaf ' + CFG.leaf, async () => { await openFile(CFG.leaf); await sleep(500); await typeAtEnd(CFG.leafSnippet.replaceAll('N', ++n)); }); }
   for (let i = 0; i < CFG.runs; i++) { await build('edit header ' + CFG.header, async () => { await openFile(CFG.header); await sleep(500); await typeAtEnd('\n// edit ' + (++n) + '\n'); }); }
+  if (CFG.dumpAtEnd) { await dumpOutput(); }
   const last = await readLog(); if (last) { out.push('log tail: ' + last.text.slice(-400).replace(/\n/g, ' | ')); }
 }
 } catch (e) { out.push('ERR ' + e.message.slice(0, 300)); }

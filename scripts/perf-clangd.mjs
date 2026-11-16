@@ -29,7 +29,7 @@ rmSync(work, { recursive: true, force: true });
 for (const d of ['cfg', 'tmp']) { mkdirSync(join(work, d), { recursive: true }); }
 const stubDir = join(work, 'stubs'); mkdirSync(stubDir);
 for (const [n, text] of Object.entries(project.stubs ?? {})) { writeFileSync(join(stubDir, n), text); }
-const db = units.map(u => ({ directory: '/workspace', file: `/workspace/${u.file}`, arguments: [u.file.endsWith('.c') ? 'clang' : 'clang++', ...COMPILE, ...DEFAULT_COMPILE_FLAGS, ...project.flags, ...(u.flags ?? []), `/workspace/${u.file}`] }));
+const db = units.map(u => ({ directory: '/workspace', file: `/workspace/${u.file}`, arguments: [u.file.endsWith('.c') ? 'clang' : 'clang++', ...COMPILE, ...DEFAULT_COMPILE_FLAGS, ...project.flags, ...(u.flags ?? []), ...(process.env.PERF_CLANGD_EXTRA?.split(' ') ?? []), `/workspace/${u.file}`] }));
 writeFileSync(join(work, 'cfg', 'compile_commands.json'), JSON.stringify(db));
 if (process.env.PERF_CLANGD_CONFIG) { // clangd config.yaml text, read from XDG_CONFIG_HOME=/cfg
 	mkdirSync(join(work, 'cfg', 'clangd'), { recursive: true });
