@@ -123,6 +123,7 @@ export async function startClangdClient(context: vscode.ExtensionContext, log: v
 	const args = clangdArgs(clangdLogLevel(level), clangdThreadCount(globalThis.navigator?.hardwareConcurrency), mapped.args);
 	mark('workspace');
 	const process = await createWorkerProcess(context, {
+		onRpcReport: text => log.appendLine(`[vscwclang] ${text}`),
 		name: 'clangd', module, args, env: { XDG_CACHE_HOME: GUEST_CACHE, XDG_CONFIG_HOME: GUEST_CONFIG }, memoryLimits,
 		mounts: [
 			{ guestPath: GUEST_WORKSPACE, uri: folder },

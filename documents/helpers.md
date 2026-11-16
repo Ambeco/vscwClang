@@ -10,6 +10,10 @@ src/web/
     tidySeverity.ts
       raiseTidyHints           # clang-tidy Hints -> Warnings so they reach Problems
   host/
+    cachingGuestFs.ts
+      CachingGuestFs           # shared read cache, validated by stat
+    rpcStats.ts
+      RpcStats                 # per-op file-request totals
     sharedMemory.ts
       createSharedMemory       # imported shared memory of a wasi-threads module
     workspaceSync.ts

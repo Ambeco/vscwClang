@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { GuestProcess, StdinQueue, type GuestFileSystem, type ProcessOutcome, type TrapReport, type WorkerLike } from '../../host/guestProcess';
+import { RpcStats } from '../../host/rpcStats';
 import { createSharedMemory } from '../../host/sharedMemory';
 import { GuestFsError, type GuestDirEntry, type GuestStat } from '../../host/wasiGuest';
 
@@ -213,7 +214,8 @@ suite('GuestProcess over a real Worker', function () {
 	});
 
 	test('a response larger than one channel chunk arrives intact', async () => {
-		const big = new Uint8Array(700_000).map((_, i) => i % 251);
+		const big = new Uint8Array(2_500_000).map((_, i) => i % 251);
+		const stats = new RpcStats();
 		const module = new WebAssembly.Module(readFileSync(join(FIXTURES, 'hello.wasm')));
 		const fs = new MemoryFs();
 		fs.files.set('/workspace/big.bin', big);
@@ -229,10 +231,15 @@ suite('GuestProcess over a real Worker', function () {
 				endpoint.postMessage({ type: 'done', result: { kind: 'exit', code: 0 } });
 			});
 		`);
-		const process = new GuestProcess({ module, args: [], env: {}, preopens: [], fs, stdin: new StdinQueue(), onOutput: () => undefined, createWorker: () => nodeWorker(code) });
+		const process = new GuestProcess({ module, args: [], env: {}, preopens: [], fs, stats, stdin: new StdinQueue(), onOutput: () => undefined, createWorker: () => nodeWorker(code) });
 		assert.deepStrictEqual(await process.run(), { kind: 'exit', code: 0 });
 		const expected = big.reduce((n, b) => n + b, 0);
-		assert.strictEqual(decoder.decode(fs.files.get('/workspace/sum.txt')), `700000:${expected}`);
+		assert.strictEqual(decoder.decode(fs.files.get('/workspace/sum.txt')), `2500000:${expected}`);
+		const report = stats.takeReport('test');
+		assert.match(report, /readFile: 1 calls, in 0 KiB, out 2441 KiB/);
+		assert.match(report, /readFile \/workspace\/big\.bin: 1x, 2441 KiB/);
+		assert.match(report, /writeFile: 1 calls/);
+		assert.strictEqual(stats.takeReport('test'), '');
 	});
 
 	test('wasi-threads: four pthreads share memory, a mutex counts exactly, and a thread can write to stderr', async () => {

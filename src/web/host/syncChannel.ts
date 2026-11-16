@@ -1,4 +1,5 @@
 import { GuestFsError, type FsErrno } from './wasiGuest';
+import type { RpcStats } from './rpcStats';
 
 /** One side of a message port: a Web Worker (or `self` inside one) in the browser, a `worker_threads` port in node tests. */
 export interface Endpoint {
@@ -19,11 +20,12 @@ export interface RpcResult { value?: unknown; bytes?: Uint8Array }
 export type RpcHandler = (op: string, args: unknown, bytes: Uint8Array | undefined) => Promise<RpcResult | void>;
 
 const HEADER_BYTES = 16;
-const CHUNK_BYTES = 256 * 1024;
+const CHUNK_BYTES = 1024 * 1024;
 export const CHANNEL_BYTES = HEADER_BYTES + CHUNK_BYTES;
 const STATE = 0;
 const LENGTH = 1;
 const LAST = 2;
+const TOTAL = 3;
 const FS_ERRNOS = new Set<string>(['ENOENT', 'EEXIST', 'ENOTDIR', 'EISDIR', 'ENOTEMPTY', 'EACCES', 'EIO', 'ENOSYS']);
 
 /**
@@ -68,20 +70,20 @@ export class SyncRpcClient {
 	}
 
 	private receive(): Uint8Array {
-		const parts: Uint8Array[] = [];
+		let whole: Uint8Array | undefined;
+		let offset = 0;
 		for (;;) {
 			Atomics.wait(this.state, STATE, 0);
 			const length = this.state[LENGTH];
 			const last = this.state[LAST] === 1;
-			parts.push(this.data.slice(0, length));
+			// The server announces the full size with every chunk, so each byte is copied out of the channel exactly once.
+			whole ??= new Uint8Array(this.state[TOTAL]);
+			whole.set(this.data.subarray(0, length), offset);
+			offset += length;
 			Atomics.store(this.state, STATE, 0);
 			Atomics.notify(this.state, STATE);
-			if (last) { break; }
+			if (last) { return whole; }
 		}
-		if (parts.length === 1) { return parts[0]; }
-		const whole = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-		parts.reduce((off, p) => { whole.set(p, off); return off + p.length; }, 0);
-		return whole;
 	}
 }
 
@@ -90,7 +92,7 @@ export class SyncRpcServer {
 	private readonly state: Int32Array;
 	private readonly data: Uint8Array;
 
-	constructor(shared: SharedArrayBuffer, private readonly handler: RpcHandler) {
+	constructor(shared: SharedArrayBuffer, private readonly handler: RpcHandler, private readonly stats?: RpcStats) {
 		this.state = new Int32Array(shared, 0, HEADER_BYTES / 4);
 		this.data = new Uint8Array(shared, HEADER_BYTES);
 	}
@@ -98,36 +100,53 @@ export class SyncRpcServer {
 	async handle(request: RpcRequest): Promise<void> {
 		let json: string;
 		let bytes: Uint8Array | undefined;
+		let failed = false;
+		const started = performance.now();
 		try {
 			const result = await this.handler(request.op, request.args, request.bytes);
 			json = JSON.stringify({ value: result?.value });
 			bytes = result?.bytes;
 		} catch (e) {
+			failed = true;
 			const code = (e as { code?: unknown }).code;
 			json = JSON.stringify({ error: { code: typeof code === 'string' ? code : undefined, message: e instanceof Error ? e.message : String(e) } });
 		}
-		if (!request.reply) { return; }
-		const head = new TextEncoder().encode(json);
-		const whole = new Uint8Array(4 + head.length + (bytes?.length ?? 0));
-		new DataView(whole.buffer).setUint32(0, head.length, true);
-		whole.set(head, 4);
-		if (bytes) { whole.set(bytes, 4 + head.length); }
-		await this.stream(whole);
+		const handled = performance.now();
+		if (request.reply) {
+			const head = new TextEncoder().encode(json);
+			const prefix = new Uint8Array(4 + head.length);
+			new DataView(prefix.buffer).setUint32(0, head.length, true);
+			prefix.set(head, 4);
+			await this.stream(bytes ? [prefix, bytes] : [prefix]);
+		}
+		const path = (request.args as { path?: string } | undefined)?.path;
+		this.stats?.record(request.op, typeof path === 'string' ? path : undefined, request.bytes?.length ?? 0, bytes?.length ?? 0, handled - started, performance.now() - handled, failed);
 	}
 
-	private async stream(whole: Uint8Array): Promise<void> {
+	/** Writes the concatenation of `segments` into the channel chunk by chunk, without building it first. */
+	private async stream(segments: Uint8Array[]): Promise<void> {
+		const total = segments.reduce((n, s) => n + s.length, 0);
 		let offset = 0;
+		let segment = 0;
+		let inSegment = 0;
 		do {
-			const length = Math.min(CHUNK_BYTES, whole.length - offset);
-			this.data.set(whole.subarray(offset, offset + length));
+			const length = Math.min(CHUNK_BYTES, total - offset);
+			for (let filled = 0; filled < length;) {
+				const piece = Math.min(length - filled, segments[segment].length - inSegment);
+				this.data.set(segments[segment].subarray(inSegment, inSegment + piece), filled);
+				filled += piece;
+				inSegment += piece;
+				if (inSegment === segments[segment].length) { segment++; inSegment = 0; }
+			}
 			offset += length;
-			const last = offset >= whole.length;
+			const last = offset >= total;
+			this.state[TOTAL] = total;
 			this.state[LENGTH] = length;
 			this.state[LAST] = last ? 1 : 0;
 			Atomics.store(this.state, STATE, 1);
 			Atomics.notify(this.state, STATE);
 			if (!last) { await this.untilConsumed(); }
-		} while (offset < whole.length);
+		} while (offset < total);
 	}
 
 	// Firefox has no Atomics.waitAsync; polling is slow but only matters for responses over one chunk.

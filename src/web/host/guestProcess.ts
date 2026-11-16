@@ -1,5 +1,6 @@
 import { SPAWN_THREAD_OP, type DoneMessage, type StartMessage, type ThreadMessage } from './guestWorker';
 import { CHANNEL_BYTES, SyncRpcServer, type RpcHandler, type RpcRequest } from './syncChannel';
+import type { RpcStats } from './rpcStats';
 import type { GuestDirEntry, GuestResult, GuestStat } from './wasiGuest';
 
 /** What `GuestProcess` needs from a Worker; `Worker` itself in the browser, an adapter over `worker_threads` in node tests. */
@@ -84,6 +85,8 @@ export interface GuestProcessOptions {
 	fs: GuestFileSystem;
 	stdin: StdinQueue;
 	onOutput: (fd: 1 | 2, data: Uint8Array) => void;
+	/** Counts every request from every Worker of the process (see `RpcStats`). */
+	stats?: RpcStats;
 	createWorker: () => WorkerLike;
 	/** Makes the Worker for each `thread-spawn` (needed only with `sharedMemory`); async so callers can reuse `createGuestWorker`. */
 	createThreadWorker?: () => WorkerLike | Promise<WorkerLike>;
@@ -133,7 +136,7 @@ export class GuestProcess {
 
 	/** Answers one Worker's messages: its end, its failure, a request to spawn a thread, or a file/stdio request. */
 	private serve(worker: WorkerLike, channel: SharedArrayBuffer, finish: (outcome: ProcessOutcome) => void, threads: StartMessage['threads'], tid: number): void {
-		const server = new SyncRpcServer(channel, this.makeHandler());
+		const server = new SyncRpcServer(channel, this.makeHandler(), this.options.stats);
 		worker.onMessage(message => {
 			const done = message as DoneMessage;
 			if (done.type === 'done') {

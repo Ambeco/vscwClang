@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import { GuestProcess, StdinQueue, type TrapReport } from './guestProcess';
+import { CachingGuestFs } from './cachingGuestFs';
+import { RpcStats } from './rpcStats';
 import { VscodeGuestFs, type GuestMount } from './vscodeGuestFs';
 import type { MemoryLimits } from './sharedMemory';
 import { createGuestWorker, threadOptions } from './workerHost';
@@ -55,7 +57,18 @@ export interface WorkerProcessOptions {
 	 * (a program without shared memory has nothing a debugger could read after a trap).
 	 */
 	onTrap?: (trap: TrapReport) => boolean;
+	/**
+	 * Receives a summary of the guest's file requests every `RPC_REPORT_MS` while it is busy (the extension host serves
+	 * all of them on one thread, so a threaded guest can starve it), and a last one when the guest ends.
+	 */
+	onRpcReport?: (text: string) => void;
 }
+
+/** How often a busy guest's file-request summary is reported. */
+const RPC_REPORT_MS = 10_000;
+/** A window is reported only when the extension host spent this long serving requests in it, or saw this many. */
+const REPORT_BUSY_MS = 300;
+const REPORT_CALLS = 5000;
 
 export type { TrapReport };
 
@@ -65,9 +78,17 @@ export async function createWorkerProcess(context: vscode.ExtensionContext, opti
 	const stderr = new OutputPipe();
 	const worker = await createGuestWorker(context);
 	const threads = threadOptions(context, options.memoryLimits);
+	const stats = options.onRpcReport ? new RpcStats() : undefined;
+	const fs = new CachingGuestFs(new VscodeGuestFs(options.mounts));
+	const report = (label: string, always: boolean) => {
+		if (!stats || (!always && stats.busyMs < REPORT_BUSY_MS && stats.callCount < REPORT_CALLS)) { return; }
+		const text = stats.takeReport(label, fs.describe());
+		if (text) { options.onRpcReport?.(`${options.name} ${text}`); }
+	};
+	const timer = stats ? setInterval(() => report('last 10 s:', false), RPC_REPORT_MS) : undefined;
 	const guest = new GuestProcess({
 		module: options.module, args: [options.name, ...options.args], env: options.env,
-		preopens: options.mounts.map(m => m.guestPath), terminal: options.terminal, fs: new VscodeGuestFs(options.mounts), stdin,
+		preopens: options.mounts.map(m => m.guestPath), terminal: options.terminal, fs, stats, stdin,
 		onOutput: (fd, data) => (fd === 1 ? stdout : stderr).emit(data),
 		createWorker: () => worker,
 		...threads, onTrap: options.memoryLimits ? options.onTrap : undefined,
@@ -78,6 +99,8 @@ export async function createWorkerProcess(context: vscode.ExtensionContext, opti
 		stdout, stderr,
 		async run() {
 			const outcome = await guest.run();
+			clearInterval(timer);
+			report('at exit:', true);
 			stdin.end();
 			switch (outcome.kind) {
 				case 'exit': return outcome.code;
