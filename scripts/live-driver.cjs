@@ -83,7 +83,7 @@ const log = (kind, msg) => fs.appendFileSync(LOG, `[${new Date().toISOString().s
         }
       };
       rec('');
-      for (const [k, v0] of Object.entries(opts.extra || {})) { let v = typeof v0 === 'string' ? v0 : fs.readFileSync(v0.file, 'utf8'); if (v0.bytes) { v = v.slice(0, v0.bytes); } if (v0.repeat) { v = v.repeat(v0.repeat); } files[k] = v; bytes += v.length; } // {file: diskPath, bytes?: N, repeat?: N} copies (a prefix of, repeated) a file
+      for (const [k, v0] of Object.entries(opts.extra || {})) { let v = typeof v0 === 'string' ? v0 : fs.readFileSync(v0.file, 'utf8'); if (typeof v0 !== 'string' && v0.bytes) { v = v.slice(0, v0.bytes); } if (typeof v0 !== 'string' && v0.repeat) { v = v.repeat(v0.repeat); } files[k] = v; bytes += v.length; } // {file: diskPath, bytes?: N, repeat?: N} copies (a prefix of, repeated) a file
       await api.seed(files);
       return { files: Object.keys(files).length, bytes };
     },

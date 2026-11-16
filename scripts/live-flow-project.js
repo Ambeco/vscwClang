@@ -1,7 +1,9 @@
 // Project-parameterized browser flows for live-driver.cjs (documents/perf_baseline.md "Browser flows by project").
 // The driver takes only a script body, so prefix a config: scripts/live-flow-project.sh does it.
 //   CFG = { mode: 'warm'|'open'|'edit', src, include (regex source), exclude (regex source), settings: {...},
-//           open, prependBad, hoverTok, defTab (regex source), leaf, header, runs }
+//           open, prependBad, hoverTok, defTab (regex source), leaf, header, runs, clearCache (empty the object cache before the first build) }
+// Configs live in scripts/flow-configs. live-flow-project.sh first puts CFG.settings into the User settings (flow-configs/setuser.js),
+// because the seeded folder's .vscode/settings.json is not applied in the test Chrome.
 // warm: seed, open `open`, wait until clangd finished its background index.
 // open: flow 1, seed a file with a deliberate error, time first squiggle, hover and go-to-definition from Ctrl+P Enter.
 // edit: flow 2, Build C++ (first, unchanged, leaf edit x runs, header edit x runs); completion is build.log's mtime.
@@ -107,6 +109,9 @@ if (CFG.mode === 'warm') {
     out.push(label + ': TIMEOUT');
     await dumpOutput();
   };
+  // The browser FS has no file watcher: a tab restored from the previous seed keeps the old content and a save would overwrite the seeded file.
+  await runCmd('View: Close All Editors'); await sleep(800);
+  if (CFG.clearCache) { await runCmd('vscwClang: Clear build cache'); await sleep(1500); out.push('build cache cleared'); }
   await ensureOpen(CFG.leaf); await sleep(CFG.settleMs);
   await build('first build (page warm)');
   await build('unchanged');
