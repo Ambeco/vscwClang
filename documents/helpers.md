@@ -13,6 +13,7 @@ src/web/
       BuildGraph               # actions as nodes, edges from files read/written
     lower.ts
       lowerToBuildRequest      # one program of the graph -> inputs of toolchain.build()
+      linkOutputs              # programs the graph links (the goal choices)
     makeTrace.ts
       parseMakeTrace           # make -n -B --trace output -> recipes with target and cwd
       buildGraphFromMake       # ... -> BuildGraph, refuses untrustworthy dry runs
@@ -46,6 +47,8 @@ src/web/
       fromGuestPath
       stripWorkspaceFolder
       isToolchainGuestPath     # /sysroot and /resource
+    toolchainStore.ts
+      VscodeByteStore          # ByteStore over vscode.workspace.fs
     diagnostics.ts
       isSameReport             # build vs clangd Problems
     projectModel.ts

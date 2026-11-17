@@ -73,6 +73,8 @@ export function activate(context: vscode.ExtensionContext) {
 			await context.workspaceState.update(LAST_ARGS_KEY, line);
 			await buildAndRun(context, log, diagnostics, splitArgs(line), run.build);
 		}),
+		vscode.commands.registerCommand('vscwclang.makeBuild', () => runMakeCommand(context, log, diagnostics, false)),
+		vscode.commands.registerCommand('vscwclang.makeRun', () => runMakeCommand(context, log, diagnostics, true)),
 		vscode.commands.registerCommand('vscwclang.downloadToolchain', async () => {
 			await getToolchainStore(context, log).ensure();
 			void vscode.window.showInformationMessage('vscwClang: toolchain is downloaded and cached.');
@@ -130,6 +132,27 @@ async function runPlan(context: vscode.ExtensionContext, log: vscode.OutputChann
 	if (!folder) { return { cancelled: false, args: runArgsSetting() }; }
 	const chosen = await chooseRun(context, folder, log);
 	return { cancelled: chosen.cancelled, args: chosen.launch?.args ?? runArgsSetting(), build: chosen.build };
+}
+
+let makePack: import('./make/makePack').MakePack | undefined;
+
+/** Build (and optionally Run) the folder's Make project; the Make layer and its pack load on first use. */
+async function runMakeCommand(context: vscode.ExtensionContext, log: vscode.OutputChannel, diagnostics: vscode.DiagnosticCollection, run: boolean): Promise<void> {
+	try {
+		const [{ MakePack }, { makeBuildOptions }] = await Promise.all([import('./make/makePack'), import('./make/makeBuild')]);
+		makePack ??= new MakePack(context, log);
+		const plan = await makeBuildOptions(context, log, makePack);
+		if (plan.cancelled) { return; }
+		if (run) { await buildAndRun(context, log, diagnostics, runArgsSetting(), plan.build); return; }
+		const { folder, output, result } = await buildWorkspace(context, log, plan.build, (parsed, f, o) => publishDiagnostics(diagnostics, f, parsed, o));
+		publishDiagnostics(diagnostics, folder, result.parsed, output);
+		reportBuild(log, output, result.exitCode);
+	} catch (e) {
+		const message = e instanceof Error ? e.message : String(e);
+		log.appendLine(`[vscwclang] ${message}`);
+		log.show(true);
+		void vscode.window.showErrorMessage(message.startsWith('vscwClang') ? message : `vscwClang: ${message}`);
+	}
 }
 
 async function buildAndRun(context: vscode.ExtensionContext, log: vscode.OutputChannel, diagnostics: vscode.DiagnosticCollection, args: string[], build?: BuildOptions): Promise<void> {

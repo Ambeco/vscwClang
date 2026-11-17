@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import { classifyShellLine } from '../../buildgraph/classify';
 import { BuildGraph, BuildGraphError } from '../../buildgraph/graph';
-import { LowerError, lowerToBuildRequest } from '../../buildgraph/lower';
+import { linkOutputs, LowerError, lowerToBuildRequest } from '../../buildgraph/lower';
 
 function graphOf(lines: string[], cwd = '/workspace'): BuildGraph {
 	const g = new BuildGraph();
@@ -12,6 +12,11 @@ const rejects = (fn: () => unknown, pattern: RegExp) =>
 	assert.throws(fn, (e: unknown) => e instanceof LowerError && pattern.test(e.message) && /Did you mean/.test(e.message));
 
 suite('lowerToBuildRequest', () => {
+	test('linkOutputs lists each linked program in build order', () => {
+		const g = graphOf(['cc -c a.c -o a.o', 'cc -o first a.o', 'ar rcs libb.a a.o', 'cc -c b.c -o b.o', 'cc -o second b.o -L. -lb']);
+		assert.deepStrictEqual(linkOutputs(g), ['/workspace/first', '/workspace/second']);
+	});
+
 	test('a library and a test program: the archive is folded in and -lx is dropped', () => {
 		const g = graphOf([
 			'cc -O2 -Wall -c lib.c -o lib.o',

@@ -38,7 +38,8 @@ async function withSlowProgress<T>(title: string, work: Promise<T>, delayMs = 40
 
 const OVERRIDE_SETTING = 'toolchainUrl';
 
-class VscodeByteStore implements ByteStore {
+/** @helper */
+export class VscodeByteStore implements ByteStore {
 	constructor(private readonly root: vscode.Uri) {}
 	private uri(name: string) { return vscode.Uri.joinPath(this.root, ...name.split('/')); }
 	async size(name: string) {

@@ -40,6 +40,8 @@
     "onCommand:vscwclang.clearBuildCache",
     "onCommand:vscwclang.run",
     "onCommand:vscwclang.runWithArgs",
+    "onCommand:vscwclang.makeBuild",
+    "onCommand:vscwclang.makeRun",
     "onCommand:vscwclang.switchHeaderSource",
     "onTaskType:vscwclang",
     "onTaskType:cppbuild",
@@ -259,6 +261,18 @@
           "scope": "application",
           "markdownDescription": "Development override: directory URL serving a toolchain made by `scripts/make-toolchain-dist.mjs` (`manifest.json` plus chunks). When set, the manifest is trusted as served instead of being checked against the hash pinned in the extension. Leave empty to use the pinned toolchain. The host must send CORS and `Cross-Origin-Resource-Policy: cross-origin` headers."
         },
+        "vscwclang.makePackUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "markdownDescription": "Development override: directory URL serving the Make pack made by `scripts/build-make-wasm.mjs` (`manifest.json` plus `make.zip`). When set, the manifest is trusted as served instead of being checked against the hash pinned in the extension."
+        },
+        "vscwclang.make.goal": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "The make target the Make commands dry-run (default: the Makefile's default goal). Set it to the target that builds your program or test executable."
+        },
         "vscwclang.flags": {
           "scope": "resource",
           "type": "array",
@@ -437,6 +451,14 @@
       {
         "command": "vscwclang.run",
         "title": "vscwClang: Build and Run C++ (clang.wasm)"
+      },
+      {
+        "command": "vscwclang.makeBuild",
+        "title": "vscwClang: Build C++ with Make (make.wasm)"
+      },
+      {
+        "command": "vscwclang.makeRun",
+        "title": "vscwClang: Build and Run C++ with Make (make.wasm)"
       },
       {
         "command": "vscwclang.runWithArgs",

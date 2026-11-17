@@ -108,3 +108,8 @@ export function lowerToBuildRequest(graph: BuildGraph, goal: string): LoweredBui
 		notes,
 	};
 }
+
+/** @helper The guest paths of the programs `graph` links, in build order; the choices for `lowerToBuildRequest`. */
+export function linkOutputs(graph: BuildGraph): string[] {
+	return graph.nodes.filter(n => n.action.kind === 'link').flatMap(n => n.outputs);
+}

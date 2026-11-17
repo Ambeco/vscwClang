@@ -10,6 +10,8 @@ import { runProgram } from '../../runProgram';
 import { createTaskProvider } from '../../tasks';
 import { userFlags } from '../../projectConfig';
 import { ToolchainStore, type StoreUi } from '../../toolchain/toolchainStore';
+import { MakePack } from '../../make/makePack';
+import { makeBuildOptions } from '../../make/makeBuild';
 
 // Needs a workspace folder and --coi (see the `test` script in package.json).
 suite('vscwClang build (in browser)', function () {
@@ -177,6 +179,32 @@ suite('vscwClang build (in browser)', function () {
 		assert.strictEqual(result.exitCode, 0, result.diagnostics);
 		const ran = await runWasm(uri('make-test.wasm'));
 		assert.deepStrictEqual([ran.exitCode, ran.stdout], [0, '42\n']);
+	});
+
+	test('real make.wasm dry-runs a library plus test Makefile, and the lowered program builds and runs', async () => {
+		const extension = vscode.extensions.all.find(e => e.id.endsWith('.vscwclang'))!;
+		await vscode.workspace.getConfiguration('vscwclang').update('makePackUrl', `${extension.extensionUri.toString().replace(/\/$/, '')}/llvm-artifacts/makedist`, vscode.ConfigurationTarget.Global);
+		try {
+			await write('lib.h', 'int f(void);\n');
+			await write('lib.c', '#include "lib.h"\nint f(void) { return 41; }\n');
+			await write('t.c', '#include <stdio.h>\n#include "lib.h"\nint main(void) { printf("%d\\n", f() + 1); return 0; }\n');
+			await write('Makefile', ['CC = cc', 'CFLAGS = -O2 -Wall -DNAME=1', 'all: test', 'libx.a: lib.o', '\tar rcs $@ $^', '\tranlib $@', 'test: t.o libx.a', '\t$(CC) -o $@ t.o -L. -lx', '%.o: %.c lib.h', '\t$(CC) $(CFLAGS) -c $< -o $@', ''].join('\n'));
+			const plan = await makeBuildOptions(context as vscode.ExtensionContext, log, new MakePack(context, log), { directory: dir.path.split('/').pop() });
+			assert.ok(plan.build && !plan.cancelled);
+			assert.deepStrictEqual(plan.build.sourceFiles?.map(s => s.split('/').pop()).sort(), ['lib.c', 't.c']);
+			assert.strictEqual(plan.build.artifactName, 'test.wasm');
+			const workspaceFolder = vscode.workspace.workspaceFolders![0].uri;
+			const result = await build({
+				sources: plan.build.sourceFiles!.map(s => vscode.Uri.joinPath(workspaceFolder, s)),
+				sourceFlags: Object.fromEntries(Object.entries(plan.build.sourceFlags!).map(([rel, flags]) => [`/workspace/${rel}`, flags])),
+				flags: plan.build.flags ?? [], output: uri('real-make.wasm'), mode: 'release',
+			}, log, context);
+			assert.strictEqual(result.exitCode, 0, result.diagnostics);
+			const ran = await runWasm(uri('real-make.wasm'));
+			assert.deepStrictEqual([ran.exitCode, ran.stdout], [0, '42\n']);
+		} finally {
+			await vscode.workspace.getConfiguration('vscwclang').update('makePackUrl', undefined, vscode.ConfigurationTarget.Global);
+		}
 	});
 
 	test('precompiled headers: used for matching flags, skipped for others, retried without on a name clash', async () => {
