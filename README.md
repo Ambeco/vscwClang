@@ -1,44 +1,113 @@
 # vscwClang
 
-C and C++ in Visual Studio Code for Web: compile and run with Clang, entirely in your browser, with nothing installed.
+**C and C++ in VS Code for the Web: build, run and debug with Clang, entirely in your browser. Nothing to install.**
 
-vscwClang runs WebAssembly builds of Clang and LLD inside the extension, so on vscode.dev or github.dev you can build and run C/C++ code with no local compiler, no remote machine and no server. Everything happens in your browser tab; your code never leaves it.
+vscwClang runs WebAssembly builds of Clang, LLD and clangd inside the extension, so on [vscode.dev](https://vscode.dev) or github.dev you get a real C/C++ toolchain with no local compiler, no remote machine and no server. Everything happens in your browser tab; your code never leaves it.
 
-> **Unofficial.** vscwClang is an independent project. It is not affiliated with or endorsed by the LLVM Project, the LLVM Foundation, or Microsoft.
+> **Unofficial and early.** vscwClang is an independent project, not affiliated with or endorsed by the LLVM Project, the LLVM Foundation, or Microsoft. Expect rough edges, and please report them.
 
-## What it does
+## Features
 
-- **Build** (`vscwClang: Build C++`): compiles every `.c`, `.cc`, `.cpp` and `.cxx` file in your workspace and links them into `a.out.wasm` under `.vscwclang/<mode>/` (`release` or `debug`) in your folder, next to a `build.log`. For read-only or virtual folders (such as GitHub repositories opened on vscode.dev) these go to the extension's storage instead, so those still build and run. You may want to add `.vscwclang/` to `.gitignore`. IDE scratch and build-output folders (`Debug`, `x64`, `build`, `enc_temp_folder`, `.vs`, ...) are skipped. If your folder holds several programs, narrow the `vscwclang.sourceGlobs` setting, because all matching files are linked into one program (two `main` functions will fail to link). Errors and warnings appear in the Problems panel at the right file, line and column.
-- **Build and Run** (`vscwClang: Build and Run C++`): builds, then runs the program in a VS Code terminal. The terminal supports line-by-line input, so programs can read from `std::cin` or `stdin`: type the input into the terminal, where it is echoed beside the output. **Build and Run with Arguments...** asks for command-line arguments first (remembered per workspace); the `vscwclang.run.args` setting gives fixed ones. Your folder is mounted at `/workspace`, and relative paths such as `input.txt` start there too.
-- **Flags**: the `vscwclang.flags` setting (default `-I/workspace`, your project root) is added to every Build and Run, e.g. `-std=c++20` or `-DNAME=1`. If you have not set it, `defines`, workspace `includePath`, `forcedInclude`, `cppStandard`, `cStandard` (each for its own language) and `compilerArgs` from the C/C++ extension's `C_Cpp.default.*` settings, laid over by the first configuration of `.vscode/c_cpp_properties.json`, are added too, and its `C_Cpp.files.exclude` is merged into `vscwclang.files.exclude` (turn off with `vscwclang.useCppToolsSettings`); `vscwclang.intelliSense.enabled` and `vscwclang.loggingLevel` likewise default from `C_Cpp.intelliSenseEngine` and `C_Cpp.loggingLevel`.
-- **Your existing `tasks.json` and `launch.json`**: if the default build task (`group: { kind: build, isDefault: true }`) runs `g++`, `gcc`, `clang++` or `clang` (as the C/C++ extension's `C/C++: g++ build active file` does), Build uses its source files, `-I`/`-D`/`-std`/`-O`/`-l` flags and `-o` name instead of the `vscwclang.*` settings; `${file}`, `${fileDirname}`, `${workspaceFolder}` and the other file variables work (`${input:}`, `${command:}` and `${env:}` do not). Run takes `args` from a `cppdbg`, `cppvsdbg`, `lldb` or `codelldb` launch configuration (a picker appears when there are several) and builds with its `preLaunchTask`, so it replaces the arguments prompt; `vscwClang: Build and Run with Arguments...` still asks, pre-filled from it. Flags a browser cannot honour (`-static`, colour flags) are dropped and listed in the `vscwclang` output; forbidden ones (`-c`, `--target`) are errors. Tasks that run `make`, `cmake` or `cl.exe` are ignored (a note appears in the output). `shell` tasks are mapped by the commands only; `cppbuild` tasks also run from the Tasks menu. `program` and `cwd` are not used: Run always runs what it just built, and relative paths start at `/workspace`.
-- **`compile_commands.json` and `compile_flags.txt`**: with no default `tasks.json` build task, Build and Run use `compile_commands.json` (workspace root or `build/`, or the `vscwclang.compileCommands` setting), as written by CMake (`-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`) or Bear. Each source is compiled with the flags of its own entry; a CMake database with several targets asks which target to build (like CMake Tools), and `vscwclang.compileCommandsInclude` narrows other databases. Paths made on another machine are mapped onto your folder; include directories outside it are dropped with a note. A `compile_flags.txt` supplies flags for all sources. The compiler must be g++/gcc/clang (optionally behind `ccache`); response files (`@x.rsp`) are not supported.
-- **Tasks**: a `vscwclang` task type with a matching problem matcher, so builds can run from `tasks.json` with `sources`, `flags`, `mode` (`debug` or `release`) and `output` settings.
+- **Build and Run** with one command. Programs run in a VS Code terminal, and `std::cin`/`stdin` work: type input into the terminal.
+- **Debug with F5**: line, function, conditional and hit-count breakpoints, logpoints, step in/over/out, call stack, Variables, Watch and hover, and threads.
+- **IntelliSense from clangd**: completion, hover, go to definition, as-you-type diagnostics, Format Document (clang-format), clang-tidy and inlay hints.
+- **Errors in the Problems panel**, at the right file, line and column.
+- **Multithreading**: `std::thread`, `std::mutex`, `std::async` and `pthread` work.
+- **Works with the project you already have**: reads your `tasks.json`, `launch.json`, `.vscode/c_cpp_properties.json`, `compile_commands.json` (CMake, Bear) and the C/C++ extension's `C_Cpp.*` settings.
+- **Works offline** after the first toolchain download.
 
-Open the Command Palette (`F1`) and type `vscwClang` to find the commands. You need a folder open in the workspace.
+## Quick start
 
-## First use
+1. Open [vscode.dev](https://vscode.dev) (Chrome or Edge recommended), then open a folder: a local folder, or a GitHub repository.
+2. Install **vscwClang** from the Extensions view.
+3. Open a `.cpp` file and press `F1`, then run **vscwClang: Build and Run C++**. Or press **F5** to debug.
 
-The first build downloads the compiler and the C++ standard library (about 98 MB, from a CDN) and caches them in the extension's storage. After that it works offline. The first build in a session also takes several seconds while the compiler loads.
+The first build downloads the compiler and standard library (about 98 MB, from a CDN) and caches them in the extension's storage; opening a C/C++ file for the first time also downloads clangd. After that it works offline. The first build in each session spends a few seconds loading the compiler.
+
+You need a folder open in the workspace. Opening a single file with no folder is not supported yet.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `vscwClang: Build C++` | Compiles your sources and links `a.out.wasm`. |
+| `vscwClang: Build and Run C++` | Builds, then runs in a terminal. |
+| `vscwClang: Build and Run C++ with Arguments...` | Same, asking for command-line arguments first (remembered per workspace). |
+| `vscwClang: Switch Header/Source` | Jumps between `.h` and `.cpp` (`Alt+O`). |
+| `vscwClang: Download toolchain` / `Clear downloaded toolchain` / `Clear build cache` | Cache management. |
+
+Output goes to `.vscwclang/<release or debug>/` in your folder, beside a `build.log`. Read-only or virtual folders (such as GitHub repositories on vscode.dev) use the extension's storage instead, so they still build and run. Consider adding `.vscwclang/` to your `.gitignore`.
+
+## How it picks what to build
+
+All matching sources are linked into **one program**, so two `main` functions will fail to link. If your folder holds several programs, narrow `vscwclang.sourceGlobs` (for example `["src/**/*.cpp"]`). IDE scratch and build-output folders (`Debug`, `x64`, `build`, `.vs`, ...) are skipped.
+
+Settings are used in this order:
+
+1. **Your default build task** in `tasks.json` (`group: { kind: build, isDefault: true }`), if it runs `g++`, `gcc`, `clang++` or `clang`, as the C/C++ extension's "g++ build active file" does. Its source files and its `-I`, `-D`, `-std`, `-O`, `-l` flags and `-o` name are used. Tasks that run `make`, `cmake` or `cl.exe` are ignored (with a note in the output).
+2. **`compile_commands.json`** (workspace root or `build/`, or `vscwclang.compileCommands`) or `compile_flags.txt`. Each source is compiled with its own entry's flags. A CMake database with several targets asks which one to build.
+3. **The `vscwclang.*` settings**: `vscwclang.flags` (default `-I/workspace`), `vscwclang.sourceGlobs` and friends. If you have not set `vscwclang.flags`, the C/C++ extension's `C_Cpp.default.*` settings (`defines`, `includePath`, `cppStandard`, `cStandard`, `compilerArgs`, `forcedInclude`) and `.vscode/c_cpp_properties.json` are added too (turn off with `vscwclang.useCppToolsSettings`).
+
+Flags a browser cannot honour (`-static`, colour flags) are dropped and listed in the `vscwclang` output channel; forbidden ones (`-c`, `--target`) are errors with a suggestion.
+
+You can also run builds from `tasks.json` with the `vscwclang` task type (`sources`, `flags`, `mode`, `output`).
+
+## Running programs
+
+- Your folder is mounted at `/workspace`, and relative paths such as `input.txt` start there.
+- Run arguments come from, in order: a `cppdbg`/`cppvsdbg`/`lldb`/`codelldb` launch configuration, the `vscwclang.run.args` setting, or the "with Arguments" prompt.
+- Programs can read and write files in your workspace, use stdin/stdout, and read the clock and random numbers. `HOME` is `/home/user` (kept between runs) and `TMPDIR` is `/tmp` (emptied each run). `vscwclang.run.env` adds or removes environment variables.
+- There is no network and no other programs: `system()` and `popen` don't work and `fork` doesn't exist.
+
+## Debugging
+
+Press **F5** (a `vscwClang` launch configuration is offered). Debug builds are `-O0` and stop at:
+
+- line breakpoints, function breakpoints, conditions (`i == 3 && p.x > 2`), hit counts (`5`, `>= 5`, `% 3`) and logpoints (`i={i}`);
+- crashes: an out-of-bounds access, divide by zero, `abort()`, a failed `assert` or an uncaught exception stops in the debugger on the faulting line, with the message and call stack.
+
+The Variables pane shows locals, structs, arrays, pointers and variable-length arrays. Hover, Watch and the Debug Console evaluate variables and simple expressions over them (`a + b`, `i < n`), but not function calls, casts, `*p` or strings. For threaded builds a stop halts every thread and the Threads list shows each one's stack; only the thread that stopped can be stepped. Pause and live breakpoint edits work while the program runs.
+
+Program input and output are in a `vscwClang debug` terminal; set `"console": "internalConsole"` in `launch.json` for the Debug Console instead. Standard-library functions have no stops, so stepping never enters them.
+
+## IntelliSense and formatting
+
+A clangd language server (WebAssembly, multi-threaded) gives completion, hover, go to definition and diagnostics. It indexes your workspace in the background (progress shows as a notification) and keeps its index in extension storage, so cross-file results can be incomplete until the first pass finishes. Turn it off with `vscwclang.intelliSense.enabled` if you only need Build and Run.
+
+- Without a `compile_commands.json`, `.h` files are analyzed as C++ (unless the workspace is C only).
+- **Formatting** uses clangd's built-in clang-format and the nearest `.clang-format` file (re-read on every format). With none, `C_Cpp.clang_format_fallbackStyle` applies (default `Visual Studio`). `C_Cpp.formatting: disabled` turns it off. `vcFormat.*`, `clang_format_style` other than `file`, `clang_format_sortIncludes` and `clang_format_path` are not supported: use a `.clang-format` file.
+- `C_Cpp.refactoring.includeHeader: never`, `C_Cpp.codeAnalysis.clangTidy.enabled`, `checks.enabled`/`checks.disabled` and the `inlayHints` options for parameter names and `auto` types are honored (reload to apply). Other clang-tidy options belong in a `.clang-tidy` file.
 
 ## Limitations
 
-This is an early release.
+- **WebAssembly only.** Programs are built for `wasm32-wasip1` (WASI): they can use the C and C++ standard libraries, but not sockets, processes, graphics or native libraries.
+- **32-bit.** Pointers, `size_t` and `uintptr_t` are 32 bits, so code that assumes 64-bit pointers needs changes.
+- **No Windows APIs.** `windows.h`, `winsock2.h` and MSVC-only functions such as `_stricmp` and `strcpy_s` are unavailable.
+- **Restricted flags.** Flags that would break the sandbox (`--target`, `-march`, `-o`, `-c`, `-fplugin`, `-fuse-ld`, `--sysroot`, `-B`, and paths outside your workspace) are rejected. `-I`, `-D`, `-std`, `-O`, `-W...`, `-l`, `-L` and `-Wl,...` work.
+- **Standard headers are preloaded** to make recompiles faster: C++ files that include `<vector>`, `<string>`, `<iostream>` and similar compile against a prebuilt copy, so a forgotten `#include` of one of them is not an error here but is elsewhere. Set `vscwclang.precompiledHeaders` to `false` to compile exactly as written.
+- **Threads** reserve up to 2 GiB of address space (shared memory). File I/O from threads is routed through one thread, so it is slower. `fork` and signals do not exist. Turn `vscwclang.threads` off for a plain single-threaded build.
+- **Crashes** end the program with `exited with code 134 (aborted)` (failed `assert`, `abort()`, `std::terminate`, uncaught exception, which also prints its type and `what()`) or `trapped: <reason>` and exit code 139 (out-of-bounds access, division by zero, stack overflow).
+- **`mmap`** can read a file, but writes through a shared mapping are not saved.
+- **Make, CMake and Python are not run.** `compile_commands.json` from CMake is read, but build scripts are not executed; Make support is planned.
+- **Debug builds are `-O0` only**, and Make-style multi-target projects are not yet supported.
+- **Chromium browsers** (Chrome, Edge) are best supported. Local-folder access on vscode.dev needs the File System Access API.
+- **Resources.** Each compile can use several hundred MB; lower `vscwclang.parallelCompiles` if the tab runs out of memory. Compiled objects are cached for faster rebuilds (`vscwclang.buildCache.*`).
+- **`Tasks: Run Build Task` (Ctrl+Shift+B) does nothing on the web workbench** for any extension. Use the `vscwClang` commands from the Command Palette instead.
 
-- **WebAssembly only.** Programs are built for `wasm32-wasip1` (WASI) and run in the browser. They can use the C and C++ standard libraries, but not operating-system APIs such as sockets, processes or graphics, and not native libraries.
-- **Restricted compiler flags.** Flags that would break the sandbox are rejected with a suggestion, for example `--target`, `-march`, `-o`, `-c`, `-fplugin`, `-fuse-ld`, `--sysroot`, `-B`, and include or library paths outside your workspace. `-I`, `-D`, `-std`, `-O`, `-W...`, `-l`, `-L` and `-Wl,...` work.
-- **Standard headers are preloaded.** To make recompiles faster, C++ files that include `<vector>`, `<string>`, `<iostream>` and similar are compiled against a prebuilt copy of those headers (when your flags allow it; see `vscwclang.precompiledHeaders`). A forgotten `#include` of one of them is therefore not an error here, but is on other compilers; set the setting to `false` to compile exactly as written.
-- **Threads.** `std::thread`, `std::mutex`, `std::async` and `pthread` work: programs are built for `wasm32-wasip1-threads` (shared memory, so they reserve up to 2 GiB of address space) unless `vscwclang.threads` is off; `-pthread` or `-lpthread` in your flags selects threads even then. Files are compiled in parallel (`vscwclang.parallelCompiles`). File input and output from threads is handled on one thread behind the scenes, so it is slower than on the main thread. Signals and `fork` still do not exist.
-- **32-bit target.** WebAssembly here is `wasm32`: pointers, `size_t` and `uintptr_t` are 32 bits. Code that assumes 64-bit pointers (size assertions, pointer-tagging) needs changes.
-- **No Windows APIs.** `windows.h`, `winsock2.h` and MSVC-only functions such as `_stricmp` and `strcpy_s` are not available.
-- **Crashes.** A failed `assert`, `abort()`, `std::terminate` or uncaught C++ exception ends the program with `exited with code 134 (aborted)`; an uncaught exception also prints its type and `what()` first. Other crashes (out-of-bounds memory access, division by zero, stack overflow, an exception thrown in a static constructor) end the program with `trapped: <reason>` and exit code 139.
-- **Debugging.** F5 builds in debug mode and stops at line breakpoints, function breakpoints, conditional breakpoints (`i == 3 && p.x > 2`), hit counts (`5`, `>= 5`, `% 3`) and logpoints (`i={i}`), with step in/over/out line by line, the call stack (C++ names demangled), the Variables pane (locals, structs, arrays, pointers, by-value struct parameters and variable-length arrays), and hover, Watch and Debug Console evaluation of variables and simple expressions over them (`a + b`, `i < n`; no function calls, casts, `*p` or strings). The program's input and output are in a `vscwClang debug` terminal (set `"console": "internalConsole"` in `launch.json` for output in the Debug Console instead). Pause and breakpoint changes made while the program runs work for threaded builds (the default); with `vscwclang.threads` off they take effect at the next stop. Threads: a stop halts every thread, and the Threads list shows each with its own stack and variables, so memory stays still while you look; only the thread that stopped can be stepped, and Continue resumes them all. A thread blocked in a lock, a sleep or `join` is marked `[blocked or running]` and shows the stack it had at its last statement (the call that blocks is in its top frame, on the line of that statement). A crash that traps (out-of-bounds access, `__builtin_trap`, divide by zero) stops in the debugger on the faulting line with the message and the call stack, instead of just ending the program; Continue then ends it (threaded builds only). A failed `assert`, `std::terminate`, `abort()` or uncaught exception stops the same way before the program exits with code 134; Continue then ends it. Debug builds are `-O0` only; standard-library functions have no stops, so stepping never enters them.
-- **Formatting is clangd's built-in clang-format.** Format Document, Format Selection and format-on-type use the nearest `.clang-format` file (re-read on every format); with none, `C_Cpp.clang_format_fallbackStyle` applies (default `Visual Studio`, which is clang-format's `Microsoft`). `C_Cpp.formatting: disabled` turns it off. `vcFormat.*`, `clang_format_style` other than `file`, `clang_format_sortIncludes` and `clang_format_path` are not supported (logged; use a `.clang-format` file). It needs IntelliSense on, since clangd does the formatting.
-- **IntelliSense is early.** Without a `compile_commands.json`, `.h` files are analyzed as C++ (unless the workspace is C only) and `cppStandard`/`cStandard` apply to their own languages. `C_Cpp.refactoring.includeHeader: never` and `C_Cpp.codeAnalysis.clangTidy.enabled`/`checks.enabled`/`checks.disabled` and `C_Cpp.inlayHints.parameterNames.enabled`/`autoDeclarationTypes.enabled` are honored by clangd (reload to apply; clang-tidy hints show as warnings in Problems); other clang-tidy options belong in a `.clang-tidy` file. A clangd language server (WebAssembly, multi-threaded) provides completion, hover and go-to-definition. It indexes your workspace sources in the background on its own worker threads (progress shows as a notification) and keeps the index in the extension's storage, so cross-file results can be incomplete until the first pass finishes. Opening a C/C++ file downloads clangd on first use.
+## Settings
 
-## What your program can see
+Search for `vscwclang` in Settings. The most useful:
 
-Programs run in a sandbox: they can read and write files in your workspace folder, use stdin and stdout, read the clock and random numbers. `HOME` is `/home/user` (kept between runs), `TMPDIR` is `/tmp` (emptied before each run); both are writable and live in the extension's storage. `USER` and `LANG` are set too, and the `vscwclang.run.env` setting adds or removes variables. There is no network and no other programs (`system()` and `popen` don't work, `fork` doesn't exist). `mmap` of a file can read it, but writes through a shared mapping are not saved.
+| Setting | Purpose |
+| --- | --- |
+| `vscwclang.flags` | Extra compiler flags (`-std=c++20`, `-DNAME=1`, `-O2`, `-lm`...). |
+| `vscwclang.sourceGlobs` | Which files are linked into the program. |
+| `vscwclang.files.exclude` | Folders never compiled or indexed. |
+| `vscwclang.run.args` / `vscwclang.run.env` | Program arguments and environment. |
+| `vscwclang.compileCommands` | Path to a `compile_commands.json`. |
+| `vscwclang.threads` | Threaded standard library (on by default). |
+| `vscwclang.intelliSense.enabled` | Turn clangd on or off. |
+| `vscwclang.useCppToolsSettings` | Reuse the C/C++ extension's `C_Cpp.*` settings and `.vscode/c_cpp_properties.json`. |
 
 ## Licenses
 
@@ -46,4 +115,6 @@ vscwClang is under the Apache License v2.0 with LLVM Exceptions, the same licens
 
 ## For contributors
 
-Build instructions, design notes and the remaining work are in [DEV_README.md](https://github.com/Ambeco/vscwClang/blob/main/DEV_README.md).
+Build instructions, design notes and the remaining work are in [DEV_README.md](https://github.com/Ambeco/vscwClang/blob/main/DEV_README.md). Issues and feedback: [github.com/Ambeco/vscwClang/issues](https://github.com/Ambeco/vscwClang/issues).
+
+Designed and overseen by [Ambeco](https://github.com/Ambeco), and coded mostly by Claude.

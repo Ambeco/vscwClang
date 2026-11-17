@@ -1,7 +1,7 @@
 {
   "name": "vscwclang",
   "displayName": "vscwClang",
-  "description": "vscwClang contains Clang and Lldb as webasm binaries, allowing VSC for Web to compile and debug C++ code entirely in the browser.",
+  "description": "Build, run and debug C and C++ with Clang in VS Code for the Web, entirely in your browser. Nothing to install.",
   "version": "0.0.1",
   "publisher": "tavisbohne",
   "icon": "media/icon.png",
@@ -14,8 +14,23 @@
     "vscode": "^1.90.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Debuggers"
   ],
+  "keywords": [
+    "c",
+    "c++",
+    "clang",
+    "clangd",
+    "webassembly",
+    "vscode.dev",
+    "github.dev",
+    "compiler",
+    "debugger"
+  ],
+  "bugs": {
+    "url": "https://github.com/Ambeco/vscwClang/issues"
+  },
   "activationEvents": [
     "onDebugResolve:vscwclang",
     "onDebugInitialConfigurations",
