@@ -12,6 +12,7 @@ src/web/
   projectConfig.ts             # settings, tasks.json and launch.json read from VS Code
   runProgram.ts
   tasks.ts
+  buildgraph/                  # optional Make/CMake/Ninja layer (vscode-free; the core never imports it)
   clangd/                      # language client, compile-command overlay for background indexing
   host/                        # Worker host (guest WASI, RPC channel, GuestProcess)
   debug/                       # inline DAP adapter, stub channel, lldb reactor host
