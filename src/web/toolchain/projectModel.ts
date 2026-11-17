@@ -60,7 +60,7 @@ export interface LaunchEntry {
 
 const COMPILERS = new Set(['g++', 'gcc', 'c++', 'cc', 'clang', 'clang++']);
 const LAUNCH_TYPES = new Set(['cppdbg', 'cppvsdbg', 'lldb', 'codelldb', 'vscwclang']);
-const SOURCE_EXTENSION = /\.(c|cc|cpp|cxx|c\+\+|cp|C)$/;
+export const SOURCE_EXTENSION = /\.(c|cc|cpp|cxx|c\+\+|cp|C)$/;
 const COLOR_FLAGS = /^(-fdiagnostics-color(=.*)?|-fcolor-diagnostics|-fansi-escape-codes|-fno-color-diagnostics|-fno-diagnostics-color)$/;
 const DROPPED_FLAGS: Record<string, string> = {
 	'-static': 'every program is linked statically already',
@@ -160,20 +160,22 @@ function argText(arg: unknown): string {
 	throw new ProjectModelError(`vscwClang: cannot read task argument ${JSON.stringify(arg)}. Did you mean a plain string?`);
 }
 
-interface ArgMapping {
+export interface ArgMapping {
 	/** Maps the directory of `-I`/`-isystem`/`-iquote`/`-L`; undefined drops the flag with a note. */
 	mapDir(dir: string): string | undefined;
 	/** Workspace-relative source for a positional source file; undefined ignores it (databases name the file separately). */
 	onSource(arg: string): string | undefined;
 	/** Compilation databases: strip `-c` and dependency-file flags. */
 	database?: boolean;
+	/** Claims a positional argument that is not a source (an object file, archive); unclaimed ones throw. */
+	onOther?(arg: string): boolean;
 }
 
 const DEPENDENCY_FLAGS = new Set(['-MD', '-MMD', '-MP', '-MG', '-M', '-MM']);
 const DEPENDENCY_VALUE_FLAGS = new Set(['-MF', '-MT', '-MQ']);
 
 /** Maps compiler arguments (without the compiler itself) onto flags, sources and the `-o` value; shared by tasks and databases. */
-function mapArgs(args: readonly string[], label: string, m: ArgMapping): { sources: string[]; flags: string[]; notes: string[]; output?: string } {
+export function mapArgs(args: readonly string[], label: string, m: ArgMapping): { sources: string[]; flags: string[]; notes: string[]; output?: string } {
 	const sources: string[] = [];
 	const flags: string[] = [];
 	const notes: string[] = [];
@@ -211,6 +213,8 @@ function mapArgs(args: readonly string[], label: string, m: ArgMapping): { sourc
 			if (source !== undefined) { sources.push(source); }
 		} else if (/\.(h|hh|hpp|hxx)$/i.test(a)) {
 			notes.push(`ignored header '${a}' on the command line`);
+		} else if (m.onOther?.(a) === true) {
+			continue;
 		} else {
 			throw new ProjectModelError(`vscwClang: ${label}: cannot use '${a}' as an input. Did you mean a .c/.cpp source file? Object files and libraries cannot be linked in a browser build.`);
 		}

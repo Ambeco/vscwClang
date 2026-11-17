@@ -7,6 +7,10 @@ Tree format: folders end in `/`, files have an extension, names sit below their 
 ```
 src/web/
   buildgraph/
+    classify.ts
+      classifyShellLine        # shell line -> BuildAction[] (compile, link, archive, file ops)
+    graph.ts
+      BuildGraph               # actions as nodes, edges from files read/written
     shellParse.ts
       parseShellLine           # one shell line -> simple commands, throws on unsupported syntax
   clangd/
