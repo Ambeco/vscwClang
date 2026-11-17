@@ -33,7 +33,7 @@ const FS_ERRNOS = new Set<string>(['ENOENT', 'EEXIST', 'ENOTDIR', 'EISDIR', 'ENO
  *
  * A request goes to the extension host as a message, then the Worker blocks in `Atomics.wait` until the host
  * has written the whole response into the shared buffer. This is how a Worker uses `vscode.workspace.fs`, the
- * terminal and (later) Worker creation, none of which exist inside it; see documents/design.md "Host".
+ * terminal and (later) Worker creation, none of which exist inside it; see documents/design_host.md "Host".
  *
  * One channel serves one Worker: a Worker blocks while it waits, so it never has two requests in flight.
  */

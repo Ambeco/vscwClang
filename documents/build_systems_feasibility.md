@@ -18,9 +18,9 @@ Sizes: S = days, M = 1-3 weeks, L = 1-3 months, XL = research-grade/open-ended (
 
 ## What the project already has (relevant parts)
 
-- `toolchain.build(request)`: compile each source (parallel, object cache keyed by args, source and header hashes), then `wasm-ld`. One program per call. [checked: design.md "Host", "Build artifacts"]
-- `compile_commands.json` reader with per-entry flags and a CMake target picker that cannot link a target's library dependencies (fmt `format-test`). [checked: design.md "Project model", compat_survey.md (c)]
-- Worker host with WASI preview 1, shared-memory threads, sync RPC to the extension host, `llvm-ar` shipped. No processes, pipes, `/bin/sh`, `/dev/null`; `system()`/`popen` are link errors. [checked: design.md "Three environments"]
+- `toolchain.build(request)`: compile each source (parallel, object cache keyed by args, source and header hashes), then `wasm-ld`. One program per call. [checked: design_host.md "Host", design_build.md "Build artifacts"]
+- `compile_commands.json` reader with per-entry flags and a CMake target picker that cannot link a target's library dependencies (fmt `format-test`). [checked: design_project_model.md "Project model", compat_survey.md (c)]
+- Worker host with WASI preview 1, shared-memory threads, sync RPC to the extension host, `llvm-ar` shipped. No processes, pipes, `/bin/sh`, `/dev/null`; `system()`/`popen` are link errors. [checked: design_environments.md "Three environments"]
 - The fork's spawn hook: the wasm exports `__wasi_shim_set_spawn_hook`; the host installs a table-indirect callback that blocks the caller (`Atomics.wait`) while a child wasm instance runs in a new Worker. Works under Node; "a real extension should follow the same shape with a browser Worker". Used for `cc1`/`wasm-ld`; not yet wired in this extension. [checked: llvm-project `documents/js-host-contract.md`]
 - Design stance: Make/CMake/CPython are optional wrappers inside this extension around a self-sufficient core (owner decision; design.md "Scope"). This document argues the link graph cannot be expressed in `compile_commands.json`, so the integration is richer than the old separate-extension plan assumed; see "Where it lives".
 
@@ -53,7 +53,7 @@ Routes:
   - CMake ships an (empty) `Platform/WASI.cmake`, so `CMAKE_SYSTEM_NAME=WASI` is recognised [checked]; toolchain files such as wasi-sdk's and IREE's set it [search].
   - Compiler detection is the main reason CMake spawns processes. Pre-seeding the compiler identification variables (what the deprecated `CMakeForceCompiler` did: `CMAKE_C_COMPILER_ID_RUN`, `CMAKE_C_COMPILER_ID`, `..._FORCED`) [search], or shipping pre-generated `CMakeFiles/<ver>/CMake{C,CXX}Compiler.cmake` and `CMakeSystem.cmake` files, may let configure and generate (Ninja or Makefile generator) run with zero spawns. **[spike]**: confirm on desktop CMake with a wrapper compiler, then in wasm.
   - libuv has no WASI backend and its maintainers say they would accept only one with stubs returning `UV_ENOSYS` [search]. CMake's bundled libuv is used for process handling and fs operations; stub the process parts (or link a stub libuv exposing only the symbols CMake uses). Other bundled libraries (zlib, libarchive, expat, jsoncpp, rhash, zstd) are portable C/C++; curl can be disabled.
-  - `chdir`/`getcwd` are used throughout CMake; our linked `chdir` shim must cover it (design.md "Run environment").
+  - `chdir`/`getcwd` are used throughout CMake; our linked `chdir` shim must cover it (design_environments.md "Run environment").
   - What breaks without spawn: `try_compile`, `check_*` modules (`check_cxx_source_compiles`, `CheckIncludeFile`, ...), `execute_process`, `find_package(Python)` probing, `gtest_discover_tests` (runs the test binary at build time), `ctest`. Fail loudly; later attach to the hook (MVP E) and answer compile probes through our toolchain.
   - Size and time: CMake plus Modules is on the order of 10-20 MB zipped [memory, unverified]; configure of a small project natively is ~1 s, expect several times that in wasm, dominated by parsing Modules.
   - After configure, the generated `build.ninja` goes through the Ninja front end above.
@@ -109,7 +109,7 @@ Routes:
 Each stage ships on its own and each later stage reuses the earlier ones.
 
 **MVP A: build graph + ingest (no new binaries; M-L total).**
-1. Build graph IR and lowering onto the existing compile/link path (`src/web/buildgraph/`, design.md "Build graph"; static libraries are folded into the program, no `llvm-ar` step). Done; run-program and copy nodes are classified but not lowered.
+1. Build graph IR and lowering onto the existing compile/link path (`src/web/buildgraph/`, design_project_model.md "Build graph"; static libraries are folded into the program, no `llvm-ar` step). Done; run-program and copy nodes are classified but not lowered.
 2. Command classifier and mini-shell (`classify.ts`, `shellParse.ts`). Done for compilers, `ar`, and `mkdir`/`rm`/`cp`/`mv`/`touch`/`echo`/`printf`/`cd`; `cmake -E`, `sed`, `install` and friends are not mapped.
 3. Front ends: CMake File API reply, `build.ninja`, and the existing `compile_commands.json` (target picker replaced by a real target graph; "all", a chosen target, or a test target with its dependencies).
 4. "Export tasks.json and launch.json" command: one `vscwclang` task per target and one `launch.json` configuration per executable or test target (the link graph itself stays in the graph; tasks reference targets by name or `dependsOn`).

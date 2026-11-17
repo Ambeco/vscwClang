@@ -67,7 +67,7 @@ export type BuildContext = StoreContext & Pick<vscode.ExtensionContext, 'extensi
 /**
  * Compiles each source with clang.wasm, then links with lld.wasm.
  *
- * Runs each tool as its own process, one at a time, on the Worker host (documents/design.md "Host"). Every
+ * Runs each tool as its own process, one at a time, on the Worker host (documents/design_host.md "Host"). Every
  * source is compiled even after an earlier one fails, so all diagnostics are reported; linking is skipped
  * when any compile fails. clang writes each object to stdout (`-o -`), the host stores it in an in-memory file
  * system, and wasm-ld reads it from there (mounted read-only at `/obj`), so nothing but the final output is

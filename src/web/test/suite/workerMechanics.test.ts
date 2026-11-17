@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 
 /**
- * Probe for the V2 Worker host (documents/design.md "Host"): which Worker patterns work inside the web
+ * Probe for the V2 Worker host (documents/design_host.md "Host"): which Worker patterns work inside the web
  * extension host. Needs --coi (see the `test` script in package.json).
  *
  * The decisive case is `nested create then block`: a Worker that creates a child Worker and then blocks in

@@ -18,7 +18,7 @@
 - Never regenerate `mtdist/` for an already-pinned toolchain tag: zips embed timestamps and change the manifest hash, which breaks every installed pin. A new tag likewise changes every chunk hash, so publish by keeping the old zips for unchanged files and merging the manifest (`documents/notes.md` "v24.0.11 release method"). See `documents/remaining_work.md` "Publishing a new toolchain version".
 - The shipped `clang`, `lld`, `clangd` and lldb reactor are the PGO + ThinLTO builds from `llvm-project/pgo/*-variant.bat` (binaries kept in `C:\Users\mooin\pgo\variants\keep`), not what `build*.bat` produce (MinSizeRel, slower). Stage the PGO binaries and pass `make-toolchain-dist.mjs --llvm <staging>`; never publish straight from the `build*` trees.
 - Check `documents/design.md` "Scope" before adding features; the project is deliberately narrow.
-- Before touching host code, mounts, environment variables or working directories, read `documents/design.md` "Three environments" and check the change against the extension host, the tool guests and the user-program guests separately.
+- Before touching host code, mounts, environment variables or working directories, read `documents/design_environments.md` "Three environments" and check the change against the extension host, the tool guests and the user-program guests separately.
 - The git repo root is the nested `vsclang\vsclang` folder, not the outer working directory. Glob results are prefixed `vsclang\`, so paths built from the outer directory double up (`...\vsclang\vsclang\vsclang\...`); `cd` into the repo (or use absolute paths) before running git or npm.
 
 # Remaining work upkeep

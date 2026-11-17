@@ -1,4 +1,4 @@
-// Builds the stripped, zipped, chunked, hashed toolchain layout the extension downloads (design.md "Distribution")
+// Builds the stripped, zipped, chunked, hashed toolchain layout the extension downloads (design_distribution.md "Distribution")
 // straight from the llvm-project build trees.
 //
 // usage: node scripts/make-toolchain-dist.mjs --release <packageReleaseDir> --mtdist <outDir> [--llvm <llvm-project>]
