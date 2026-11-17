@@ -75,6 +75,8 @@ export function activate(context: vscode.ExtensionContext) {
 		}),
 		vscode.commands.registerCommand('vscwclang.makeBuild', () => runMakeCommand(context, log, diagnostics, false)),
 		vscode.commands.registerCommand('vscwclang.makeRun', () => runMakeCommand(context, log, diagnostics, true)),
+		vscode.commands.registerCommand('vscwclang.ninjaBuild', () => runMakeCommand(context, log, diagnostics, false, 'ninja')),
+		vscode.commands.registerCommand('vscwclang.ninjaRun', () => runMakeCommand(context, log, diagnostics, true, 'ninja')),
 		vscode.commands.registerCommand('vscwclang.downloadToolchain', async () => {
 			await getToolchainStore(context, log).ensure();
 			void vscode.window.showInformationMessage('vscwClang: toolchain is downloaded and cached.');
@@ -136,12 +138,17 @@ async function runPlan(context: vscode.ExtensionContext, log: vscode.OutputChann
 
 let makePack: import('./make/makePack').MakePack | undefined;
 
-/** Build (and optionally Run) the folder's Make project; the Make layer and its pack load on first use. */
-async function runMakeCommand(context: vscode.ExtensionContext, log: vscode.OutputChannel, diagnostics: vscode.DiagnosticCollection, run: boolean): Promise<void> {
+/** Build (and optionally Run) the folder's Make or build.ninja project; the optional layer (and the Make pack) load on first use. */
+async function runMakeCommand(context: vscode.ExtensionContext, log: vscode.OutputChannel, diagnostics: vscode.DiagnosticCollection, run: boolean, tool: 'make' | 'ninja' = 'make'): Promise<void> {
 	try {
-		const [{ MakePack }, { makeBuildOptions }] = await Promise.all([import('./make/makePack'), import('./make/makeBuild')]);
-		makePack ??= new MakePack(context, log);
-		const plan = await makeBuildOptions(context, log, makePack);
+		let plan: { cancelled: boolean; build?: BuildOptions };
+		if (tool === 'ninja') {
+			plan = await (await import('./make/ninjaBuild')).ninjaBuildOptions(log);
+		} else {
+			const [{ MakePack }, { makeBuildOptions }] = await Promise.all([import('./make/makePack'), import('./make/makeBuild')]);
+			makePack ??= new MakePack(context, log);
+			plan = await makeBuildOptions(context, log, makePack);
+		}
 		if (plan.cancelled) { return; }
 		if (run) { await buildAndRun(context, log, diagnostics, runArgsSetting(), plan.build); return; }
 		const { folder, output, result } = await buildWorkspace(context, log, plan.build, (parsed, f, o) => publishDiagnostics(diagnostics, f, parsed, o));

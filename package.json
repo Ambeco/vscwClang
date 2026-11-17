@@ -42,6 +42,8 @@
     "onCommand:vscwclang.runWithArgs",
     "onCommand:vscwclang.makeBuild",
     "onCommand:vscwclang.makeRun",
+    "onCommand:vscwclang.ninjaBuild",
+    "onCommand:vscwclang.ninjaRun",
     "onCommand:vscwclang.switchHeaderSource",
     "onTaskType:vscwclang",
     "onTaskType:cppbuild",
@@ -273,6 +275,18 @@
           "scope": "resource",
           "markdownDescription": "The make target the Make commands dry-run (default: the Makefile's default goal). Set it to the target that builds your program or test executable."
         },
+        "vscwclang.ninja.buildDir": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "Workspace-relative folder holding the `build.ninja` the Ninja commands read (made by `cmake -G Ninja` or Meson on another machine). Empty looks in the folder root, `build`, `out/build` and `out`."
+        },
+        "vscwclang.ninja.target": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "The Ninja target the Ninja commands build, such as a CMake test target (default: the manifest's default targets). When it links several programs you are asked which one."
+        },
         "vscwclang.flags": {
           "scope": "resource",
           "type": "array",
@@ -459,6 +473,14 @@
       {
         "command": "vscwclang.makeRun",
         "title": "vscwClang: Build and Run C++ with Make (make.wasm)"
+      },
+      {
+        "command": "vscwclang.ninjaBuild",
+        "title": "vscwClang: Build C++ from build.ninja (CMake)"
+      },
+      {
+        "command": "vscwclang.ninjaRun",
+        "title": "vscwClang: Build and Run C++ from build.ninja (CMake)"
       },
       {
         "command": "vscwclang.runWithArgs",

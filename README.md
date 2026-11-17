@@ -33,6 +33,7 @@ You need a folder open in the workspace. Opening a single file with no folder is
 | `vscwClang: Build C++` | Compiles your sources and links `a.out.wasm`. |
 | `vscwClang: Build and Run C++` | Builds, then runs in a terminal. |
 | `vscwClang: Build and Run C++ with Arguments...` | Same, asking for command-line arguments first (remembered per workspace). |
+| `vscwClang: Build C++ from build.ninja (CMake)` / `Build and Run C++ from build.ninja (CMake)` | Reads a `build.ninja` made by `cmake -G Ninja` on a desktop (root, `build`, `out/build` or `out`; `vscwclang.ninja.buildDir`, `vscwclang.ninja.target`) and builds one of its programs, including a test that links a library from another target. Early: not yet tried in the browser. |
 | `vscwClang: Switch Header/Source` | Jumps between `.h` and `.cpp` (`Alt+O`). |
 | `vscwClang: Download toolchain` / `Clear downloaded toolchain` / `Clear build cache` | Cache management. |
 
