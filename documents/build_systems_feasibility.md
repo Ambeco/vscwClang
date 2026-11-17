@@ -109,8 +109,8 @@ Routes:
 Each stage ships on its own and each later stage reuses the earlier ones.
 
 **MVP A: build graph + ingest (no new binaries; M-L total).**
-1. Build graph IR and executor over the existing compile/link path (multi-target: compile, `llvm-ar`, link with libraries, copy, run).
-2. Command classifier and mini-shell.
+1. Build graph IR and lowering onto the existing compile/link path (`src/web/buildgraph/`, design.md "Build graph"; static libraries are folded into the program, no `llvm-ar` step). Done; run-program and copy nodes are classified but not lowered.
+2. Command classifier and mini-shell (`classify.ts`, `shellParse.ts`). Done for compilers, `ar`, and `mkdir`/`rm`/`cp`/`mv`/`touch`/`echo`/`printf`/`cd`; `cmake -E`, `sed`, `install` and friends are not mapped.
 3. Front ends: CMake File API reply, `build.ninja`, and the existing `compile_commands.json` (target picker replaced by a real target graph; "all", a chosen target, or a test target with its dependencies).
 4. "Export tasks.json and launch.json" command: one `vscwclang` task per target and one `launch.json` configuration per executable or test target (the link graph itself stays in the graph; tasks reference targets by name or `dependsOn`).
 5. Gate: build fmt `format-test`, Catch2 SelfTest and a GoogleTest project from a pre-generated CMake build dir; then Lua and SQLite from a `build.ninja` converted by hand.

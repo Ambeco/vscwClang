@@ -3,6 +3,8 @@ import * as vscode from 'vscode';
 import { createWorkerProcess } from '../../host/workerProcess';
 import { sharedMemoryLimits } from '../../host/sharedMemory';
 import { build } from '../../toolchain/toolchain';
+import { buildGraphFromMake } from '../../buildgraph/makeTrace';
+import { lowerToBuildRequest } from '../../buildgraph/lower';
 import { chooseArtifactDir } from '../../buildWorkspace';
 import { runProgram } from '../../runProgram';
 import { createTaskProvider } from '../../tasks';
@@ -144,6 +146,37 @@ suite('vscwClang build (in browser)', function () {
 		assert.strictEqual(result.exitCode, 0, result.diagnostics);
 		const ran = await runWasm(output);
 		assert.deepStrictEqual([ran.exitCode, ran.stdout], [0, 'hello 42\n']);
+	});
+
+	test('a make dry run of a library plus test program lowers onto build() and the program runs', async () => {
+		await write('lib.h', 'int f(void);\n');
+		await write('lib.c', '#include "lib.h"\nint f(void) { return 41; }\n');
+		await write('t.c', '#include <stdio.h>\n#include "lib.h"\nint main(void) { printf("%d\\n", f() + 1); return 0; }\n');
+		const guestDir = `/workspace/${dir.path.split('/').pop()}`;
+		const trace = [
+			`make: Entering directory '${guestDir}'`,
+			"Makefile:11: update target 'lib.o' due to: target does not exist",
+			'cc -O2 -Wall -DNAME=1 -c lib.c -o lib.o',
+			"Makefile:5: update target 'libx.a' due to: target does not exist",
+			'echo archiving', 'ar rcs libx.a lib.o', 'ranlib libx.a',
+			"Makefile:11: update target 't.o' due to: target does not exist",
+			'cc -O2 -Wall -DNAME=1 -c t.c -o t.o',
+			"Makefile:9: update target 'test' due to: target does not exist",
+			'cc -o test t.o -L. -lx',
+			`make: Leaving directory '${guestDir}'`,
+		].join('\n');
+		const lowered = lowerToBuildRequest(buildGraphFromMake(trace, '/workspace').graph, `${guestDir}/test`);
+		const workspaceFolder = vscode.workspace.workspaceFolders![0].uri;
+		const result = await build({
+			sources: lowered.sources.map(s => vscode.Uri.joinPath(workspaceFolder, s)),
+			sourceFlags: lowered.sourceFlags,
+			flags: lowered.flags,
+			output: uri('make-test.wasm'),
+			mode: lowered.mode,
+		}, log, context);
+		assert.strictEqual(result.exitCode, 0, result.diagnostics);
+		const ran = await runWasm(uri('make-test.wasm'));
+		assert.deepStrictEqual([ran.exitCode, ran.stdout], [0, '42\n']);
 	});
 
 	test('precompiled headers: used for matching flags, skipped for others, retried without on a name clash', async () => {
