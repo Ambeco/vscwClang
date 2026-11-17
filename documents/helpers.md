@@ -14,6 +14,10 @@ src/web/
     lower.ts
       lowerToBuildRequest      # one program of the graph -> inputs of toolchain.build()
       linkOutputs              # programs the graph links (the goal choices)
+    ninjaParse.ts
+      parseNinja               # build.ninja (+ include/subninja) -> rules and edges
+    ninjaTrace.ts
+      buildGraphFromNinja      # edges a goal needs -> BuildGraph, via classifyShellLine
     makeTrace.ts
       parseMakeTrace           # make -n -B --trace output -> recipes with target and cwd
       buildGraphFromMake       # ... -> BuildGraph, refuses untrustworthy dry runs

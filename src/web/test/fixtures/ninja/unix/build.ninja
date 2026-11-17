@@ -1,0 +1,58 @@
+# CMAKE generated file: DO NOT EDIT!
+ninja_required_version = 1.5
+
+include CMakeFiles/rules.ninja
+
+build CMakeFiles/mylib.dir/src/lib.cpp.o: CXX_COMPILER__mylib_unscanned_ /home/dev/proj/src/lib.cpp || cmake_object_order_depends_target_mylib
+  DEFINES = -DMYLIB=1
+  DEP_FILE = CMakeFiles/mylib.dir/src/lib.cpp.o.d
+  FLAGS = -g -std=gnu++17
+  INCLUDES = -I/home/dev/proj/include
+  OBJECT_DIR = CMakeFiles/mylib.dir
+  OBJECT_FILE_DIR = CMakeFiles/mylib.dir/src
+
+build cmake_object_order_depends_target_mylib: phony
+
+build libmylib.a: CXX_STATIC_LIBRARY_LINKER__mylib_ CMakeFiles/mylib.dir/src/lib.cpp.o
+  LINK_FLAGS = 
+  OBJECT_DIR = CMakeFiles/mylib.dir
+  POST_BUILD = :
+  PRE_LINK = :
+  TARGET_FILE = libmylib.a
+
+build mylib: phony libmylib.a
+
+build CMakeFiles/format-test.dir/src/test.cpp.o: CXX_COMPILER__format-test_unscanned_ /home/dev/proj/src/test.cpp || cmake_object_order_depends_target_format-test
+  DEFINES = -DMYLIB=1
+  DEP_FILE = CMakeFiles/format-test.dir/src/test.cpp.o.d
+  FLAGS = -g -std=gnu++17
+  INCLUDES = -I/home/dev/proj/include
+  OBJECT_DIR = CMakeFiles/format-test.dir
+  OBJECT_FILE_DIR = CMakeFiles/format-test.dir/src
+
+build cmake_object_order_depends_target_format-test: phony || cmake_object_order_depends_target_mylib
+
+build format-test: CXX_EXECUTABLE_LINKER__format-test_ CMakeFiles/format-test.dir/src/test.cpp.o | libmylib.a || libmylib.a
+  FLAGS = -g -std=gnu++17
+  LINK_FLAGS = 
+  LINK_LIBRARIES = libmylib.a
+  LINK_PATH = 
+  OBJECT_DIR = CMakeFiles/format-test.dir
+  POST_BUILD = :
+  PRE_LINK = :
+  TARGET_FILE = format-test
+
+build CMakeFiles/edit_cache.util: CUSTOM_COMMAND
+  COMMAND = cd /home/dev/proj/build && /usr/bin/ccmake -S/home/dev/proj -B/home/dev/proj/build
+  DESC = Running CMake cache editor...
+  pool = console
+  restat = 1
+
+build edit_cache: phony CMakeFiles/edit_cache.util
+
+build build.ninja: RERUN_CMAKE | /home/dev/proj/CMakeLists.txt
+  pool = console
+
+build all: phony libmylib.a format-test
+
+default all

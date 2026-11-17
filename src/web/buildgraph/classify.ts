@@ -49,7 +49,7 @@ export interface ClassifiedLine {
 	cwd: string;
 }
 
-const KNOWN_COMMANDS = ['cc', 'c++', 'gcc', 'g++', 'clang', 'clang++', 'ar', 'ranlib', 'mkdir', 'rm', 'cp', 'mv', 'touch', 'echo', 'printf', 'true', 'cd', ':'];
+const KNOWN_COMMANDS = ['cc', 'c++', 'gcc', 'g++', 'clang', 'clang++', 'ar', 'ranlib', 'mkdir', 'rm', 'cp', 'mv', 'touch', 'echo', 'printf', 'true', 'cd', ':', 'cmake'];
 const OBJECT_INPUT = /\.(o|obj|a|lo)$/i;
 const FORBIDDEN_FLAG = /^(--target(=.*)?|-target|--sysroot(=.*)?|-isysroot|-fuse-ld=.*|-B.*|-march=.*|-mcpu=.*|-fplugin.*)$/;
 const FORBIDDEN_VALUE_FLAG = /^(--target|-target|--sysroot|-isysroot)$/;
@@ -165,9 +165,35 @@ function classifyCommand(command: SimpleCommand, name: string, text: string, ctx
 			return { ...base, kind: 'copy', from: files.slice(0, -1).map(path), to: path(files[files.length - 1]), recursive: /[rRa]/.test(flags) };
 		}
 		case 'touch': return { ...base, kind: 'touch', paths: args.filter(a => !a.startsWith('-')).map(path) };
+		case 'cmake': return classifyCmakeE(args, path, line, base);
 		case 'ln': throw new ClassifyError(`vscwClang: cannot map \`${line}\`: symbolic links do not exist in the browser file system. Did you mean 'cp' (a copy of the file)?`);
 		case 'false': throw new ClassifyError(`vscwClang: cannot map \`${line}\`: 'false' always fails the build. Did you mean to remove the step?`);
 		default: throw unknownCommand(name, line);
+	}
+}
+
+const CMAKE_E_SUPPORTED = 'rm, remove, make_directory, touch, copy, copy_if_different, echo, cmake_echo_color';
+
+function classifyCmakeE(args: string[], path: (p: string) => string, line: string, base: { command: string }): BuildAction {
+	if (args[0] !== '-E') {
+		throw new ClassifyError(`vscwClang: cannot map \`${line}\`: running CMake itself (re-running or regenerating a build) needs a process the browser does not have. Did you mean to regenerate the build directory on a desktop and commit it, or to use only 'cmake -E <command>' (${CMAKE_E_SUPPORTED})?`);
+	}
+	const [, sub = '', ...rest] = args;
+	const files = rest.filter(a => !a.startsWith('-'));
+	switch (sub) {
+		case 'rm': case 'remove': {
+			const bad = rest.find(a => a.startsWith('-') && !/^-[frR]+$/.test(a) && a !== '--');
+			if (bad !== undefined) { throw new ClassifyError(`vscwClang: unsupported option '${bad}' for 'cmake -E ${sub}' in \`${line}\`. Did you mean '-f' or '-rf'?`); }
+			return { ...base, kind: 'remove', paths: files.map(path), glob: false, recursive: rest.some(a => /^-[a-zA-Z]*[rR]/.test(a)) };
+		}
+		case 'make_directory': return { ...base, kind: 'mkdir', paths: files.map(path) };
+		case 'touch': return { ...base, kind: 'touch', paths: files.map(path) };
+		case 'copy': case 'copy_if_different': {
+			if (files.length < 2) { throw new ClassifyError(`vscwClang: 'cmake -E ${sub}' needs a source and a destination in \`${line}\`. Did you mean 'cmake -E ${sub} <from> <to>'?`); }
+			return { ...base, kind: 'copy', from: files.slice(0, -1).map(path), to: path(files[files.length - 1]), recursive: false };
+		}
+		case 'echo': case 'echo_append': case 'cmake_echo_color': return { ...base, kind: 'noop', reason: 'message to the build log' };
+		default: throw new ClassifyError(`vscwClang: cannot map \`${line}\`: 'cmake -E ${sub}' is not supported. Supported are ${CMAKE_E_SUPPORTED}. Did you mean one of those, or to run this step on a desktop and commit its output?`);
 	}
 }
 
