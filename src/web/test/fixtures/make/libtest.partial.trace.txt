@@ -1,0 +1,8 @@
+Makefile:11: update target 'lib.o' due to: lib.c
+cc -O2 -Wall  -DNAME=1 -c lib.c -o lib.o
+Makefile:5: update target 'libx.a' due to: lib.o
+echo archiving
+ar rcs libx.a lib.o
+ranlib libx.a
+Makefile:9: update target 'test' due to: libx.a
+cc -o test t.o 	 -L. -lx

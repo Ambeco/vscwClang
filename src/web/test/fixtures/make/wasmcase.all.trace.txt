@@ -1,0 +1,13 @@
+make: Entering directory '/workspace'
+echo 'GEN=1' > gen.mk
+Makefile:12: update target 'lib.o' due to: target does not exist
+cc -O2 -Wall -c lib.c -o lib.o
+Makefile:7: update target 'libx.a' due to: target does not exist
+ar rcs libx.a lib.o
+ranlib libx.a
+Makefile:12: update target 't.o' due to: target does not exist
+cc -O2 -Wall -c t.c -o t.o
+Makefile:10: update target 'test' due to: target does not exist
+cc -o test t.o -L. -lx
+make: Leaving directory '/workspace'
+Makefile:4: pipe: Function not implemented

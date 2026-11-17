@@ -1,0 +1,7 @@
+Makefile:15: update target 'sub' due to: target is .PHONY
+C:/ProgramData/chocolatey/lib/make/tools/install/bin/make.exe -C sub all
+make[1]: Entering directory 'C:/Users/mooin/scratch-make/f3/sub'
+Makefile:2: update target 'all' due to: target does not exist
+echo in sub
+cc -c ../main.c -o main.o
+make[1]: Leaving directory 'C:/Users/mooin/scratch-make/f3/sub'

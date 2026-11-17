@@ -11,6 +11,11 @@ src/web/
       classifyShellLine        # shell line -> BuildAction[] (compile, link, archive, file ops)
     graph.ts
       BuildGraph               # actions as nodes, edges from files read/written
+    lower.ts
+      lowerToBuildRequest      # one program of the graph -> inputs of toolchain.build()
+    makeTrace.ts
+      parseMakeTrace           # make -n -B --trace output -> recipes with target and cwd
+      buildGraphFromMake       # ... -> BuildGraph, refuses untrustworthy dry runs
     shellParse.ts
       parseShellLine           # one shell line -> simple commands, throws on unsupported syntax
   clangd/

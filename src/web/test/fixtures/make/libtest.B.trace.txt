@@ -1,0 +1,10 @@
+Makefile:11: update target 'lib.o' due to: target does not exist
+cc -O2 -Wall  -DNAME=1 -c lib.c -o lib.o
+Makefile:5: update target 'libx.a' due to: target does not exist
+echo archiving
+ar rcs libx.a lib.o
+ranlib libx.a
+Makefile:11: update target 't.o' due to: target does not exist
+cc -O2 -Wall  -DNAME=1 -c t.c -o t.o
+Makefile:9: update target 'test' due to: target does not exist
+cc -o test t.o 	 -L. -lx

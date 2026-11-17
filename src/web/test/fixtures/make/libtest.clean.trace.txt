@@ -1,0 +1,2 @@
+Makefile:13: update target 'clean' due to: target is .PHONY
+rm -f *.o *.a test

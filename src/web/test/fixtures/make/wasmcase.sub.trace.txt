@@ -1,0 +1,7 @@
+make: Entering directory '/workspace'
+echo 'GEN=1' > gen.mk
+Makefile:17: update target 'sub' due to: target is .PHONY
+make -C . all
+make: Leaving directory '/workspace'
+Makefile:4: pipe: Function not implemented
+make: *** [Makefile:17: sub] Error 127
