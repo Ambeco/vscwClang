@@ -1,0 +1,2 @@
+Real CMake output committed upstream: https://github.com/Gabriel-ino/ArgParse-Cpp (build directory `build`), MIT License, Copyright (c) 2022 Gabriel Chaves.
+Used unmodified as a test input; the MIT permission notice is in THIRD_PARTY_NOTICES.md.

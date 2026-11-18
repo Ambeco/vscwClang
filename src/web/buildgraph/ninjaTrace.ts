@@ -41,6 +41,9 @@ export interface NinjaGraph {
 const WINDOWS_PATH = /(^|[\s"'=-])[A-Za-z]:\\/;
 const CMD_WRAPPER = /^\s*(?:"[^"]*cmd(?:\.exe)?"|\S*cmd(?:\.exe)?)\s+\/[cC]\s+"(.*)"\s*$/;
 
+// The POST_BUILD step of gtest_discover_tests: `[cd DIR &&] cmake -D TEST_TARGET=... -P GoogleTestAddTests.cmake`, on Windows inside `cmd.exe /C "..."`.
+const GTEST_DISCOVERY = /\s*&&\s*(?:(?:"[^"]*"|[^\s"&]*)cmd(?:\.exe)?"?\s+\/[cC]\s+")?(?:cd\s[^&]*&&\s*)?(?:"[^"]*[\\/]cmake(?:\.exe)?"|[^\s"&]*cmake(?:\.exe)?)\s+-D\s+TEST_TARGET=[^]*GoogleTestAddTests\.cmake[^]*$/;
+
 /** @helper Builds a graph from the edges `goals` need in a parsed `build.ninja`; throws `NinjaTraceError` (with a did-you-mean) for unknown goals and commands that cannot be mapped. */
 export function buildGraphFromNinja(manifest: NinjaManifest, options: NinjaGraphOptions): NinjaGraph {
 	const cwd = hostToGuest(options.buildDir, GUEST_WORKSPACE, options.hostRoot ?? '/\0no-host-root');
@@ -95,6 +98,11 @@ export function buildGraphFromNinja(manifest: NinjaManifest, options: NinjaGraph
 			throw new NinjaTraceError(`vscwClang: ${edge.where}: the goal needs '${edge.outputs[0]}', which only CMake re-running itself makes. Did you mean to regenerate the build directory on a desktop and open that, or to name a target (such as 'all') instead of this file?`);
 		}
 		let command = expandCommand(manifest, edge);
+		if (GTEST_DISCOVERY.test(command)) {
+			command = command.replace(GTEST_DISCOVERY, '');
+			if (command.split('"').length % 2 === 0) { command += '"'; } // the cut took the closing quote of an outer cmd.exe /C wrapper
+			notes.push(`${edge.where}: skipped the gtest_discover_tests step after linking '${edge.outputs[0]}' (it only writes CTest lists, which a browser build does not use).`);
+		}
 		const wrapped = CMD_WRAPPER.exec(command);
 		if (wrapped !== null) { command = wrapped[1]; }
 		if (wrapped !== null || WINDOWS_PATH.test(command)) { command = command.replace(/\\(?!["'\s])/g, '/'); }

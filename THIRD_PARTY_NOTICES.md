@@ -41,3 +41,12 @@ corresponding source is the pinned upstream tarball (https://ftp.gnu.org/gnu/mak
 `dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3`) plus `scripts/build-make-wasm.mjs` and
 `scripts/make-wasm/` in this repository (two source edits, a generated `config.h` and WASI compatibility shims).
 The binary is never part of this package.
+
+## Test fixtures (not part of this package)
+
+`src/web/test/fixtures/ninja/linux-gtest`, `linux-gtest-discover` and `windows-mingw-gtest` are unmodified
+`build.ninja` and `CMakeFiles/rules.ninja` files that CMake generated and their authors committed, used only as test
+input: Gabriel-ino/ArgParse-Cpp (Copyright (c) 2022 Gabriel Chaves), FacundoSalcovich/Wordle (Copyright (c) 2025
+FacuSalco) and siri1404/Arbor (Copyright (c) 2024 Arbor). Each is under the MIT License: permission is granted, free
+of charge, to use, copy, modify, merge, publish, distribute, sublicense and sell copies, provided the copyright
+notice and this permission notice are included; the software is provided "as is", without warranty of any kind.

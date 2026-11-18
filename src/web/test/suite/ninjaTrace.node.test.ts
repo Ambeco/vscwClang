@@ -121,3 +121,25 @@ suite('cmake -E in build steps', () => {
 		rejects(() => run('cmake -P gen.cmake'), /running CMake itself.*Did you mean/);
 	});
 });
+
+suite('buildGraphFromNinja (real CMake output committed upstream)', () => {
+	test('a GoogleTest project from Linux (ArgParse-Cpp) maps whole, with the library archives', () => {
+		const { graph, goalOutputs, notes } = buildGraphFromNinja(load('linux-gtest'), { buildDir: '/home/gabrielchavesmartins/photobatch/build', hostRoot: '/home/gabrielchavesmartins/photobatch' });
+		assert.ok(goalOutputs.includes('/workspace/build/Tests/testArgumentParser') && goalOutputs.includes('/workspace/build/lib/libgtestd.a'), goalOutputs.join(' '));
+		assert.deepStrictEqual(notes, []);
+		assert.strictEqual(graph.nodes.length, 23);
+	});
+	test('gtest_discover_tests (Linux: cd && cmake -P after the link) is skipped with a note', () => {
+		const { goalOutputs, notes } = buildGraphFromNinja(load('linux-gtest-discover'), { buildDir: '/workspaces/wordle/build', hostRoot: '/workspaces/wordle' });
+		assert.ok(goalOutputs.includes('/workspace/build/tests'), goalOutputs.join(' '));
+		assert.ok(notes.some(n => /skipped the gtest_discover_tests step after linking 'tests'/.test(n)), notes.join('\n'));
+	});
+	test('gtest_discover_tests (Windows MinGW: cmd.exe /C "cd /D ... && cmake.exe -P") is skipped, with C$: and a spaced cmake path', () => {
+		const { goalOutputs, notes } = buildGraphFromNinja(load('windows-mingw-gtest'), { buildDir: 'C:/Users/pooja/Arbor/cpp/build', hostRoot: 'C:/Users/pooja/Arbor/cpp' });
+		assert.ok(goalOutputs.includes('/workspace/build/tests/orderbook_test.exe'), goalOutputs.join(' '));
+		assert.ok(notes.some(n => /skipped the gtest_discover_tests step/.test(n)));
+	});
+	test('other cmake -P scripts are still refused', () => {
+		rejects(() => buildGraphFromNinja(inMemory({ 'build.ninja': 'rule r\n  command = cc -o a b.c && cmake -D X=1 -P gen.cmake\nbuild a: r b.c\n' }), { buildDir: '/workspace', goals: ['a'] }), /running CMake itself/);
+	});
+});
