@@ -22,7 +22,7 @@ src/web/
 documents/
   design.md                    # overview, scope, alternatives; topics in design_<topic>.md
   design_clangd.md  design_cpptools.md  design_debug.md  design_distribution.md
-  design_environments.md  design_host.md  design_build.md  design_project_model.md
+  design_environments.md  design_host.md  design_build.md  design_project_model.md  design_cmake.md
 scripts/                       # toolchain dist and test runner scripts
 ```
 Reusable helpers are listed in `documents/helpers.md`.
@@ -41,6 +41,7 @@ Reusable helpers are listed in `documents/helpers.md`.
 - `design_host.md`: Worker host, slices, build orchestration, flags and tasks.
 - `design_build.md`: object cache, artifact location, PCHs.
 - `design_project_model.md`: `tasks.json`/`launch.json`/`compile_commands.json` mapping and the Make build graph.
+- `design_cmake.md`: running CMake in the browser (`cmake.wasm` pack, toolchain file, process layer).
 - `design_debug.md`: debug stub channel and debugger behavior.
 - `design_clangd.md`: clangd client, indexing; `design_cpptools.md`: `C_Cpp.*` compatibility.
 

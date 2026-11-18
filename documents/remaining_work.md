@@ -33,7 +33,14 @@ Open items only. Design context: `documents/design.md` and its `design_*.md` top
   - Link outputs that are not programs (shared or test-only library), generated sources need new actions or the spawn hook; `-lname` resolves only to archives built by the same Makefile.
 - Live-check the Ninja commands (`vscwclang.ninjaBuild`/`ninjaRun`, wired but only node-tested at the graph level; no browser test): fmt `format-test` from a CMake build directory generated on a desktop, then Catch2 and GoogleTest. Build directories must now come from Linux, macOS or WSL (Windows ones are refused). The reader already maps two real committed directories (`src/web/test/fixtures/ninja/linux-gtest*`); still unseen: `-isystem`, FetchContent `_deps` builds, generated headers, `sed`/`install`/`python` custom commands (finding more real samples: `documents/notes.md`).
 - CMake File API reader (`.cmake/api/v1/reply`) for build directories made with another generator (Visual Studio, Makefiles); the Ninja reader does not cover them. Needs the query files `codemodel-v2` and `cache-v2` written before configuring.
-- C2 (`cmake.wasm`) is gated by `try_compile` and `execute_process` in real projects, see `build_systems_feasibility.md` "C2 spike result": next spike steps are a pre-seeded cache for fmt's probes and building CMake for wasm32-wasip1.
+- CMake started by the extension (`design_cmake.md`):
+  - S0: desktop trace of `try_compile`/`check_*` commands in cross mode for fmt, Catch2, GoogleTest, nlohmann/json; generate the probe table and the per-version feature lists.
+  - S1: build `cmake.wasm` for wasm32-wasip1 (single-threaded, stub libuv/kwsys process, no curl, trimmed `Modules/`); gate: `--version`, `-P`, toy configure on the repo's Wasi host; record configure time and size.
+  - S2: pack, pin, tool guest, toolchain file, commands; gate: toy project builds and runs in test-web and on vscode.dev.
+  - S3: `vscw_run_process` import plus classifier mapping; gate: fmt `format-test` configures.
+  - S4: corpus gates (fmt, Catch2 SelfTest, GoogleTest, nlohmann/json), per-project timings.
+  - S5: dependency overrides, publish, README.
+  - Decide the default build dir (`build/` versus `.vscwclang/cmake/`).
 - Run Python scripts (partial CPython/WASI), e.g. as build and test helpers; see `design_environments.md` "Three environments" for the filesystem and process gaps.
 - Share a program: the built `.wasm` runs elsewhere; no feature planned.
 
