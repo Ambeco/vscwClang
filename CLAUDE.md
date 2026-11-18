@@ -6,6 +6,14 @@
 - Wasmer host tests: `npm install @wasmer/sdk` in a scratch folder outside the repo, set `VSCWCLANG_WASMER_SDK=<that folder>` for the real-SDK node tests, and copy its `dist/`, `pkg/` and `LICENSE` to `llvm-artifacts/wasmer-sdk/` for `wasmerHost.test.ts` (both skip when missing). `npm test`'s `pretest` needs `llvm-artifacts/MANIFEST`; otherwise run `npm run compile-web` (check it really rebuilt) and `npx vscode-test-web --browserType=chromium --coi --extensionDevelopmentPath=. --extensionTestsPath=dist/web/test/suite/extensionTests.js src/web/test/fixtures/workspace`.
 - Real vscode.dev CAN be driven from a session: a Chrome with a dedicated profile on debugging port 9333 plus `scripts/live-driver.cjs` (clicks, typing, screenshots, console log). Setup, driver API and gotchas are in `documents/live_testing.md` "Harness"; read it before saying something "needs a live check" or "needs the user". The profile (permissions, installed extension, cached toolchain) is `~/.claude/chrome-test-profile` (see the temp-cache registry). Quick manual alternative: serve the repo with `npx serve --cors -l 5000`, then "Developer: Install Extension from Location..." (reload the tab after rebuilding).
 
+# Live and browser testing
+
+- After EVERY live or browser test (live driver, flow script, `npm test`, a manual vscode.dev session), read the browser developer-tools console and the VS Code Output pane for the `vscwClang` channel, and report each unexpected entry before reporting the result, even when the numbers or assertions look fine. Never call a run clean without having read both.
+- Unexpected means anything not in the ignorable-noise list in `documents/live_testing.md`. In particular any `connection to server is erroring`, `Shutting down server`, `Header must provide a Content-Length`, `pageerror`, or an error-level `vscwclang` Output line is a failure of the run.
+- The driver writes console warnings, errors and pageerrors to `$VSCW_LIVE_DIR/console.log`; read it after each run. The `vscwclang` Output channel is read via the palette's `Output: Show Output Channels...` (see `scripts/live-flow-project.js`).
+- The browser suite (`npm test`) should also fail on any client error from clangd (see `documents/remaining_work.md` "Milestone 7").
+- Before the first Marketplace publish, and before each later one, run a full real-browser pass on the rebuilt VSIX content (install via "Developer: Install Extension from Location..." in vscode.dev, open a project with concurrent clangd traffic such as MarkovHuffman, Build, Run, Debug) with the console and Output checks above.
+
 # Compiler experiments
 
 - Fast loop: run `llvm-artifacts/bin/clang.wasm` / `lld.wasm` under Node `node:wasi` with preopens `/sysroot`, `/resource` (`resource/lib/clang/24`) and the project dir as `/workspace`. In Git Bash set `MSYS_NO_PATHCONV=1`, or `/workspace/...` arguments are rewritten to Windows paths.

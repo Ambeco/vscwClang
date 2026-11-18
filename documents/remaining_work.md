@@ -117,6 +117,9 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Remaining gaps:
 
 ## Milestone 7: release
 - Marketplace packaging (web-only, no bundled binaries), CI running the web tests, README screenshots, CHANGELOG.
+- Add a `/check` endpoint to `scripts/live-driver.cjs` returning new console errors/pageerrors (minus the ignorable noise in `live_testing.md`) and `vscwclang` Output lines matching `error|erroring|failed|Shutting down`; every `live-flow-*` script calls it at the end and exits non-zero on findings.
+- Make the browser suite (`npm test`) fail on any clangd `connection to server is erroring` client error, and add a case that opens a project with concurrent clangd requests and waits for clean diagnostics.
+- Full real-browser pass on the rebuilt VSIX in vscode.dev (MarkovHuffman: Build, Run, Debug; console and Output clean) before the first Marketplace publish.
 
 ## Known risks / open questions
 - Compile speed and memory: 2 GiB max-memory per `clang.wasm` instance, times N concurrent files, in one browser tab.
