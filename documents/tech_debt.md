@@ -11,3 +11,7 @@
 - `host/wasiGuest.ts` (567 lines) is the WASI implementation plus fs/error types in one file; `FsErrno` string-union errors and `GuestResult`/`GuestOptions` live beside the 400-line class.
 - Tests: `*.node.test.ts` cover buildgraph in isolation, but the Make/Ninja command path (`extension.ts` to `buildWorkspace`) has few browser tests and no Ninja browser test; slow (visible Chromium, port 3000) and flaky on a stale server.
 - `scripts/build-make-wasm.mjs` + `scripts/make-wasm/gl/*`: hand-written gnulib stand-ins and source patches (`dir.c` sizeof, `main` params) with no check that they still apply to a new make version.
+- `test/fixtures/ninja/unix/build.ninja` is hand-written (no real Linux CMake output); sessions burned time hunting samples. Replace with a real small CMake-Ninja Linux directory (rules.ninja included) and add an fmt one.
+- Ninja/Make fixtures cover only the Windows-shaped or toy cases; `-isystem`, generator expressions, FetchContent and generated headers have no fixture, so the reader's gaps surface only in live checks.
+- No harness to generate or refresh build-system fixtures (CMake/Ninja/make versions unrecorded beyond "CMake 4.4.3" in a note); regenerating needs WSL tools or installs the user's low disk makes costly. Add a `scripts/` fixture recipe.
+- `documents/remaining_work.md`/`design_project_model.md` "Build graph" duplicate Make vs Ninja detail; every build-system step edits 4-5 docs (`helpers.md`, `notes.md`, `remaining_work.md`, `design_*.md`, README), a manual chore.
