@@ -119,7 +119,6 @@ Compared against cpptools' `C_Cpp.*` (2026-10-11). Remaining gaps:
 - Marketplace packaging (web-only, no bundled binaries), CI running the web tests, README screenshots, CHANGELOG.
 - Add a `/check` endpoint to `scripts/live-driver.cjs` returning new console errors/pageerrors (minus the ignorable noise in `live_testing.md`) and `vscwclang` Output lines matching `error|erroring|failed|Shutting down`; every `live-flow-*` script calls it at the end and exits non-zero on findings.
 - Make the browser suite (`npm test`) fail on any clangd `connection to server is erroring` client error, and add a case that opens a project with concurrent clangd requests and waits for clean diagnostics.
-- Full real-browser pass on the rebuilt VSIX in vscode.dev: Debug still to do (MarkovHuffman Build, Run and a clean console and Output are done).
 - Console error `Invalid Semantic Tokens Data From Extension: end character > model.getLineLength` on CRLF files (MarkovHuffman `Main.cpp`/`MarkovHuffmanV1.cpp` in vscode.dev), on open and during edits; suspect clangd token ranges vs VS Code line lengths on `
 `.
 - With no `vscwclang.flags`, C++20 code (`std::erase_if`) gets clangd errors until `-std=c++20` is set; decide whether the default standard should change or the Problems message should hint at it.
