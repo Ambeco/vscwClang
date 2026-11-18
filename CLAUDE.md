@@ -19,6 +19,8 @@
 - The shipped `clang`, `lld`, `clangd` and lldb reactor are the PGO + ThinLTO builds from `llvm-project/pgo/*-variant.bat` (binaries kept in `C:\Users\mooin\pgo\variants\keep`), not what `build*.bat` produce (MinSizeRel, slower). Stage the PGO binaries and pass `make-toolchain-dist.mjs --llvm <staging>`; never publish straight from the `build*` trees.
 - Check `documents/design.md` "Scope" before adding features; the project is deliberately narrow.
 - Before touching host code, mounts, environment variables or working directories, read `documents/design_environments.md` "Three environments" and check the change against the extension host, the tool guests and the user-program guests separately.
+- Session-start reads (`README.md`, `documents/design.md`, `remaining_work.md`, `notes.md`) live in the nested repo folder, not the outer one.
+- Make/CMake/Ninja work: read `documents/design_project_model.md` "Build graph", `build_systems_feasibility.md` and `design_cmake.md` first.
 - The git repo root is the nested `vsclang\vsclang` folder, not the outer working directory. Glob results are prefixed `vsclang\`, so paths built from the outer directory double up (`...\vsclang\vsclang\vsclang\...`); `cd` into the repo (or use absolute paths) before running git or npm.
 
 # Remaining work upkeep
