@@ -9,7 +9,6 @@ const dir = (name: string) => join(process.cwd(), 'src', 'web', 'test', 'fixture
 const load = (name: string): NinjaManifest => parseNinja(readFileSync(join(dir(name), 'build.ninja'), 'utf8'), 'build.ninja', p => readFileSync(join(dir(name), p), 'utf8'));
 const inMemory = (files: Record<string, string>) => parseNinja(files['build.ninja'], 'build.ninja', p => { if (!(p in files)) { throw new Error('no such file'); } return files[p]; });
 const UNIX = { buildDir: '/home/dev/proj/build', hostRoot: '/home/dev/proj' };
-const WINDOWS = { buildDir: 'C:/work/proj/build', hostRoot: 'C:/work/proj' };
 const rejects = (fn: () => unknown, pattern: RegExp) =>
 	assert.throws(fn, (e: unknown) => (e instanceof NinjaTraceError || e instanceof NinjaParseError) && pattern.test(e.message) && /Did you mean/.test(e.message), String(pattern));
 
@@ -102,12 +101,14 @@ suite('buildGraphFromNinja (CMake, Unix paths)', () => {
 	});
 });
 
-suite('buildGraphFromNinja (CMake, Windows paths)', () => {
-	test('reads the real output of CMake 4.4 on Windows: cmd.exe wrapper, C$: escapes, backslashes', () => {
-		const { graph } = buildGraphFromNinja(load('windows'), { ...WINDOWS, goals: ['format-test'] });
-		const lowered = lowerToBuildRequest(graph, '/workspace/build/format-test');
-		assert.deepStrictEqual(lowered.sources.sort(), ['src/lib.cpp', 'src/test.cpp']);
-		assert.deepStrictEqual(lowered.sourceFlags['/workspace/src/test.cpp'], ['-DMYLIB=1', '-I/workspace/include']);
+suite('buildGraphFromNinja (Windows-generated directories)', () => {
+	test('a cmd.exe wrapper or a drive-letter path is refused with a suggestion to generate on Linux, macOS or WSL', () => {
+		const run = (command: string) => buildGraphFromNinja(inMemory({ 'build.ninja': `rule r
+  command = ${command}
+build x: r
+` }), { buildDir: '/workspace', goals: ['x'] });
+		rejects(() => run('cmd.exe /C "cd . && g++ -o x a.o"'), /generated on Windows.*Did you mean to generate it on Linux, macOS or WSL/);
+		rejects(() => run('g++ -IC:/work/proj/include -o x a.o'), /generated on Windows/);
 	});
 });
 
@@ -133,11 +134,6 @@ suite('buildGraphFromNinja (real CMake output committed upstream)', () => {
 		const { goalOutputs, notes } = buildGraphFromNinja(load('linux-gtest-discover'), { buildDir: '/workspaces/wordle/build', hostRoot: '/workspaces/wordle' });
 		assert.ok(goalOutputs.includes('/workspace/build/tests'), goalOutputs.join(' '));
 		assert.ok(notes.some(n => /skipped the gtest_discover_tests step after linking 'tests'/.test(n)), notes.join('\n'));
-	});
-	test('gtest_discover_tests (Windows MinGW: cmd.exe /C "cd /D ... && cmake.exe -P") is skipped, with C$: and a spaced cmake path', () => {
-		const { goalOutputs, notes } = buildGraphFromNinja(load('windows-mingw-gtest'), { buildDir: 'C:/Users/pooja/Arbor/cpp/build', hostRoot: 'C:/Users/pooja/Arbor/cpp' });
-		assert.ok(goalOutputs.includes('/workspace/build/tests/orderbook_test.exe'), goalOutputs.join(' '));
-		assert.ok(notes.some(n => /skipped the gtest_discover_tests step/.test(n)));
 	});
 	test('other cmake -P scripts are still refused', () => {
 		rejects(() => buildGraphFromNinja(inMemory({ 'build.ninja': 'rule r\n  command = cc -o a b.c && cmake -D X=1 -P gen.cmake\nbuild a: r b.c\n' }), { buildDir: '/workspace', goals: ['a'] }), /running CMake itself/);

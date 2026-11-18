@@ -16,8 +16,8 @@ import { ShellSyntaxError } from './shellParse';
  * `NinjaTraceError` naming the edge, with a did-you-mean.
  *
  * Commands run in `buildDir`, which must be inside the workspace; `hostRoot` is the host path of the workspace folder,
- * used to rebase absolute host paths a generator wrote. A Windows `cmd.exe /C "..."` wrapper is removed and its
- * backslashes read as separators. Dependency edges the graph needs come from the commands themselves (`-o`, inputs),
+ * used to rebase absolute host paths a generator wrote. A build directory generated on Windows (drive-letter paths,
+ * `cmd.exe /C` wrappers) is refused: generate it on Linux, macOS or WSL. Dependency edges the graph needs come from the commands themselves (`-o`, inputs),
  * so a Ninja input the command does not name (a generated header) is only ordering: lowering then fails on it if
  * it is a source.
  */
@@ -38,11 +38,9 @@ export interface NinjaGraph {
 	goalOutputs: string[];
 }
 
-const WINDOWS_PATH = /(^|[\s"'=-])[A-Za-z]:\\/;
-const CMD_WRAPPER = /^\s*(?:"[^"]*cmd(?:\.exe)?"|\S*cmd(?:\.exe)?)\s+\/[cC]\s+"(.*)"\s*$/;
-
-// The POST_BUILD step of gtest_discover_tests: `[cd DIR &&] cmake -D TEST_TARGET=... -P GoogleTestAddTests.cmake`, on Windows inside `cmd.exe /C "..."`.
-const GTEST_DISCOVERY = /\s*&&\s*(?:(?:"[^"]*"|[^\s"&]*)cmd(?:\.exe)?"?\s+\/[cC]\s+")?(?:cd\s[^&]*&&\s*)?(?:"[^"]*[\\/]cmake(?:\.exe)?"|[^\s"&]*cmake(?:\.exe)?)\s+-D\s+TEST_TARGET=[^]*GoogleTestAddTests\.cmake[^]*$/;
+const WINDOWS_COMMAND = /(?:^|[\s"'=-]|-[IL])[A-Z]:[\\/]|\bcmd(?:\.exe)?"?\s+\/[cC]\b/;
+// The POST_BUILD step of gtest_discover_tests: `[cd DIR &&] cmake -D TEST_TARGET=... -P GoogleTestAddTests.cmake`.
+const GTEST_DISCOVERY = /\s*&&\s*(?:cd\s[^&]*&&\s*)?"?[^\s"&]*cmake"?\s+-D\s+TEST_TARGET=[^]*GoogleTestAddTests\.cmake[^]*$/;
 
 /** @helper Builds a graph from the edges `goals` need in a parsed `build.ninja`; throws `NinjaTraceError` (with a did-you-mean) for unknown goals and commands that cannot be mapped. */
 export function buildGraphFromNinja(manifest: NinjaManifest, options: NinjaGraphOptions): NinjaGraph {
@@ -98,14 +96,14 @@ export function buildGraphFromNinja(manifest: NinjaManifest, options: NinjaGraph
 			throw new NinjaTraceError(`vscwClang: ${edge.where}: the goal needs '${edge.outputs[0]}', which only CMake re-running itself makes. Did you mean to regenerate the build directory on a desktop and open that, or to name a target (such as 'all') instead of this file?`);
 		}
 		let command = expandCommand(manifest, edge);
+		const windows = WINDOWS_COMMAND.exec(command);
+		if (windows !== null) {
+			throw new NinjaTraceError(`vscwClang: ${edge.where}: this build directory was generated on Windows (\`${command.slice(Math.max(0, windows.index), windows.index + 60).trim()}...\`), which is not supported. Did you mean to generate it on Linux, macOS or WSL (cmake -G Ninja) and open that folder?`);
+		}
 		if (GTEST_DISCOVERY.test(command)) {
 			command = command.replace(GTEST_DISCOVERY, '');
-			if (command.split('"').length % 2 === 0) { command += '"'; } // the cut took the closing quote of an outer cmd.exe /C wrapper
 			notes.push(`${edge.where}: skipped the gtest_discover_tests step after linking '${edge.outputs[0]}' (it only writes CTest lists, which a browser build does not use).`);
 		}
-		const wrapped = CMD_WRAPPER.exec(command);
-		if (wrapped !== null) { command = wrapped[1]; }
-		if (wrapped !== null || WINDOWS_PATH.test(command)) { command = command.replace(/\\(?!["'\s])/g, '/'); }
 		try {
 			const classified = classifyShellLine(command, { cwd, hostRoot: options.hostRoot });
 			notes.push(...classified.notes);
