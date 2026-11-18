@@ -15,8 +15,8 @@ A folder with a `CMakeLists.txt` builds, runs and debugs with no desktop-generat
 - **UX.** `vscwclang.cmakeConfigure`/`cmakeBuild`/`cmakeRun`; settings `vscwclang.cmake.buildDir`, `.target`, `.cacheVariables`. A File API `codemodel-v2` query is written before configuring so the target picker can read the reply. `CMakePresets.json` is left to CMake (`--preset`). Default Build and Run do not look at CMake until the commands are proven.
 - **Dependencies.** `FetchContent`/`find_package` go through a table mapping well-known names (googletest, catch2, fmt, nlohmann_json, doctest) to bundled or CORS-friendly mirrored copies; unknown ones fail loudly. Shared libraries become `STATIC` with a warning; `install` and CPack are ignored with a note.
 
-## Open decisions
-- Build dir default: `build/` in the workspace (default here) versus always `.vscwclang/cmake/`; read-only and virtual folders use extension storage either way.
+## Build directory
+`build/` in the workspace by default; `vscwclang.cmake.buildDir` (the `-B` equivalent) or a preset's `binaryDir` overrides it, and the preset wins over the default. Read-only and virtual folders use extension storage.
 
 ## Alternatives considered
 ### Pre-seeded cache only, no process layer

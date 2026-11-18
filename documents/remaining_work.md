@@ -39,9 +39,7 @@ Open items only. Design context: `documents/design.md` and its `design_*.md` top
   - S2: pack, pin, tool guest, toolchain file, commands; gate: toy project builds and runs in test-web and on vscode.dev.
   - S3: `vscw_run_process` import plus classifier mapping; gate: fmt `format-test` configures.
   - S4: corpus gates (fmt, Catch2 SelfTest, GoogleTest, nlohmann/json), per-project timings.
-  - S5: dependency overrides, publish, README.
-  - Decide the default build dir (`build/` versus `.vscwclang/cmake/`).
-- Run Python scripts (partial CPython/WASI), e.g. as build and test helpers; see `design_environments.md` "Three environments" for the filesystem and process gaps.
+  - S5: dependency overrides, publish, README.- Run Python scripts (partial CPython/WASI), e.g. as build and test helpers; see `design_environments.md` "Three environments" for the filesystem and process gaps.
 - Share a program: the built `.wasm` runs elsewhere; no feature planned.
 
 ## Hosting and cross-origin checks
