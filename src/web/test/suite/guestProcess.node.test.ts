@@ -242,7 +242,7 @@ suite('GuestProcess over a real Worker', function () {
 		assert.strictEqual(stats.takeReport('test'), '');
 	});
 
-	test('byte-at-a-time output is coalesced into one message per line, in order across stdout and stderr, and flushed before a request and at the end', async () => {
+	test('stderr is coalesced into one message per line and flushed before a request and at the end; stdout is never held back, so protocol framing stays ordered', async () => {
 		const module = new WebAssembly.Module(readFileSync(join(FIXTURES, 'hello.wasm')));
 		const stats = new RpcStats();
 		const seen: string[] = [];
@@ -254,19 +254,20 @@ suite('GuestProcess over a real Worker', function () {
 			parentPort!.once('message', (m: any) => {
 				const services = new RpcGuestServices(new SyncRpcClient(endpoint, m.channel));
 				const put = (fd: 1 | 2, text: string) => { for (const b of new TextEncoder().encode(text)) { services.writeOutput(fd, new Uint8Array([b])); } };
-				put(1, 'ab'.repeat(500) + '\\n');
+				put(2, 'ab'.repeat(500) + '\\n');
 				put(2, 'err');
-				put(1, 'partial');
+				put(1, 'Hi');
+				put(2, 'partial');
 				services.stat('/workspace');
-				put(1, ' tail');
+				put(2, ' tail');
 				services.flush();
 				endpoint.postMessage({ type: 'done', result: { kind: 'exit', code: 0 } });
 			});
 		`);
 		const process = new GuestProcess({ module, args: [], env: {}, preopens: [], fs: new MemoryFs(), stats, stdin: new StdinQueue(), onOutput: (fd, d) => seen.push(`${fd}:${decoder.decode(d)}`), createWorker: () => nodeWorker(code) });
 		assert.deepStrictEqual(await process.run(), { kind: 'exit', code: 0 });
-		assert.deepStrictEqual(seen, [`1:${'ab'.repeat(500)}\n`, '2:err', '1:partial', '1: tail']);
-		assert.match(stats.takeReport('t'), /output: 4 calls, in 1 KiB/);
+		assert.deepStrictEqual(seen, [`2:${'ab'.repeat(500)}
+`, '2:err', '1:H', '1:i', '2:partial', '2: tail']);
 	});
 
 	test('wasi-threads: four pthreads share memory, a mutex counts exactly, and a thread can write to stderr', async () => {

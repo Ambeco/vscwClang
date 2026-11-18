@@ -61,16 +61,18 @@ const OUTPUT_BATCH_BYTES = 8192;
 /**
  * `GuestServices` that forward every call to the extension host over the blocking channel.
  *
- * stdout/stderr writes are coalesced: they wait in `pending` until a write ends a line or reaches `OUTPUT_BATCH_BYTES`,
- * the stream changes, any other request is made (so output precedes a stdin read, a sleep or a file operation), or
- * `flush` is called (the Worker does at the end of the program). A partial last line of a guest that then runs a long
- * computation without any request is therefore not shown until it does.
+ * stderr writes are coalesced: they wait in `pending` until a write ends a line or reaches `OUTPUT_BATCH_BYTES`,
+ * any other request is made (so output precedes a stdin read, a sleep or a file operation), or `flush` is called
+ * (the Worker does at the end of the program). A partial last line of a guest that then runs a long computation
+ * without any request is therefore not shown until it does.
+ *
+ * stdout is never held back: it can carry a protocol (clangd's LSP framing) written by several threads, each with
+ * its own `RpcGuestServices`, and a per-thread buffer would reorder or interleave their messages.
  */
 export class RpcGuestServices implements GuestServices {
 	private readonly sleeper = new Int32Array(new SharedArrayBuffer(4));
 	private pending: Uint8Array[] = [];
 	private pendingBytes = 0;
-	private pendingFd: 1 | 2 = 1;
 
 	constructor(private readonly client: SyncRpcClient) {}
 
@@ -80,7 +82,7 @@ export class RpcGuestServices implements GuestServices {
 		if (this.pending.length > 1) { let at = 0; for (const chunk of this.pending) { joined.set(chunk, at); at += chunk.length; } }
 		this.pending = [];
 		this.pendingBytes = 0;
-		this.client.post('output', { fd: this.pendingFd }, joined);
+		this.client.post('output', { fd: 2 }, joined);
 	}
 
 	private call(op: string, args: unknown, bytes?: Uint8Array): { value: unknown; bytes: Uint8Array } {
@@ -90,7 +92,7 @@ export class RpcGuestServices implements GuestServices {
 
 	readStdin(maxBytes: number): Uint8Array { return this.call('stdin', { maxBytes }).bytes; }
 	writeOutput(fd: 1 | 2, data: Uint8Array): void {
-		if (fd !== this.pendingFd) { this.flush(); this.pendingFd = fd; }
+		if (fd === 1) { this.flush(); this.client.post('output', { fd }, data); return; }
 		this.pending.push(data);
 		this.pendingBytes += data.length;
 		if (this.pendingBytes >= OUTPUT_BATCH_BYTES || data.includes(10)) { this.flush(); }
